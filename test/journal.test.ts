@@ -196,3 +196,11 @@ test('stop can carry result data', async t => {
   assert.equal(r.status, 'blocked');
   assert.deepEqual(r.data, {blocked: ['x']});
 });
+
+test('a partial operation whose steps are all definite does not block other operations', async t => {
+  const {journal} = await setup(t);
+  const r = await withOperation(spec(journal), fourWrites([ok, rejected, ok, ok], []));
+  assert.equal(r.status, 'partial');
+  const other = await withOperation(spec(journal, makeScope(), OTHER_OP), fourWrites([ok, ok, ok, ok], []));
+  assert.equal(other.status, 'applied');
+});

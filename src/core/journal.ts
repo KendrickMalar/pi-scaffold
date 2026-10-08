@@ -13,7 +13,9 @@ export interface OperationRecord {
 }
 export type BeginOutcome = {kind: 'new' | 'resume' | 'completed'; record: OperationRecord} | {kind: 'conflict'; code: 'OPERATION_PAYLOAD_MISMATCH' | 'WORKFLOW_UNRESOLVED' | 'JOURNAL_INVALID'; message: string};
 
-const UNRESOLVED = new Set(['running', 'partial', 'unknown']);
+/** A workflow is held only while a change may be in flight or has an unconfirmed outcome. */
+const UNRESOLVED = new Set(['running', 'unknown']);
+const hasUncertainStep = (r: OperationRecord) => r.steps.some(s => s.phase === 'requested' || s.phase === 'unknown');
 const COMPLETED = new Set(['applied', 'noop', 'prepared', 'validated']);
 
 function decodeRecord(v: unknown): OperationRecord | undefined {
@@ -49,7 +51,7 @@ export class OperationJournal {
       const id = name.replace(/\.json$/, '');
       if (!name.endsWith('.json') || id === operationId || !isUuid(id)) continue;
       const r = await this.load(id);
-      if (!r || UNRESOLVED.has(r.status)) out.push(id);
+      if (!r || UNRESOLVED.has(r.status) || hasUncertainStep(r)) out.push(id);
     }
     return out;
   }

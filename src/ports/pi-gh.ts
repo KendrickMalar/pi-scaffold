@@ -9,7 +9,7 @@ export interface GhOutcome<T> { status: 'ok' | 'noop' | 'blocked' | 'unknown' | 
 export const PI_GH_CONTRACT_VERSION = 1;
 /** B1/B2/B3: generic pi-gh additions proposed in Epic #1. They do not exist in pi-gh 0.2.0. */
 export const B_PROPOSAL_TOOLS = ['gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current'] as const;
-const READ_TOOLS = new Set(['gh_capabilities', 'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items', 'gh_issue_validate', 'gh_issue_preview', 'gh_labels_validate', 'gh_labels_preview', 'gh_issue_form']);
+const READ_TOOLS = new Set(['gh_labels_list', 'gh_capabilities', 'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items', 'gh_issue_validate', 'gh_issue_preview', 'gh_labels_validate', 'gh_labels_preview', 'gh_issue_form']);
 export const isReadTool = (name: string) => READ_TOOLS.has(name);
 /** Replacement text pi-gh 0.2.0 uses when masking secret candidates in results. */
 export const PI_GH_MASK = '[REDACTED]';

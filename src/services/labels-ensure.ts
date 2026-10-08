@@ -64,10 +64,11 @@ function reconcileWith(def: LabelDefinition, call: ToolCall, repo: string, kind:
   return async () => {
     const read = await readLabels(call, repo);
     if ('error' in read) return 'unknown';
+    // The step only needs a decision; whatever the label now looks like is then judged by the normal rules
+    // (mismatch → block/update, missing → create) and the final read-back.
     const s = labelState(def, read.labels).state;
-    if (s === 'match') return 'applied';
-    if (kind === 'create') return s === 'missing' ? 'not-applied' : 'unknown';
-    return s === 'mismatch' ? 'not-applied' : 'unknown';
+    if (kind === 'create') return s === 'missing' ? 'not-applied' : 'applied';
+    return s === 'mismatch' ? 'not-applied' : 'applied';
   };
 }
 
@@ -120,8 +121,10 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
     const mismatches = defs.flatMap(d => { const s = labelState(d, first.labels); return s.state === 'mismatch' && !stepKind(run, d) ? [mismatchProblem(d, s.actual)] : []; });
     if (mismatches.length && onMismatch === 'block') return run.stop(mismatches, summary(first.labels));
     for (const def of defs) {
-      if (labelState(def, first.labels).state === 'match' && !stepKind(run, def)) continue;
-      if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')], summary(first.labels));
+      const pending = stepKind(run, def);
+      if (labelState(def, first.labels).state === 'match' && !pending) continue;
+      // Uncertain steps are settled (read-only reconcile first) before the budget can pause the run.
+      if (!pending && call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')], summary(first.labels));
       await ensureLabelDefinition(def, first.labels, call, run, dir, input.repo, onMismatch);
     }
     // Success only after every definition is read back as expected.

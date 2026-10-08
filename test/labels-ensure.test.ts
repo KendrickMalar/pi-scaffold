@@ -100,8 +100,6 @@ test('the call budget pauses as partial and the same operation resumes without r
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial');
   assert.equal(first.r.resumeToken, OPERATION_ID);
-  const other = await h.invoke(params({operationId: '55555555-5555-4555-8555-555555555555'}));
-  assert.ok(other.r.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
   let last = first;
   for (let i = 0; i < 40 && last.r.status === 'partial'; i++) last = await h.invoke();
   assert.equal(last.r.status, 'applied', JSON.stringify(last.r.problems));
@@ -210,4 +208,51 @@ test('pi-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t
   const out = await (await harness(t, old)).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING' && p.path === 'gh_labels_list'));
   assert.equal(old.calls.filter(c => c.name !== 'gh_capabilities').length, 0);
+});
+
+test('a paused operation is not dead-ended by a label someone else changed meanwhile', async t => {
+  let clock = 0;
+  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
+  const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
+  assert.equal((await h.invoke()).r.status, 'partial');
+  gh.labels.set('blocked', {...gh.labels.get('blocked')!, color: '000000'});
+  const resumed = await h.invoke();
+  assert.ok(resumed.r.problems.some(p => p.code === 'LABEL_MISMATCH'));
+  const fixParams = params({operationId: '55555555-5555-4555-8555-555555555555', onMismatch: 'update'});
+  let fix = await h.invoke(fixParams);
+  assert.ok(!fix.r.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'), 'a definite partial does not hold the namespace');
+  for (let i = 0; i < 5 && fix.r.status === 'partial'; i++) fix = await h.invoke(fixParams);
+  assert.equal(fix.r.status, 'applied', JSON.stringify(fix.r.problems));
+  assert.equal(gh.labels.get('blocked')?.color, 'b60205');
+  assert.ok(gh.labels.has('wave: 200'));
+});
+
+test('an uncertain create followed by a different same-name label resolves to the mismatch rule', async t => {
+  const gh = new FakePiGh().seedLabels(all().filter(d => d.name !== 'Blocked'));
+  gh.overrides.set('gh_labels_apply', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome));
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  gh.overrides.delete('gh_labels_apply');
+  gh.seedLabels([{name: 'Blocked', color: '000000', description: '他人が作成'}]);
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'partial');
+  assert.ok(resumed.r.problems.some(p => p.code === 'LABEL_MISMATCH' || p.code === 'LABEL_READBACK_MISMATCH'));
+  assert.ok(!resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
+  const other = await h.invoke(params({operationId: '55555555-5555-4555-8555-555555555555'}));
+  assert.ok(!other.r.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
+});
+
+test('uncertain steps are reconciled before the budget pause, so the status is partial, not unknown', async t => {
+  let clock = 0;
+  const gh = new FakePiGh().seedLabels(all().filter(d => !['Blocked', 'Wave: 200'].includes(d.name)));
+  let n = 0;
+  gh.overrides.set('gh_labels_apply', () => { n++; if (n === 1) { clock += 100_000; return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome; } return undefined; });
+  const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  clock = 0;
+  gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'partial');
+  assert.ok(!resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
 });
