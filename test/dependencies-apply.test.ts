@@ -1,4 +1,5 @@
 import test from 'node:test';
+import * as fsSync from 'node:fs';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
@@ -190,4 +191,78 @@ test('re-running is a noop; stage/Blocked/stale are blocked', async t => {
   const s = world(); const before = s.issues.get(10)!.body;
   const stale = await (await harness(t, s)).invoke(params(s, undefined, {expectedBodySha256: 'f'.repeat(64)}));
   assert.equal(stale.r.status, 'blocked'); noChanges(s, before);
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('an unknown add that did not land is reconciled as not applied and sent once more (other blockers are not "external")', async t => {
+  const gh = world();
+  let lose = true;
+  gh.overrides.set('gh_dependency_add', args => {
+    const {readFileSync} = fsSync;
+    const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8'));
+    if (c.issue === 13 && lose) { lose = false; return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; }
+    return undefined;
+  });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.deepEqual(gh.issues.get(13)!.blockedBy, [12]); assert.deepEqual(gh.issues.get(12)!.blockedBy, [11]);
+});
+
+test('a resume decides from the current GitHub state: an edge removed by someone else meanwhile is added again', async t => {
+  const gh = world(); gh.issues.get(12)!.blockedBy = [11];
+  let fail = true;
+  gh.overrides.set('gh_dependency_add', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  const h = await harness(t, gh);
+  assert.notEqual((await h.invoke()).r.status, 'applied');
+  gh.issues.get(12)!.blockedBy = []; // removed by a third party
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.deepEqual(gh.issues.get(12)!.blockedBy, [11]); assert.deepEqual(gh.issues.get(13)!.blockedBy, [12]);
+  assert.deepEqual((resumed.r.data as Data).addedEdges.sort((a, b) => a.from - b.from), [{from: 11, to: 12}, {from: 12, to: 13}]);
+});
+
+test('addedEdges lists only edges this operation actually added (a remote noop is not "added")', async t => {
+  const gh = world();
+  gh.overrides.set('gh_dependency_add', args => {
+    const {readFileSync} = fsSync;
+    const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8'));
+    if (c.issue === 12) { gh.issues.get(12)!.blockedBy = [11]; return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false}; }
+    return undefined;
+  });
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied');
+  assert.deepEqual((out.r.data as Data).addedEdges, [{from: 12, to: 13}]);
+});
+
+test('the Epic is not saved when it moved on while edges were being added (stage, Blocked or a different plan)', async t => {
+  for (const change of [
+    (gh: FakePiGh) => { const d = docOf(gh); d.stage = 'implementation'; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
+    (gh: FakePiGh) => { gh.issues.get(10)!.labels.push('Blocked'); },
+    (gh: FakePiGh) => { const d = docOf(gh); d.dependencyPlan = {...plan([[11, 13]])}; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
+  ]) {
+    const gh = world();
+    let done = false;
+    gh.onCall = name => { if (name === 'gh_dependency_add' && !done) { done = true; change(gh); } };
+    const out = await (await harness(t, gh)).invoke();
+    assert.notEqual(out.r.status, 'applied', JSON.stringify(out.r));
+    assert.notDeepEqual(docOf(gh).dependencyPlan, plan([[11, 12], [12, 13]]), 'the plan is not written over the moved Epic');
+  }
+});
+
+test('a Feature added to the Epic meanwhile stops the save (the plan no longer covers every Feature)', async t => {
+  const gh = world();
+  let done = false;
+  gh.onCall = name => {
+    if (name !== 'gh_dependency_add' || done) return;
+    done = true;
+    const f: FeatureDocV1 = {...featureDoc(), workflowId: docOf(gh).workflowId, featureKey: 'F004', parentEpic: 10, editScope: ['src/F004/'], createOperationId: 'eeeeeeee-eeee-4eee-8eee-000000000014'};
+    gh.add({number: 14, title: 'Feature 14', body: renderFeatureBlock(f), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state: 'open'});
+    gh.issues.get(10)!.subIssues = [11, 12, 13, 14];
+  };
+  const out = await (await harness(t, gh)).invoke();
+  assert.notEqual(out.r.status, 'applied');
+  assert.equal(docOf(gh).dependencyPlan, null);
 });

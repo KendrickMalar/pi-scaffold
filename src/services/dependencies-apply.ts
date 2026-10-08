@@ -118,21 +118,28 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     operation, repo: input.repo, workflowId: epic.workflowId, operationId: input.operationId,
     payloadDigest: taggedDigest('dependencies-apply', payload), journal, scope: call.scope,
   }, async run => {
-    // The edges that existed before this operation's first change are its "unchanged" ones.
-    const baseline = (run.done('baseline') as {edges: Edge[]} | undefined)?.edges ?? (run.note('baseline', {edges: current.edges}), current.edges);
-    const added: Edge[] = [];
+    // The Epic plan as this operation first saw it; the final save only replaces that (or an identical) plan.
+    const seen = (run.done('preflight') as {plan: DependencyPlan | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan}), {plan: epic.dependencyPlan});
+    const blockersOf = async (to: number): Promise<number[] | undefined> => {
+      const r = await call.bridge.call('gh_dependencies_list', {repo: input.repo, issue: to}, decodeBlockers, call.scope);
+      return r.status === 'ok' ? r.data!.map(b => b.number) : undefined;
+    };
     for (const e of plannedEdges) {
-      if (has(baseline, e)) continue;
       const step = `edge:${e.from}->${e.to}`;
-      added.push(e);
-      if (run.done(step) !== undefined) continue;
+      const prev = run.record.steps.find(s => s.name === step);
+      if (prev?.phase === 'done') continue;
+      // Decided from what GitHub shows now (read in this call), never from an earlier run's view.
+      if ((!prev || prev.phase === 'failed') && has(current.edges, e)) continue;
       if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')]);
       const changePath = join(dir, `edge-${e.from}-${e.to}.json`);
       await writeOwnedFile(changePath, JSON.stringify({version: 1, repo: input.repo, operation: 'dependency-add', issue: e.to, relatedIssue: e.from}), {root: call.namespaceRoot});
       await run.write(step, () => call.bridge.call('gh_dependency_add', {changePath}, () => true as const, call.scope), {
-        reconcile: async () => { const r = await readEdges([e.to, e.from]); const present = r.edges.some(x => x.from === e.from && x.to === e.to); return present ? 'applied' : r.problems.length ? 'unknown' : 'not-applied'; },
+        // Only the later Feature's own list matters here; its other blockers are irrelevant to this edge.
+        reconcile: async () => { const b = await blockersOf(e.to); return b === undefined ? 'unknown' : b.includes(e.from) ? 'applied' : 'not-applied'; },
       });
     }
+    // Added = edges this operation created (pi-gh reports an already-present edge as noop, which records no data).
+    const added = plannedEdges.filter(e => run.record.steps.some(s => s.name === `edge:${e.from}->${e.to}` && s.phase === 'done' && s.data === true));
     let projectItems: number[] = [];
     if (input.projectId) {
       for (const n of issues) {
@@ -151,11 +158,25 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
       if (missing.length) return run.stop([problem('PROJECT_ITEM_MISSING', 'projectId', `#${missing.join(', #')} are not in the Project.`)]);
       projectItems = [...issues].sort((a, b) => a - b);
     }
-    // Save the plan into the Epic last, from a fresh read (conditional on that body).
+    // Every planned edge must be on GitHub before the plan is recorded as the Epic's.
+    for (const e of plannedEdges) {
+      const b = await blockersOf(e.to);
+      if (!b?.includes(e.from)) return run.stop([problem('EDGE_MISSING', 'plan.edges', `#${e.to} is not blocked by #${e.from} on GitHub.`)]);
+    }
+    // Save the plan into the Epic last, from a fresh read (conditional on that body), only if the Epic is still where it was.
     if (run.done('epic-body') === undefined) {
       const fresh = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
       if (!fresh.ok) return run.stop(fresh.problems);
       const doc = fresh.value.doc as EpicDocV1;
+      const moved: Problem[] = [];
+      if (fresh.value.state !== 'open') moved.push(problem('ISSUE_CLOSED', 'epicIssue', 'The Epic was closed meanwhile.'));
+      if (doc.stage !== 'basic-design') moved.push(problem('STAGE_MISMATCH', 'stage', `The Epic moved to ${doc.stage} meanwhile; the plan is not saved.`));
+      if (fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_BLOCKED', 'labels', 'The Epic became Blocked meanwhile.'));
+      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(seen.plan) && canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan)) moved.push(problem('PLAN_CHANGED', 'dependencyPlan', 'Another dependency plan was saved meanwhile; it is not overwritten.'));
+      const now = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId});
+      if (!now.ok) moved.push(...now.problems);
+      else if (JSON.stringify(now.value.features.map(f => f.number).sort((a, b) => a - b)) !== JSON.stringify(input.plan.nodes.map(n => n.issue).sort((a, b) => a - b))) moved.push(problem('FEATURE_SET_CHANGED', 'plan.nodes', 'The Epic\'s Features changed meanwhile; the plan no longer covers exactly them.'));
+      if (moved.length) return run.stop(moved);
       const changePath = join(dir, 'epic-body.json');
       if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan)) {
         const edit = patchDoc(fresh.value, {...doc, dependencyPlan: input.plan});
@@ -171,7 +192,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     if (!final.ok) return run.stop(final.problems);
     if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
     const wrote = run.record.steps.some(s => !s.note && s.phase === 'done');
-    return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => has(baseline, e)), mermaid, projectItems}};
+    return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => !has(added, e)), mermaid, projectItems}};
   });
   return result as ScaffoldResult<DependenciesApplyData>;
 }
