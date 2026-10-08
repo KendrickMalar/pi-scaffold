@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createJiti} from 'jiti';
-import {Check, Errors} from 'typebox/value';
+import {Check, Convert, Errors} from 'typebox/value';
 import type {TSchema} from 'typebox';
 import {createRuntime, type ScaffoldRuntime} from '../../src/core/runtime.js';
 import type {GitReader} from '../../src/ports/git-read.js';
@@ -13,7 +13,7 @@ import type {ScaffoldResult} from '../../src/core/contracts.js';
 import {FakePiGh} from './fake-pi-gh.js';
 
 export interface ToolDefinitionLike {
-  name: string; parameters: TSchema; outputSchema?: TSchema; executionMode?: string;
+  name: string; parameters: TSchema; prepareArguments?: (args: unknown) => unknown; outputSchema?: TSchema; executionMode?: string;
   execute(id: string, params: unknown, signal: AbortSignal | undefined, update: unknown, ctx: unknown): Promise<{structuredContent: unknown; isError: boolean; content: unknown[]}>;
 }
 export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinitionLike;
@@ -79,6 +79,14 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
           ghWrites: gh.writes - writesBefore, herdrCalls: herdr.calls.length - herdrBefore, confirmCalls: confirmCalls - confirmBefore,
         };
       } finally { if (previousChild === undefined) delete process.env.PI_SUBAGENT_CHILD; else process.env.PI_SUBAGENT_CHILD = previousChild; }
+    },
+    /** Pi's own pipeline: prepareArguments → structuredClone → Value.Convert → schema check → execute. */
+    async invokeAsPi(raw: unknown): Promise<{piRejected: true; errors: string[]; ghWrites: number} | (Invocation & {piRejected: false})> {
+      const prepared = tool.prepareArguments ? tool.prepareArguments(raw) : raw;
+      const args = structuredClone(prepared);
+      Convert(tool.parameters, args);
+      if (!Check(tool.parameters, args)) return {piRejected: true, errors: [...Errors(tool.parameters, args)].map(e => `${e.instancePath} ${e.message}`), ghWrites: 0};
+      return {...await this.invoke(args), piRejected: false};
     },
     dispose: () => rm(home, {recursive: true, force: true}),
   };

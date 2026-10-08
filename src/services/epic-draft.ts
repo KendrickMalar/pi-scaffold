@@ -9,11 +9,11 @@ import {
 import {renderEpicBlock, canonicalDocJson} from '../core/epic-render.js';
 import {parseIssueBody} from '../core/body-codec.js';
 import {sha256Text, taggedDigest} from '../core/digests.js';
-import {writeOwnedFile} from '../core/files.js';
+import {OwnedFileError, readOwnedFile, writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/template-snapshot.js';
 import type {ToolCall} from '../core/runtime.js';
-import {decodeGithubIssue, readIssue} from '../ports/pi-gh.js';
+import {decodeGithubIssue, readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
 import {readLabels} from './labels-ensure.js';
 
 export const EPIC_DRAFT_CREATE = 'scaffold_epic_draft_create';
@@ -75,15 +75,18 @@ const decodeCreated = (repo: string) => (d: unknown) => {
 export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Promise<ScaffoldResult<EpicDraftData>> {
   const operation = EPIC_DRAFT_CREATE;
   const blocked = (problems: Problem[]): ScaffoldResult<EpicDraftData> => ({status: 'blocked', operation, problems});
+  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
   const planner = call.env.currentModel();
   if (!planner) return blocked([problem('PLANNER_UNKNOWN', 'planner', 'The session model/thinking level is unknown; the planner cannot be recorded. No model is changed or called.')]);
   const mode = input.mode ?? 'publish';
-  const caps = await call.bridge.requireCapabilities(mode === 'prepare' ? ['gh_issue_validate'] : ['gh_issue_validate', 'gh_issue_submit', 'gh_issue_list', 'gh_issue_get', 'gh_labels_list'], call.scope);
+  const caps = mode === 'prepare'
+    ? await call.bridge.requireCapabilities(['gh_issue_validate'], call.scope)
+    : await call.bridge.requireCapabilities(['gh_issue_validate', 'gh_issue_submit', 'gh_issue_list', 'gh_issue_get', 'gh_labels_list'], call.scope, ['issue-list-labels']);
   if (!caps.ok) return {status: caps.problems.some(p => p.code === 'STALE_SCOPE') ? 'cancelled' : 'blocked', operation, problems: caps.problems};
-  const context = await call.repoContext(input.repo, null);
-  if (!context.ok) return blocked(context.problems);
-
+  // Each Epic is its own workflow: its journal and artifacts never hold up other Epics or repository label setup.
   const workflowId = workflowIdFor(input.operationId);
+  const context = await call.repoContext(input.repo, workflowId);
+  if (!context.ok) return blocked(context.problems);
   const doc = buildDoc(input, workflowId);
   const decoded = decodeEpicDoc(doc);
   if (!decoded.ok) return blocked(decoded.problems);
@@ -95,9 +98,14 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   const binding = {model: planner.model, thinking: planner.thinking as never, reason: 'Epic下書きを作成したセッションのモデル（記録のみ）'};
   const snapshot = await buildTemplateSnapshot('epic', {planner: binding}, join(dir, 'template'), call.namespaceRoot);
   const draft = {version: 1, template: TEMPLATE_IDS.epic, repo: input.repo, title: input.title, labels: [...EPIC_LABELS], fields: {[TEMPLATE_FIELD]: block}, agents: {planner: {model: planner.model, thinking: planner.thinking, reason: binding.reason}}};
-  const draftText = JSON.stringify(draft, null, 2) + '\n';
   const draftPath = join(dir, 'draft.json');
-  await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot});
+  const journal = call.journal(context.value);
+  let draftText = JSON.stringify(draft, null, 2) + '\n';
+  if (await journal.load(input.operationId)) {
+    // A recorded operation keeps its own artifacts (e.g. the planner of the first call); never rewrite them.
+    try { draftText = (await readOwnedFile(draftPath, {root: call.namespaceRoot})).toString('utf8'); }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw e; await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot}); }
+  } else await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot});
   const args = {draftPath, templatePath: snapshot.templatePath};
   const base: EpicDraftData = {draftRef: {path: draftPath, sha256: sha256Text(draftText)}, workflowId, missingFields: missingFields(doc)};
 
@@ -112,12 +120,15 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
 
   /** Issues whose managed body carries this operation's createOperationId. */
   const candidates = async (): Promise<{number: number}[] | Problem[]> => {
-    const r = await call.bridge.call('gh_issue_list', {repo: input.repo, state: 'all'}, decodeIssueList, call.scope);
+    const r = await call.bridge.call('gh_issue_list', {repo: input.repo, state: 'all', labels: [...EPIC_LABELS]}, decodeIssueList, call.scope);
     if (r.status !== 'ok' || r.data!.some(i => !i)) return r.problems.length ? r.problems : [problem('ISSUE_LIST_FAILED', 'issues', 'Issues could not be listed completely.')];
-    return r.data!.filter(i => i!.body?.includes(input.operationId)).filter(i => { const p = parseIssueBody(i!.body ?? ''); return !p.ok || p.value.doc.createOperationId === input.operationId; }).map(i => ({number: i!.number}));
+    // Only a readable managed Epic created by this operation counts; mentions of the id elsewhere are ignored.
+    return r.data!.filter(i => i!.body?.includes(input.operationId)).filter(i => { const p = parseIssueBody(i!.body ?? ''); return p.ok && p.value.doc.kind === 'epic' && p.value.doc.createOperationId === input.operationId; }).map(i => ({number: i!.number}));
   };
-  const payloadDigest = taggedDigest('epic-draft', {draft: sha256Text(draftText)});
-  const result = await withOperation({operation, repo: input.repo, workflowId: '_repo', operationId: input.operationId, payloadDigest, journal: call.journal(context.value), scope: call.scope}, async run => {
+  // Bound to the caller's input, not to the session model, so a resumed call from another model is the same operation.
+  const {mode: _mode, ...content} = input;
+  const payloadDigest = taggedDigest('epic-draft', content);
+  const result = await withOperation({operation, repo: input.repo, workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     let found: number | undefined;
     const pending = run.record.steps.some(s => s.name === 'submit' && (s.phase === 'requested' || s.phase === 'unknown'));
     let issue = run.done('submit') as {number: number; url: string} | undefined;

@@ -21,6 +21,7 @@ export class FakePiGh {
   readonly issues = new Map<number, FakeIssue>();
   operations = [...PI_GH_WITH_LABELS_LIST];
   contractVersion: unknown = 1;
+  features: string[] = ['issue-list-labels'];
   loaded = true;
   readonly overrides = new Map<string, Override>();
   /** Repository labels keyed by lower-case name, like GitHub. */
@@ -45,7 +46,7 @@ export class FakePiGh {
     if (!this.loaded) return {result: {content: [{type: 'text', text: `Tool ${name} not found`}]}, isError: true};
     const override = this.overrides.get(name);
     if (override) { const r = await override(args, this.count(name)); if (r) return r; }
-    if (name === 'gh_capabilities') return FakePiGh.ok({contractVersion: this.contractVersion, operations: this.operations});
+    if (name === 'gh_capabilities') return FakePiGh.ok({contractVersion: this.contractVersion, operations: this.operations, features: this.features});
     if (!this.operations.includes(name)) return {result: {content: [{type: 'text', text: `Tool ${name} not found`}]}, isError: true};
     const a = args as {repo: string; issue: number};
     if (name === 'gh_issue_get') {
@@ -58,7 +59,11 @@ export class FakePiGh {
       if (!i) return FakePiGh.err('rejected');
       return FakePiGh.ok((i.subIssues ?? []).map(n => this.github(this.issues.get(n)!)));
     }
-    if (name === 'gh_issue_list') return FakePiGh.ok([...this.issues.values()].sort((x, y) => x.number - y.number).map(i => this.github(i)));
+    if (name === 'gh_issue_list') {
+      const filter = (args as {labels?: string[]}).labels;
+      if (filter && !this.features.includes('issue-list-labels')) return FakePiGh.err('rejected', 'ARGUMENT');
+      return FakePiGh.ok([...this.issues.values()].filter(i => !filter || filter.every(l => i.labels.includes(l))).sort((x, y) => x.number - y.number).map(i => this.github(i)));
+    }
     if (name === 'gh_issue_validate' || name === 'gh_issue_preview' || name === 'gh_issue_submit') return this.issue(name, args as {draftPath: string; templatePath: string});
     if (name === 'gh_labels_list') return FakePiGh.ok({repo: a.repo, labels: [...this.labels.values()].map(({name, color, description}) => ({name, color, description})).sort((x, y) => x.name < y.name ? -1 : 1)});
     if (name === 'gh_labels_preview' || name === 'gh_labels_apply') return this.label(name, args as {changePath: string});

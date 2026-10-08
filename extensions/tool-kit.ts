@@ -48,8 +48,37 @@ export interface ScaffoldToolSpec<I> {
   run(input: I, call: ToolCall): Promise<ScaffoldResult>;
 }
 
+const TYPE_CODES = new Set(['INVALID_TYPE', 'INVALID_INTEGER', 'INVALID_FORMAT', 'INVALID_VALUE', 'INVALID_WAVE']);
+/** Replaces the value at a decoder path (`a.b[0]`) with one Pi's Value.Convert cannot coerce into the schema type. */
+function poison(root: unknown, path: string): void {
+  const keys = path.match(/[^.[\]]+/g) ?? [];
+  if (!keys.length || typeof root !== 'object' || root === null) return;
+  let node = root as Record<string, unknown>;
+  for (const key of keys.slice(0, -1)) {
+    const next = node[key];
+    if (typeof next !== 'object' || next === null) return;
+    node = next as Record<string, unknown>;
+  }
+  node[keys.at(-1)!] = {invalidInput: 'This value has the wrong type and is not converted.'};
+}
+/**
+ * Pi converts tool arguments to the schema types (42 → "42", "1" → 1) after prepareArguments and before
+ * validation. Type errors found on the raw arguments are made unconvertible here, so Pi rejects the call and the
+ * tool never runs on coerced input.
+ */
+export function strictArguments<I>(decode: (raw: unknown) => Decoded<I>) {
+  return (raw: unknown): unknown => {
+    const decoded = decode(raw);
+    if (decoded.ok || typeof raw !== 'object' || raw === null) return raw;
+    const copy = structuredClone(raw);
+    for (const p of decoded.problems) if (TYPE_CODES.has(p.code)) poison(copy, p.path);
+    return copy;
+  };
+}
+
 export function defineScaffoldTool<I>(runtime: ScaffoldRuntime, spec: ScaffoldToolSpec<I>): ToolDefinition {
   return {
+    prepareArguments: strictArguments(spec.decode),
     name: spec.name, label: spec.label, description: spec.description, parameters: spec.parameters, outputSchema: scaffoldOutputSchema,
     exposure: 'direct', executionMode: spec.executionMode,
     annotations: {readOnlyHint: spec.readOnly, destructiveHint: !spec.readOnly, idempotentHint: spec.readOnly, openWorldHint: true},

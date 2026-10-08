@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Native Pi acceptance for the pi-scaffold foundation (#2).
 
-Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh (0.3.0+, with gh_labels_list) checkout or package.
+Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh (0.4.0+: gh_labels_list, issue-list-labels) checkout or package.
 Never touches the user's agent directory, credentials or GitHub.
 
   python3 scripts/test-native-pi.py --pi-gh /path/to/pi-gh [--pi node_modules/.bin/pi] [--case NAME]
@@ -79,7 +79,7 @@ class Acceptance(unittest.TestCase):
         self.requests, self.children, self.calls = [], [], 0
         self.pi_gh = Path(OPTIONS.pi_gh).resolve()
         version = tuple(int(x) for x in json.loads((self.pi_gh / 'package.json').read_text())['version'].split('.')[:2])
-        self.assertGreaterEqual(version, (0, 3), 'pi-gh 0.3.0+ (gh_labels_list) is required')
+        self.assertGreaterEqual(version, (0, 4), 'pi-gh 0.4.0+ (gh_labels_list, issue-list-labels) is required')
         subprocess.run(['git', 'init', '-q', str(self.cwd)], check=True)
         subprocess.run(['git', '-C', str(self.cwd), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         body = subprocess.check_output(['node', '--input-type=module', '-e',
@@ -300,6 +300,17 @@ class Acceptance(unittest.TestCase):
         self.assertIn('<!-- pi-scaffold:v1:start -->', issue['body'])
         self.assertIn(f'"createOperationId": "{op}"', issue['body'])
         self.assertEqual(results[1]['data']['issue']['number'], issue['number'])
+
+    def test_wrong_types_are_not_coerced_by_pi(self):
+        self.seed_all_labels()
+        self.tool = 'scaffold_epic_draft_create'
+        self.tool_args = {'repo': 'example/demo', 'operationId': '55555555-5555-4555-8555-555555555555', 'title': 42, 'purpose': '目的', 'originalRequest': {'text': '依頼', 'sourceRefs': []}, 'mode': 'prepare'}
+        r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        results = ''.join(self.tool_results())
+        self.assertIn('Validation failed', results)
+        self.assertNotIn('"status":"prepared"', results)
+        self.assertFalse(list((self.agent / 'pi-scaffold').rglob('draft.json')) if (self.agent / 'pi-scaffold').exists() else [], 'the tool body never ran')
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

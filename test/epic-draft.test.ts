@@ -222,3 +222,61 @@ test('untrusted projects never reach pi-gh writes', async t => {
   assert.ok(out.r.problems.some(p => p.code === 'UNTRUSTED_PROJECT'));
   assert.equal(gh.writes, 0);
 });
+
+test('an unresolved Epic operation does not hold other Epics or label setup', async t => {
+  const gh = withLabels();
+  gh.overrides.set('gh_issue_submit', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}));
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  gh.overrides.delete('gh_issue_submit');
+  const other = await h.invoke({...base(), operationId: '66666666-6666-4666-8666-666666666666'});
+  assert.equal(other.r.status, 'applied', JSON.stringify(other.r.problems));
+  const {createTool} = await loadToolModule('extensions/tools/labels-ensure.ts');
+  const labels = await createHarness(createTool, {scenario: {gh, defaultParams: {repo: 'example/demo', operationId: '77777777-7777-4777-8777-777777777777'}}});
+  t.after(labels.dispose);
+  assert.equal((await labels.invoke()).r.status, 'noop');
+});
+
+test('a changed session model does not break resuming the same operation', async t => {
+  const gh = withLabels();
+  gh.overrides.set('gh_issue_submit', args => { gh.overrides.delete('gh_issue_submit'); return Promise.resolve(gh.execute('gh_issue_submit', args)).then(() => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true})); });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const {createTool} = await loadToolModule('extensions/tools/epic-draft.ts');
+  const h2 = await createHarness(createTool, {scenario: {gh, defaultParams: base(), thinkingLevel: 'high'}});
+  t.after(h2.dispose);
+  const resumedElsewhere = await h2.invoke();
+  assert.notEqual(resumedElsewhere.r.problems[0]?.code, 'OPERATION_PAYLOAD_MISMATCH');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.ok(gh.issues.get(10)!.body.includes('`medium`'), 'the recorded planner stays the one that created the draft');
+});
+
+test('an unrelated Issue that merely mentions the operationId is never a candidate', async t => {
+  const gh = withLabels();
+  gh.add({number: 30, title: 'bug', body: `エラー: artifacts/${OPERATION_ID}/draft.json`, labels: ['bug'], state: 'open'});
+  gh.add({number: 31, title: 'bug2', body: `<!-- pi-scaffold:v1:start -->壊れた ${OPERATION_ID}`, labels: ['Type: Scaffold', 'Scope: Epic'], state: 'open'});
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(submits(gh), 1);
+});
+
+test('candidate search is filtered to Scaffold Epics; pi-gh without the labels feature stops', async t => {
+  const gh = withLabels();
+  await (await harness(t, gh)).invoke();
+  const lists = gh.calls.filter(c => c.name === 'gh_issue_list');
+  assert.ok(lists.length >= 1);
+  assert.ok(lists.every(c => JSON.stringify((c.args as {labels?: string[]}).labels) === JSON.stringify(['Type: Scaffold', 'Scope: Epic'])));
+  const old = withLabels(); old.features = [];
+  const out = await (await harness(t, old)).invoke();
+  assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING' && p.path === 'feature:issue-list-labels'));
+  assert.equal(submits(old), 0);
+});
+
+test('text pi-gh would redact is refused before any write', async t => {
+  const gh = withLabels();
+  const out = await (await harness(t, gh)).invoke({...base(), purpose: '既存の値は [REDACTED] だった'});
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'UNREADABLE_TEXT'));
+  assert.equal(submits(gh), 0);
+});

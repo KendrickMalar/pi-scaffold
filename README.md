@@ -13,7 +13,7 @@ pi-ghの`gh_labels_list`（[KendrickMalar/pi-gh#5](https://github.com/KendrickMa
 
 Epic本文はpi-ghが組み立てるため、管理ブロックの前に`## Scaffold Epic（自動管理）`、後ろに`## 担当モデル`（planner）が付きます。管理ブロックの外側は読み戻し時もそのまま保持します。
 
-開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.3.0以上のcheckoutまたはインストール済みパッケージ、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。
+開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.4.0以上のcheckoutまたはインストール済みパッケージ、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。
 
 ## 役割の分担
 
