@@ -63,3 +63,11 @@ test('Pi-accepted optional nulls still work and format errors come back as Scaff
   const nullMode = await labels.invokeAsPi({repo: 'example/demo', operationId: OPERATION_ID, onMismatch: null});
   assert.ok(!nullMode.piRejected && nullMode.r.status === 'noop', JSON.stringify(nullMode));
 });
+
+test('an empty string Pi would turn into null is explained as empty, not as a type', async t => {
+  const gh = new FakePiGh().seedLabels(labelDefinitions());
+  const h = await harness(t, 'extensions/tools/epic-draft.ts', gh);
+  const out = await h.invokeAsPi({...epic(), background: ''});
+  assert.equal(out.piRejected, true);
+  assert.ok(out.piRejected && out.errors.join(' ').includes('empty'), JSON.stringify(out));
+});

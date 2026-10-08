@@ -76,7 +76,7 @@ export function strictArguments(parameters: TSchema, name: string) {
       let node = copy;
       for (const k of p.slice(0, -1)) node = node[k] as Record<string | number, unknown>;
       const original = node[p.at(-1)!];
-      node[p.at(-1)!] = {invalidInput: `${original === null ? 'null' : typeof original} ${JSON.stringify(original)} has the wrong type and is not converted.`};
+      node[p.at(-1)!] = {invalidInput: original === '' ? 'An empty string is not allowed here (it would be silently turned into null); omit the field or give a value.' : `${original === null ? 'null' : typeof original} ${JSON.stringify(original)} has the wrong type and is not converted.`};
     }
     return copy;
   };

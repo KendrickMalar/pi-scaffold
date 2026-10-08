@@ -294,3 +294,20 @@ test('text pi-gh would redact is refused before any write', async t => {
   assert.ok(out.r.problems.some(p => p.code === 'UNREADABLE_TEXT'));
   assert.equal(submits(gh), 0);
 });
+
+test('a corrupt recorded draft blocks with a clear reason instead of an internal error', async t => {
+  const gh = withLabels();
+  gh.overrides.set('gh_issue_submit', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}));
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const {readdir, writeFile} = await import('node:fs/promises');
+  const {join} = await import('node:path');
+  const find = async (dir: string): Promise<string | undefined> => { for (const e of await readdir(dir, {withFileTypes: true})) { const p = join(dir, e.name); if (e.isDirectory()) { const r = await find(p); if (r) return r; } else if (e.name === 'draft.json') return p; } return undefined; };
+  const draft = (await find(h.agentDir))!;
+  for (const broken of ['{not json', JSON.stringify({agents: {planner: {model: 42}}})]) {
+    await writeFile(draft, broken, {mode: 0o600});
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'blocked');
+    assert.ok(out.r.problems.some(p => p.code === 'RECORDED_DRAFT_INVALID'), JSON.stringify(out.r.problems));
+  }
+});

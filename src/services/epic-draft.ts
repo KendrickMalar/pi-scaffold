@@ -103,8 +103,11 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   if (record && record.payloadDigest !== payloadDigest) return blocked([problem('OPERATION_PAYLOAD_MISMATCH', 'operationId', 'This operationId was already used with different content.')]);
   let recorded: {agents?: {planner?: {model: string; thinking: string; reason: string}}} | undefined;
   if (record) {
+    const invalid = () => blocked([problem('RECORDED_DRAFT_INVALID', 'draft', `The recorded draft of this operation (${draftPath}) is unreadable. Check whether the Epic was created before using another operationId.`)]);
     try { recorded = JSON.parse((await readOwnedFile(draftPath, {root: call.namespaceRoot})).toString('utf8')); }
-    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw e; }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) return invalid(); }
+    const p = recorded?.agents?.planner;
+    if (recorded && (typeof p?.model !== 'string' || typeof p.thinking !== 'string' || typeof p.reason !== 'string')) return invalid();
   }
   // A recorded operation keeps the planner of its first call, so its draft and policy snapshot stay consistent.
   const plannerBinding = recorded?.agents?.planner ?? {model: planner.model, thinking: planner.thinking, reason: 'Epic下書きを作成したセッションのモデル（記録のみ）'};
