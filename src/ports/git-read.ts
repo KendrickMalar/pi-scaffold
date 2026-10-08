@@ -2,11 +2,13 @@
 import {execFile} from 'node:child_process';
 import {LIMITS} from '../core/contracts.js';
 
-const ALLOWED = new Set(['rev-parse', 'cat-file', 'merge-base', 'ls-remote']);
+const ALLOWED = new Set(['rev-parse', 'cat-file', 'merge-base', 'ls-remote', 'ls-tree']);
 export interface RepoIdentity { repoRoot: string; gitCommonDir: string; origin: string }
 export interface GitReader {
   run(args: readonly string[], cwd: string): Promise<{code: number; stdout: string}>;
   repoIdentity(cwd: string): Promise<RepoIdentity>;
+  /** Repo-relative paths of the files under `path` at `ref` (read-only `git ls-tree -r --name-only`); undefined if unreadable. */
+  listTree(ref: string, path: string, cwd: string): Promise<string[] | undefined>;
   /** Exact bytes of `<commit>:<path>`, or undefined when it does not exist (read-only `git cat-file blob`). Rejects with TOO_LARGE above the artifact limit. */
   readBlob(commit: string, path: string, cwd: string): Promise<Buffer | undefined>;
 }
@@ -33,8 +35,12 @@ export function createGitReader(options: {timeoutMs?: number; gitBin?: string} =
         });
     });
   };
+  const listTree: GitReader['listTree'] = async (ref, path, cwd) => {
+    const r = await run(['ls-tree', '-r', '--name-only', '-z', ref, '--', path], cwd);
+    return r.code ? undefined : r.stdout.split('\0').filter(Boolean);
+  };
   return {
-    run, readBlob,
+    run, readBlob, listTree,
     async repoIdentity(cwd) {
       const top = await run(['rev-parse', '--show-toplevel'], cwd);
       const common = await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);

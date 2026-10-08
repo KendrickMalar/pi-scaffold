@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update', 'scaffold_waves_verify'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -480,6 +480,41 @@ class Acceptance(unittest.TestCase):
         writes = self.writes()
         self.assertEqual(len([w for w in writes if 'blockedBy' in w]), 2); self.assertEqual(len([w for w in writes if 'projectAdd' in w]), 2)
         self.assertIn('```mermaid', issue(10)['body']); self.assertIn('"dependencyPlan": {', issue(10)['body'])
+
+    def test_waves_verify_through_real_pi_gh(self):
+        self.seed_all_labels()
+        made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
+            "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {taggedDigest} from './dist/src/core/digests.js';import {readFileSync} from 'node:fs';"
+            "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='basic-design';d.handoff=null;"
+            "const key=n=>'F00'+(n-10);"
+            "d.dependencyPlan={version:1,nodes:[11,12,13].map(n=>({featureKey:key(n),issue:n,contracts:[],startConditions:[],editScope:['src/f'+n+'/']})),edges:[{from:11,to:13,reason:'架空'}]};"
+            "d.wavePlan={version:1,assignments:[{issue:11,wave:1},{issue:12,wave:1},{issue:13,wave:2}],dependencyDigest:taggedDigest('dependency-plan',d.dependencyPlan),featureSetDigest:taggedDigest('feature-set',[11,12,13].map(n=>({issue:n,featureKey:key(n)})))};"
+            "const f=n=>renderFeatureBlock({version:1,kind:'feature',workflowId:d.workflowId,revision:1,createOperationId:'eeeeeeee-eeee-4eee-8eee-'+String(n).padStart(12,'0'),featureKey:key(n),parentEpic:10,stage:'basic-design',purpose:'架空',editScope:['src/f'+n+'/'],outOfScope:[],designRef:{path:'docs/d.md',sha256:'a'.repeat(64),gitRef:'c'.repeat(40)},criteria:[{id:'AC001',requirementIds:['REQ001'],verification:'v',expectedResult:'e'}],bindings:{'coding-manager':{model:'p/m',thinking:'low',reason:'r'},coder:{model:'p/m',thinking:'low',reason:'r'},tester:{model:'p/m',thinking:'low',reason:'r'}},evidenceRefs:[]});"
+            "process.stdout.write(JSON.stringify({epic:renderEpicBlock(d),features:{11:f(11),12:f(12),13:f(13)}}))"], cwd=ROOT, text=True))
+        labels = json.loads((self.state / 'labels.json').read_text())
+        pick = lambda names: [l for l in labels if l['name'] in names]
+        epic = json.loads((self.state / 'issue-10.json').read_text())
+        epic.update(body=made['epic'], labels=pick(('Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign')), sub_issues=[11, 12, 13])
+        (self.state / 'issue-10.json').write_text(json.dumps(epic))
+        for n, w in ((11, 1), (12, 1), (13, 2)):
+            (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': made['features'][str(n)], 'state': 'open',
+                'labels': pick(('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', f'Wave: {w}')), 'html_url': f'https://github.com/example/demo/issues/{n}', **({'blocked_by': [11]} if n == 13 else {})}))
+        self.tool, self.tool_args = 'scaffold_waves_verify', {'repo': 'example/demo', 'epicIssue': 10}
+        r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=90)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        res = self.last_result()
+        self.assertEqual(res['status'], 'validated', res); self.assertTrue(res['data']['passed'])
+        self.assertEqual(self.writes(), [], 'read-only')
+        # A proposed plan putting the dependent pair #11 → #13 in the same Wave: not passed, still zero writes.
+        saved = res['data']
+        proposed = {'version': 1, 'assignments': [{'issue': 11, 'wave': 1}, {'issue': 12, 'wave': 1}, {'issue': 13, 'wave': 1}], 'featureSetDigest': saved['featureSetDigest'],
+                    'dependencyDigest': json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import {parseIssueBody} from './dist/src/core/body-codec.js';import {readFileSync} from 'node:fs';process.stdout.write(JSON.stringify(parseIssueBody(JSON.parse(readFileSync(process.argv[1],'utf8')).body).value.doc.wavePlan.dependencyDigest))", str(self.state / 'issue-10.json')], cwd=ROOT, text=True))}
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'plan': proposed}
+        self.requests.clear()
+        r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=90)
+        res = self.last_result()
+        self.assertFalse(res['data']['passed']); self.assertIn('DEPENDENCY_ORDER', json.dumps(res)); self.assertFalse(res['data']['matchesSavedPlan'])
+        self.assertEqual(self.writes(), [])
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()
