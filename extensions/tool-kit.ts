@@ -98,7 +98,9 @@ export function defineScaffoldTool<I>(runtime: ScaffoldRuntime, spec: ScaffoldTo
         return spec.run(input.value, new ToolCall(runtime, env, scope));
       };
       try {
-        return toToolResult(spec.executionMode === 'sequential' ? await runtime.scope.runExclusive(work) : await work()) as never;
+        const r = spec.executionMode === 'sequential' ? await runtime.scope.runExclusive(work) : await work();
+        // Nothing changed and the call was aborted or the session moved on (reload/tree/fork): report it as cancelled.
+        return toToolResult(r.status === 'blocked' && !scope.isCurrent() ? {...r, status: 'cancelled'} : r) as never;
       } catch (error) {
         return toToolResult({status: scope.isCurrent() ? 'blocked' : 'cancelled', operation: spec.name, problems: [problem('INTERNAL_ERROR', '', (error as Error)?.message ?? 'Tool failed.')]}) as never;
       } finally { scope.dispose(); }

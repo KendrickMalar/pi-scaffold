@@ -88,7 +88,17 @@ test('an aborted call is cancelled before any change', async t => {
   const h = await harness(t);
   const controller = new AbortController(); controller.abort();
   const out = await h.invoke(params(), controller.signal);
-  assert.ok(['cancelled', 'blocked'].includes(out.r.status));
+  assert.equal(out.r.status, 'cancelled');
+  assert.equal(out.isError, true);
+  assert.equal(out.ghWrites, 0);
+});
+
+test('a call aborted while a nested read is in flight is cancelled, not blocked', async t => {
+  const g = gh(), controller = new AbortController();
+  g.overrides.set('gh_issue_get', () => { controller.abort(); return new Promise(() => {}); });
+  const h = await harness(t, {gh: g});
+  const out = await h.invoke(params(), controller.signal);
+  assert.equal(out.r.status, 'cancelled', JSON.stringify(out.r));
   assert.equal(out.isError, true);
   assert.equal(out.ghWrites, 0);
 });
