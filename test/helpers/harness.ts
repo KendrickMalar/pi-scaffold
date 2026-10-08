@@ -22,6 +22,8 @@ export interface Scenario {
   gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
   defaultParams?: Record<string, unknown>; herdr?: FakeHerdr; budgetMs?: number; now?: () => number;
+  /** Session model; null means Pi reports no model. */
+  model?: {provider: string; id: string} | null; thinkingLevel?: string | null;
 }
 export interface Invocation {
   r: ScaffoldResult; isError: boolean; inputSchemaValid: boolean; inputSchemaErrors: string[]; outputSchemaValid: boolean;
@@ -56,6 +58,8 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     ui: {confirm: async () => { confirmCalls++; const c = scenario.confirm ?? true; return typeof c === 'function' ? c() : c; }},
     sessionManager: {getSessionId: () => 'session-harness', getLeafId: () => 'leaf-harness', getEntries: () => scenario.sessionEntries ?? []},
     modelRegistry: {getAvailable: () => (scenario.availableModels ?? []).map(m => ({provider: m.split('/')[0], id: m.split('/').slice(1).join('/')}))},
+    model: scenario.model === null ? undefined : (scenario.model ?? {provider: 'example-provider', id: 'planner-1'}),
+    thinkingLevel: scenario.thinkingLevel === null ? undefined : (scenario.thinkingLevel ?? 'medium'),
     scopedModels: (scenario.scopedModels ?? []).map(m => ({model: {provider: m.split('/')[0], id: m.split('/').slice(1).join('/')}})),
   };
   const previousChild = process.env.PI_SUBAGENT_CHILD;

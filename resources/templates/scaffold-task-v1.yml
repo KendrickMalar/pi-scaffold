@@ -1,0 +1,16 @@
+version: 1
+id: scaffold-task-v1
+name: Scaffold Task
+description: Feature配下の実装・検証単位（管理ブロックはpi-scaffoldが生成）
+kind: task
+modelPolicy: models.yml
+agents:
+  - coder
+  - tester
+fields:
+  - id: scaffold
+    label: Scaffold Task（自動管理）
+    type: text
+    required: true
+    description: pi-scaffoldが生成する管理ブロック。直接編集しない
+    maxLength: 65000

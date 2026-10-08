@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stateful fake `gh api` for native tests. Fictional example/demo data only; never contacts GitHub.
-import {appendFileSync, existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 const state = process.env.FAKE_GH_STATE;
@@ -31,7 +31,16 @@ if (path === 'repos/example/demo/labels') {
     out(label);
   }
 }
-if (path === 'repos/example/demo/issues' && method === 'GET') out(page(existsSync(join(state, 'issue-10.json')) ? [JSON.parse(readFileSync(join(state, 'issue-10.json'), 'utf8'))] : []));
+const issueFiles = () => readdirSync(state).filter(f => /^issue-\d+\.json$/.test(f)).map(f => JSON.parse(readFileSync(join(state, f), 'utf8'))).sort((a, b) => a.number - b.number);
+if (path === 'repos/example/demo/issues' && method === 'GET') out(page(issueFiles()));
+if (path === 'repos/example/demo/issues' && method === 'POST') {
+  const body = JSON.parse(input), all = labels(), number = Math.max(0, ...issueFiles().map(i => i.number)) + 1;
+  const issue = {id: 1000 + number, node_id: `I_example${number}`, number, title: body.title, body: body.body, state: 'open', html_url: `https://github.com/example/demo/issues/${number}`,
+    labels: (body.labels ?? []).map(n => all.find(l => l.name === n)).filter(Boolean)};
+  writeFileSync(join(state, `issue-${number}.json`), JSON.stringify(issue));
+  appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint, created: number, title: body.title}) + '\n');
+  out(issue);
+}
 const m = /^repos\/example\/demo\/issues\/(\d+)(?:\/(sub_issues))?$/.exec(path);
 if (!m) fail('unsupported fake endpoint ' + endpoint);
 const file = join(state, `issue-${m[1]}.json`);

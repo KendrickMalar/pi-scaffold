@@ -20,7 +20,7 @@ export const STAGES = ['setup', 'specification', 'basic-design', 'implementation
 export type Stage = typeof STAGES[number];
 export const HANDOFF_PHASES = ['prepared', 'tab-created', 'receiver-ready', 'stage-committed', 'prompt-sent', 'turn-started'] as const;
 export type HandoffPhase = typeof HANDOFF_PHASES[number];
-export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 export const RESEARCH_STATES = ['pending', 'in_progress', 'resolved'] as const;
 export type ResearchState = typeof RESEARCH_STATES[number];
@@ -394,3 +394,10 @@ export function decodeEpicDoc(value: unknown): Decoded<EpicDocV1> {
 }
 
 export {Reader as StrictReader};
+/** Field readers shared by tool input decoders (same rules as the managed document). */
+export const readOriginalRequest = originalRequest;
+export const readQuestionFact = question;
+export function readResearchSeed(r: Reader, v: unknown, p: string): ResearchItemSeed {
+  const o = r.object(v, p, ['researchId', 'question', 'requiredEvidence', 'doneCondition']) ?? {};
+  return {researchId: r.stableId('R', o.researchId, join(p, 'researchId')), question: r.text(o.question, join(p, 'question')), requiredEvidence: r.text(o.requiredEvidence, join(p, 'requiredEvidence')), doneCondition: r.text(o.doneCondition, join(p, 'doneCondition'))};
+}

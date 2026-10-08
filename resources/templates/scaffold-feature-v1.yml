@@ -1,0 +1,17 @@
+version: 1
+id: scaffold-feature-v1
+name: Scaffold Feature
+description: 独立して完了できる成果単位（管理ブロックはpi-scaffoldが生成）
+kind: task
+modelPolicy: models.yml
+agents:
+  - coding-manager
+  - coder
+  - tester
+fields:
+  - id: scaffold
+    label: Scaffold Feature（自動管理）
+    type: text
+    required: true
+    description: pi-scaffoldが生成する管理ブロック。直接編集しない
+    maxLength: 65000

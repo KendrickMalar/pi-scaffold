@@ -35,6 +35,7 @@ export function toolEnv(ctx: ExtensionToolContext): ToolEnv {
     sessionEntries: () => ctx.sessionManager.getEntries(),
     availableModels: () => ctx.modelRegistry.getAvailable().map(m => `${m.provider}/${m.id}`),
     scopedModels: () => ctx.scopedModels.map(s => `${s.model.provider}/${s.model.id}`),
+    currentModel: () => ctx.model && ctx.thinkingLevel ? {model: `${ctx.model.provider}/${ctx.model.id}`, thinking: ctx.thinkingLevel} : undefined,
   };
 }
 
