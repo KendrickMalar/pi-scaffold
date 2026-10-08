@@ -9,7 +9,7 @@ import {patchDoc} from '../core/body-codec.js';
 import {sha256Bytes, specificationDigest, taggedDigest} from '../core/digests.js';
 import {OwnedFileError, ownedPath, readOwnedFile, writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
-import {applyResolution, checkResolution, parseEvidenceRef, type ResearchResolution} from '../core/research.js';
+import {applyResolution, checkResolution, parseEvidenceRef, showsResolution, type ResearchResolution} from '../core/research.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 
@@ -28,8 +28,9 @@ export function decodeResearchResolveInput(value: unknown): Decoded<ResearchReso
           conclusion: r.nullableText(o.conclusion, `${q}.conclusion`), evidenceRefs: r.texts(o.evidenceRefs, `${q}.evidenceRefs`), limitations: r.texts(o.limitations, `${q}.limitations`),
           disposition: r.literal(o.disposition, `${q}.disposition`, ['resolved', 'needs-more-work'] as const),
         };
+        // needs-more-work also carries a conclusion: the submitted result stays visible as unconfirmed.
+        if (o.conclusion === null) r.add('CONCLUSION_REQUIRED', `${q}.conclusion`, 'A result needs a conclusion (for needs-more-work: what is known so far).');
         if (res.disposition === 'resolved') {
-          if (o.conclusion === null) r.add('CONCLUSION_REQUIRED', `${q}.conclusion`, 'A resolved result needs a conclusion.');
           if (Array.isArray(o.evidenceRefs) && !o.evidenceRefs.length) r.add('EVIDENCE_REQUIRED', `${q}.evidenceRefs`, 'A resolved result needs at least one evidence reference.');
         }
         res.evidenceRefs.forEach((ref, i) => { if (typeof ref === 'string' && ref.trim() && !parseEvidenceRef(ref)) r.add('INVALID_EVIDENCE', `${q}.evidenceRefs[${i}]`, 'Evidence must be an https:// URL or artifact:<path>@sha256:<hex>.'); });
@@ -92,17 +93,17 @@ export async function resolveResearch(input: ResearchResolveInput, call: ToolCal
     operation, repo: input.repo, workflowId: snap.value.doc.workflowId, operationId: input.operationId,
     payloadDigest: taggedDigest('research-resolve', payload), journal: call.journal(context.value), scope: call.scope,
   }, async run => {
-    const started = run.record.steps.some(s => s.name.startsWith('result:'));
+    // Started = a write may have reached GitHub. A definitely failed write does not count: the caller's view is checked again.
+    const started = run.record.steps.some(s => s.name.startsWith('result:') && s.phase !== 'failed');
     let current = snap.value;
     if (!started) {
       // Before the first write: the caller's view must still be current, and every result must be acceptable.
       const problems = preflight(current);
       if (current.bodySha256 !== input.expectedBodySha256) problems.push(problem('STALE_BODY', 'expectedBodySha256', 'The Epic body changed since it was read; read it again.'));
       if ((current.doc as EpicDocV1).revision !== input.expectedRevision) problems.push(problem('STALE_REVISION', 'expectedRevision', `The Epic is at revision ${(current.doc as EpicDocV1).revision}.`));
-      input.resolutions.forEach((res, i) => { const c = checkResolution(current.doc as EpicDocV1, res, `resolutions[${i}]`); if (!c.done) problems.push(...c.problems); });
+      input.resolutions.forEach((res, i) => problems.push(...checkResolution(current.doc as EpicDocV1, res, `resolutions[${i}]`)));
       if (problems.length) run.stop(problems);
     }
-    let wrote = false;
     for (const [i, res] of input.resolutions.entries()) {
       const step = `result:${res.researchId}`;
       if (run.done(step) !== undefined) continue;
@@ -114,10 +115,8 @@ export async function resolveResearch(input: ResearchResolveInput, call: ToolCal
         current = await reread(run.stop);
         const doc = current.doc as EpicDocV1;
         const problems = preflight(current);
-        const c = checkResolution(doc, res, `resolutions[${i}]`);
-        if (!c.done) problems.push(...c.problems);
+        problems.push(...checkResolution(doc, res, `resolutions[${i}]`));
         if (problems.length) run.stop(problems);
-        if (c.done) { run.note(step, true); continue; }
         const next: EpicDocV1 = {...doc, research: doc.research.map(r => r.researchId === res.researchId ? applyResolution(r, res) : r)};
         const edit = patchDoc(current, next);
         if (!edit.ok) return run.stop(edit.problems);
@@ -126,16 +125,13 @@ export async function resolveResearch(input: ResearchResolveInput, call: ToolCal
       const planned = JSON.parse((await readOwnedFile(changePath, {root: call.namespaceRoot, maxBytes: LIMITS.bodyBytes * 2})).toString('utf8')) as {body: string; expectedBodySha256: string};
       expected = planned;
       await run.write(step, () => call.bridge.call('gh_issue_edit_if_current', {changePath}, () => true as const, call.scope), {
-        reconcile: async () => { const s = await reread(run.stop); return s.body === expected!.body ? 'applied' : s.bodySha256 === expected!.expectedBodySha256 ? 'not-applied' : 'unknown'; },
+        // Per item: other items may have changed meanwhile (parallel research sessions).
+        reconcile: async () => { const s = await reread(run.stop); return showsResolution(s.doc as EpicDocV1, res) ? 'applied' : s.bodySha256 === expected!.expectedBodySha256 ? 'not-applied' : 'unknown'; },
       });
-      wrote = true;
     }
-    const after = await reread(run.stop);
-    const doc = after.doc as EpicDocV1;
-    const mismatch = input.resolutions.filter(res => { const it = doc.research.find(r => r.researchId === res.researchId); return !it || JSON.stringify(applyResolution(it, res)) !== JSON.stringify(it); });
-    if (mismatch.length) run.stop(mismatch.map(res => problem('RESULT_NOT_SHOWN', res.researchId, `The Epic does not show the result for ${res.researchId}.`)));
-    const anyWritten = wrote || run.record.steps.some(s => s.name.startsWith('result:') && s.phase === 'done' && !s.note);
-    return {status: anyWritten ? 'applied' : 'noop', data: {
+    // Each item was confirmed by pi-gh's conditional edit or by reconciliation; later edits by others are not ours to undo.
+    const doc = (await reread(run.stop)).doc as EpicDocV1;
+    return {status: 'applied', data: {
       resolvedIds: input.resolutions.filter(r => r.disposition === 'resolved').map(r => r.researchId),
       remainingIds: doc.research.filter(r => r.state !== 'resolved').map(r => r.researchId),
       revision: doc.revision, specDigest: specificationDigest(doc), evidence,

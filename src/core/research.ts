@@ -98,14 +98,19 @@ export function applyResolution(item: ResearchItem, res: ResearchResolution): Re
   return {...item, state: res.disposition === 'resolved' ? 'resolved' : 'pending', claim: null, conclusion: res.conclusion, evidenceRefs: [...res.evidenceRefs], limitations: [...res.limitations]};
 }
 
-/** 'done' when the item already shows exactly this result; otherwise the claim must be the one named, on the current baseline. */
-export function checkResolution(doc: EpicDocV1, res: ResearchResolution, path: string): {done: true} | {done: false; problems: Problem[]} {
+/** True when the item shows exactly this result (used to reconcile this operation's own write). */
+export function showsResolution(doc: EpicDocV1, res: ResearchResolution): boolean {
   const item = doc.research.find(r => r.researchId === res.researchId);
-  if (!item) return {done: false, problems: [problem('UNKNOWN_RESEARCH', `${path}.researchId`, `${res.researchId} is not registered in the Epic.`)]};
-  if (JSON.stringify(applyResolution(item, res)) === JSON.stringify(item)) return {done: true};
+  return !!item && JSON.stringify(applyResolution(item, res)) === JSON.stringify(item);
+}
+
+/** The item must be in progress under the named claim on the current baseline; a matching result alone is not ownership. */
+export function checkResolution(doc: EpicDocV1, res: ResearchResolution, path: string): Problem[] {
+  const item = doc.research.find(r => r.researchId === res.researchId);
+  if (!item) return [problem('UNKNOWN_RESEARCH', `${path}.researchId`, `${res.researchId} is not registered in the Epic.`)];
   if (item.state !== 'in_progress' || !item.claim || item.claim.operationId !== res.claimOperationId) {
-    return {done: false, problems: [problem('CLAIM_MISMATCH', `${path}.claimOperationId`, `${res.researchId} is not in progress under operation ${res.claimOperationId}; start it with scaffold_research_begin first.`)]};
+    return [problem('CLAIM_MISMATCH', `${path}.claimOperationId`, `${res.researchId} is not in progress under operation ${res.claimOperationId}; start it with scaffold_research_begin first.`)];
   }
-  if (item.claim.specBaseDigest !== specBaseDigest(doc)) return {done: false, problems: [problem('STALE_CLAIM', `${path}.claimOperationId`, `${res.researchId} was claimed on another specification baseline; the result is not applied.`)]};
-  return {done: false, problems: []};
+  if (item.claim.specBaseDigest !== specBaseDigest(doc)) return [problem('STALE_CLAIM', `${path}.claimOperationId`, `${res.researchId} was claimed on another specification baseline; the result is not applied.`)];
+  return [];
 }

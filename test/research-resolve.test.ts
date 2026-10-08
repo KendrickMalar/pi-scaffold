@@ -173,14 +173,16 @@ test('several results are written one item at a time, each after a fresh read', 
   assert.equal((out.r.data as Data).revision, specDoc().revision + 2);
 });
 
-test('the same result submitted again is a noop with zero changes, also under a new operationId', async t => {
+test('the same result submitted again under the same operation is a noop with zero changes', async t => {
   const gh = world();
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'applied');
   const again = await h.invoke();
   assert.equal(again.r.status, 'noop'); assert.equal(again.ghWrites, 0);
+  // Under a new operation the claim is gone: the same result is not re-accepted (the Issue table: other claim → blocked).
   const fresh = await h.invoke(params(gh, [resolved('R002')], {operationId: OTHER_OP}));
-  assert.equal(fresh.r.status, 'noop', JSON.stringify(fresh.r)); assert.equal(fresh.ghWrites, 0);
+  assert.equal(fresh.r.status, 'blocked', JSON.stringify(fresh.r)); assert.equal(fresh.ghWrites, 0);
+  assert.ok(fresh.r.problems.some(x => x.code === 'CLAIM_MISMATCH'));
 });
 
 test('an unknown write in the middle stops before the next item and is never resent blindly', async t => {
@@ -221,4 +223,47 @@ test('instructions inside a conclusion are stored as text only: no REQ/AC/D chan
   assert.deepEqual([docOf(gh).requirements, docOf(gh).criteria, docOf(gh).decisions], [start.requirements, start.criteria, start.decisions]);
   assert.deepEqual([...new Set(gh.calls.map(c => c.name))].filter(n => !['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current'].includes(n)), []);
   assert.equal(out.herdrCalls, 0);
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a result matching an unclaimed or resolved item under another claim is blocked, not a noop', async t => {
+  const gh = world();
+  await blockedWithoutWrites(t, gh, params(gh, [resolved('R004', {disposition: 'needs-more-work', conclusion: '未調査', evidenceRefs: [], limitations: []})]), 'CLAIM_MISMATCH');
+  const g = world(), r1 = specDoc().research[0]!;
+  await blockedWithoutWrites(t, g, params(g, [resolved('R001', {claimOperationId: OTHER_OP, conclusion: r1.conclusion, evidenceRefs: r1.evidenceRefs, limitations: r1.limitations})]), 'CLAIM_MISMATCH');
+});
+
+test('needs-more-work also needs a conclusion so the submitted result is visible as unconfirmed', async t => {
+  const gh = world();
+  await blockedWithoutWrites(t, gh, params(gh, [resolved('R003', {disposition: 'needs-more-work', conclusion: null, evidenceRefs: [], limitations: ['開発機のみ']})]), 'CONCLUSION_REQUIRED', 'resolutions[0].conclusion');
+});
+
+test('after a definite write failure, re-running the same operation re-checks the body the caller saw', async t => {
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'blocked');
+  gh.issues.get(10)!.body += '\n手で足したメモ';
+  const again = await h.invoke();
+  assert.equal(again.r.status, 'blocked');
+  assert.ok(again.r.problems.some(x => x.code === 'STALE_BODY'), JSON.stringify(again.r.problems));
+  assert.equal(edits(gh), 1);
+  assert.equal(item(gh, 'R002').state, 'in_progress');
+});
+
+test('an uncertain write is reconciled per item even if another item changed meanwhile', async t => {
+  const gh = world();
+  const real = gh.execute;
+  gh.overrides.set('gh_issue_edit_if_current', async args => { gh.overrides.delete('gh_issue_edit_if_current'); await real('gh_issue_edit_if_current', args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  // Another research session releases R003 in between.
+  const d = docOf(gh); d.research[2] = {...d.research[2]!, state: 'pending', claim: null, conclusion: '別セッションの暫定結果'};
+  d.revision += 1; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d) + AFTER;
+  const before = edits(gh);
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(edits(gh), before, 'not resent');
 });
