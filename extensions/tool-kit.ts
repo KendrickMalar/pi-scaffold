@@ -1,5 +1,5 @@
 // Pi entry helpers: TypeBox schemas and the adapter from Pi's tool context to the node-only services.
-import {Type, type TSchema} from '@earendil-works/pi-ai';
+import {Type, validateToolArguments, type TSchema} from '@earendil-works/pi-ai';
 import type {ExtensionToolContext, ToolDefinition} from '@earendil-works/pi-coding-agent';
 import {problem, type Decoded, type ScaffoldResult} from '../dist/src/core/contracts.js';
 import {createCallScope} from '../dist/src/core/lifecycle.js';
@@ -35,6 +35,7 @@ export function toolEnv(ctx: ExtensionToolContext): ToolEnv {
     sessionEntries: () => ctx.sessionManager.getEntries(),
     availableModels: () => ctx.modelRegistry.getAvailable().map(m => `${m.provider}/${m.id}`),
     scopedModels: () => ctx.scopedModels.map(s => `${s.model.provider}/${s.model.id}`),
+    currentModel: () => ctx.model && ctx.thinkingLevel ? {model: `${ctx.model.provider}/${ctx.model.id}`, thinking: ctx.thinkingLevel} : undefined,
   };
 }
 
@@ -47,8 +48,43 @@ export interface ScaffoldToolSpec<I> {
   run(input: I, call: ToolCall): Promise<ScaffoldResult>;
 }
 
+/** Paths of primitive values (incl. null) that Pi's own argument pipeline would rewrite (e.g. 42 → "42", null → "null"). */
+function coercedPaths(raw: unknown, converted: unknown, path: (string | number)[] = []): (string | number)[][] {
+  if (Array.isArray(raw)) return Array.isArray(converted) ? raw.flatMap((v, i) => coercedPaths(v, converted[i], [...path, i])) : [path];
+  if (raw !== null && typeof raw === 'object') {
+    if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) return [path];
+    // A key Pi removed (an optional null) is not a coercion.
+    return Object.entries(raw).flatMap(([k, v]) => Object.hasOwn(converted, k) ? coercedPaths(v, (converted as Record<string, unknown>)[k], [...path, k]) : []);
+  }
+  return Object.is(raw, converted) ? [] : [path];
+}
+/**
+ * Pi converts tool arguments to the schema types after prepareArguments and before validation. Values that this
+ * conversion would rewrite are replaced by an unconvertible marker, so Pi rejects the call and the tool never runs
+ * on coerced input. Everything else (format/semantic errors) reaches the decoder and comes back as a ScaffoldResult.
+ */
+export function strictArguments(parameters: TSchema, name: string) {
+  return (raw: unknown): unknown => {
+    let converted: unknown;
+    try { converted = validateToolArguments({name, description: '', parameters} as never, {type: 'toolCall', id: 'strict', name, arguments: raw} as never); }
+    catch { return raw; }
+    const paths = coercedPaths(raw, converted);
+    if (!paths.length) return raw;
+    const copy = structuredClone(raw) as Record<string | number, unknown>;
+    for (const p of paths) {
+      if (!p.length) return {invalidInput: 'Arguments have the wrong type and are not converted.'};
+      let node = copy;
+      for (const k of p.slice(0, -1)) node = node[k] as Record<string | number, unknown>;
+      const original = node[p.at(-1)!];
+      node[p.at(-1)!] = {invalidInput: original === '' ? 'An empty string is not allowed here (it would be silently turned into null); omit the field or give a value.' : `${original === null ? 'null' : typeof original} ${JSON.stringify(original)} has the wrong type and is not converted.`};
+    }
+    return copy;
+  };
+}
+
 export function defineScaffoldTool<I>(runtime: ScaffoldRuntime, spec: ScaffoldToolSpec<I>): ToolDefinition {
   return {
+    prepareArguments: strictArguments(spec.parameters, spec.name),
     name: spec.name, label: spec.label, description: spec.description, parameters: spec.parameters, outputSchema: scaffoldOutputSchema,
     exposure: 'direct', executionMode: spec.executionMode,
     annotations: {readOnlyHint: spec.readOnly, destructiveHint: !spec.readOnly, idempotentHint: spec.readOnly, openWorldHint: true},

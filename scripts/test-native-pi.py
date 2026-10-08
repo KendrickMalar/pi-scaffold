@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Native Pi acceptance for the pi-scaffold foundation (#2).
 
-Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh 0.2.0 checkout.
+Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh (0.4.0+: gh_labels_list, issue-list-labels) checkout or package.
 Never touches the user's agent directory, credentials or GitHub.
 
   python3 scripts/test-native-pi.py --pi-gh /path/to/pi-gh [--pi node_modules/.bin/pi] [--case NAME]
@@ -78,7 +78,8 @@ class Acceptance(unittest.TestCase):
         self.state = self.home / 'gh-state'; self.state.mkdir()
         self.requests, self.children, self.calls = [], [], 0
         self.pi_gh = Path(OPTIONS.pi_gh).resolve()
-        self.assertEqual(json.loads((self.pi_gh / 'package.json').read_text())['version'], '0.2.0', 'pi-gh 0.2.0 checkout is required')
+        version = tuple(int(x) for x in json.loads((self.pi_gh / 'package.json').read_text())['version'].split('.')[:2])
+        self.assertGreaterEqual(version, (0, 4), 'pi-gh 0.4.0+ (gh_labels_list, issue-list-labels) is required')
         subprocess.run(['git', 'init', '-q', str(self.cwd)], check=True)
         subprocess.run(['git', '-C', str(self.cwd), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         body = subprocess.check_output(['node', '--input-type=module', '-e',
@@ -188,7 +189,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 21, 'pi-gh with gh_labels_list (KendrickMalar/pi-gh#5) is required')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -271,6 +272,45 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(final, {d['name']: (d['color'], d['description']) for d in defs})
         self.assertFalse(any('/issues/' in w.get('endpoint', '') for w in writes), 'no Issue label changes')
         print(f'\n  labels_ensure calls: {statuses}', end=' ')
+
+    def seed_all_labels(self):
+        defs = self.label_defs()
+        (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(defs)]))
+
+    def test_epic_draft_prepare_then_publish_through_real_pi_gh(self):
+        self.seed_all_labels()
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_submit'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
+        op = '55555555-5555-4555-8555-555555555555'
+        self.tool = 'scaffold_epic_draft_create'
+        args = {'repo': 'example/demo', 'operationId': op, 'title': 'CSV出力（架空）', 'purpose': '一覧をCSVで保存できるようにする。', 'originalRequest': {'text': 'CSVで落としたい。', 'sourceRefs': []}}
+        results = []
+        for mode in ['prepare', None, None]:
+            self.tool_args = dict(args, mode=mode) if mode else dict(args)
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['prepared', 'applied', 'noop'], results)
+        created = [w for w in self.writes() if 'created' in w]
+        self.assertEqual(len(created), 1, 'exactly one Issue is created across prepare, publish and a re-run')
+        issue = json.loads((self.state / f"issue-{created[0]['created']}.json").read_text())
+        self.assertEqual(sorted(l['name'] for l in issue['labels']), ['Scope: Epic', 'Type: Scaffold'])
+        self.assertIn('<!-- pi-scaffold:v1:start -->', issue['body'])
+        self.assertIn(f'"createOperationId": "{op}"', issue['body'])
+        self.assertEqual(results[1]['data']['issue']['number'], issue['number'])
+
+    def test_wrong_types_are_not_coerced_by_pi(self):
+        self.seed_all_labels()
+        self.tool = 'scaffold_epic_draft_create'
+        self.tool_args = {'repo': 'example/demo', 'operationId': '55555555-5555-4555-8555-555555555555', 'title': 42, 'purpose': '目的', 'originalRequest': {'text': '依頼', 'sourceRefs': []}, 'mode': 'prepare'}
+        r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        results = ''.join(self.tool_results())
+        self.assertIn('Validation failed', results)
+        self.assertNotIn('"status":"prepared"', results)
+        self.assertFalse(list((self.agent / 'pi-scaffold').rglob('draft.json')) if (self.agent / 'pi-scaffold').exists() else [], 'the tool body never ran')
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

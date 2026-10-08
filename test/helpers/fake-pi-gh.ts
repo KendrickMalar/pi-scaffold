@@ -21,12 +21,14 @@ export class FakePiGh {
   readonly issues = new Map<number, FakeIssue>();
   operations = [...PI_GH_WITH_LABELS_LIST];
   contractVersion: unknown = 1;
+  features: string[] = ['issue-list-labels'];
   loaded = true;
   readonly overrides = new Map<string, Override>();
   /** Repository labels keyed by lower-case name, like GitHub. */
   readonly labels = new Map<string, FakeLabel & {id: number}>();
   readonly labelChanges: {operation: string; name?: string; issue?: number}[] = [];
   onCall?: (name: string) => void;
+  readonly submitted: {draft: Record<string, unknown>; number: number}[] = [];
   constructor(readonly repo = 'example/demo') {}
 
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
@@ -44,7 +46,7 @@ export class FakePiGh {
     if (!this.loaded) return {result: {content: [{type: 'text', text: `Tool ${name} not found`}]}, isError: true};
     const override = this.overrides.get(name);
     if (override) { const r = await override(args, this.count(name)); if (r) return r; }
-    if (name === 'gh_capabilities') return FakePiGh.ok({contractVersion: this.contractVersion, operations: this.operations});
+    if (name === 'gh_capabilities') return FakePiGh.ok({contractVersion: this.contractVersion, operations: this.operations, features: this.features});
     if (!this.operations.includes(name)) return {result: {content: [{type: 'text', text: `Tool ${name} not found`}]}, isError: true};
     const a = args as {repo: string; issue: number};
     if (name === 'gh_issue_get') {
@@ -57,10 +59,41 @@ export class FakePiGh {
       if (!i) return FakePiGh.err('rejected');
       return FakePiGh.ok((i.subIssues ?? []).map(n => this.github(this.issues.get(n)!)));
     }
+    if (name === 'gh_issue_list') {
+      const filter = (args as {labels?: string[]}).labels;
+      if (filter && !this.features.includes('issue-list-labels')) return FakePiGh.err('rejected', 'ARGUMENT');
+      return FakePiGh.ok([...this.issues.values()].filter(i => !filter || filter.every(l => i.labels.includes(l))).sort((x, y) => x.number - y.number).map(i => this.github(i)));
+    }
+    if (name === 'gh_issue_validate' || name === 'gh_issue_preview' || name === 'gh_issue_submit') return this.issue(name, args as {draftPath: string; templatePath: string});
     if (name === 'gh_labels_list') return FakePiGh.ok({repo: a.repo, labels: [...this.labels.values()].map(({name, color, description}) => ({name, color, description})).sort((x, y) => x.name < y.name ? -1 : 1)});
     if (name === 'gh_labels_preview' || name === 'gh_labels_apply') return this.label(name, args as {changePath: string});
     return FakePiGh.ok({repo: this.repo}, 'applied');
   };
+
+  /** Mirrors pi-gh 0.3.0 validateDraft/renderIssue closely enough for pi-scaffold tests (fictional data only). */
+  private issue(name: string, args: {draftPath: string; templatePath: string}): ToolOutcome {
+    const draft = JSON.parse(readFileSync(args.draftPath, 'utf8')) as {template: string; repo: string; title: string; labels?: string[]; parentIssue?: number; fields: Record<string, string>; agents: Record<string, {model: string; thinking: string; reason: string}>};
+    const template = readFileSync(args.templatePath, 'utf8');
+    const id = /^id: (.+)$/m.exec(template)?.[1], kind = /^kind: (.+)$/m.exec(template)?.[1];
+    if (draft.template !== id) return FakePiGh.err('rejected', 'DRAFT_TEMPLATE');
+    if (kind === 'parent' && draft.parentIssue !== undefined) return FakePiGh.err('rejected', 'DRAFT_PARENT');
+    if (kind === 'task' && !draft.parentIssue) return FakePiGh.err('rejected', 'DRAFT_PARENT');
+    if (!draft.title?.trim() || /[\r\n]/.test(draft.title)) return FakePiGh.err('rejected', 'DRAFT_TITLE');
+    const policy = JSON.parse(readFileSync(args.templatePath.replace(/[^/]+$/, 'models.yml'), 'utf8')) as {agents: Record<string, {model: string; thinking: string}[]>};
+    for (const [role, a] of Object.entries(draft.agents)) if (!policy.agents[role]?.some(p => p.model === a.model && p.thinking === a.thinking)) return FakePiGh.err('rejected', 'AGENT_PROFILE');
+    if (name === 'gh_issue_validate') return {result: {content: [], structuredContent: {status: 'validated'}}, isError: false};
+    for (const l of draft.labels ?? []) if (!this.labels.has(l.toLowerCase())) return FakePiGh.err('rejected', 'LABEL_MISSING');
+    const labels = [...template.matchAll(/^    label: (.+)$/gm)].map(m => m[1]!);
+    const fieldIds = [...template.matchAll(/^  - id: (.+)$/gm)].map(m => m[1]!);
+    const blocks = fieldIds.map((f, i) => `## ${labels[i]}\n\n${draft.fields[f]}`);
+    blocks.push('## 担当モデル\n\n' + Object.entries(draft.agents).map(([n, a]) => `- ${n}: \`${a.model}\` / \`${a.thinking}\`\n  - 選定理由: ${a.reason}`).join('\n'));
+    const body = blocks.join('\n\n') + '\n';
+    if (name === 'gh_issue_preview') return FakePiGh.ok({repo: draft.repo, title: draft.title, body, labels: draft.labels ?? []}, 'preview');
+    const number = Math.max(9, ...this.issues.keys()) + 1;
+    this.add({number, title: draft.title, body, labels: (draft.labels ?? []).map(l => this.labels.get(l.toLowerCase())!.name), state: 'open'});
+    this.submitted.push({draft: draft as unknown as Record<string, unknown>, number});
+    return FakePiGh.ok({url: `https://github.com/${this.repo}/issues/${number}`}, 'created');
+  }
 
   private label(name: string, args: {changePath: string}): ToolOutcome {
     const change = JSON.parse(readFileSync(args.changePath, 'utf8')) as {repo: string; operation: string; name?: string; newName?: string; color?: string; description?: string; issue?: number};

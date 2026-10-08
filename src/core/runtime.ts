@@ -21,6 +21,8 @@ export interface ToolEnv {
   sessionEntries(): readonly unknown[];
   availableModels(): string[];
   scopedModels(): string[];
+  /** The session's current model and thinking level; undefined when Pi does not report them. Never called, only recorded. */
+  currentModel(): {model: string; thinking: string} | undefined;
 }
 export interface ScaffoldRuntime {
   scope: RuntimeScope; agentDir: string; git: GitReader; timeoutMs?: number;

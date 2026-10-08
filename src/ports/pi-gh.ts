@@ -65,14 +65,18 @@ export class PiGhBridge {
     return {status: 'ok', data, problems: [], isError: false};
   }
 
-  async requireCapabilities(required: readonly string[], scope: CallScope): Promise<Decoded<void>> {
+  async requireCapabilities(required: readonly string[], scope: CallScope, features: readonly string[] = []): Promise<Decoded<void>> {
     const r = await this.call('gh_capabilities', {}, d => isRecord(d) ? d : undefined, scope);
     if (r.status === 'cancelled') return failed(r.problems);
     if (r.status !== 'ok') return failed([problem('PI_GH_UNAVAILABLE', 'gh_capabilities', 'pi-gh is not loaded in this Pi process or did not answer.')]);
     const info = r.data!;
     if (info.contractVersion !== PI_GH_CONTRACT_VERSION || !Array.isArray(info.operations)) return failed([problem('CONTRACT_MISMATCH', 'gh_capabilities', `pi-gh contract ${String(info.contractVersion)} is not supported (need ${PI_GH_CONTRACT_VERSION}).`)]);
     const missing = required.filter(op => !(info.operations as unknown[]).includes(op));
-    return missing.length ? failed(missing.map(op => problem('CAPABILITY_MISSING', op, `pi-gh does not provide ${op}; this operation stops instead of bypassing it.`))) : okValue(undefined);
+    const offered = Array.isArray(info.features) ? info.features : [];
+    const missingFeatures = features.filter(f => !offered.includes(f));
+    const problems = [...missing.map(op => problem('CAPABILITY_MISSING', op, `pi-gh does not provide ${op}; this operation stops instead of bypassing it.`)),
+      ...missingFeatures.map(f => problem('CAPABILITY_MISSING', `feature:${f}`, `pi-gh does not provide the ${f} feature (upgrade pi-gh); this operation stops instead of bypassing it.`))];
+    return problems.length ? failed(problems) : okValue(undefined);
   }
 }
 

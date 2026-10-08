@@ -1,0 +1,15 @@
+version: 1
+id: scaffold-epic-v1
+name: Scaffold Epic
+description: Scaffold工程の親Issue（管理ブロックはpi-scaffoldが生成）
+kind: parent
+modelPolicy: models.yml
+agents:
+  - planner
+fields:
+  - id: scaffold
+    label: Scaffold Epic（自動管理）
+    type: text
+    required: true
+    description: pi-scaffoldが生成する管理ブロック。直接編集しない
+    maxLength: 65000
