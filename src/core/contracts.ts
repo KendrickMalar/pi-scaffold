@@ -400,6 +400,7 @@ export const readQuestionFact = question;
 export const readRequirement = requirement;
 export const readCriterion = criterion;
 export const readDecision = decision;
+export const readDesignRef = designRef;
 export function readResearchSeed(r: Reader, v: unknown, p: string): ResearchItemSeed {
   const o = r.object(v, p, ['researchId', 'question', 'requiredEvidence', 'doneCondition']) ?? {};
   return {researchId: r.stableId('R', o.researchId, join(p, 'researchId')), question: r.text(o.question, join(p, 'question')), requiredEvidence: r.text(o.requiredEvidence, join(p, 'requiredEvidence')), doneCondition: r.text(o.doneCondition, join(p, 'doneCondition'))};

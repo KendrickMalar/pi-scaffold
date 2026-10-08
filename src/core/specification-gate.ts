@@ -27,5 +27,6 @@ export function checkSpecificationReady(doc: EpicDocV1): GateResult {
 
 /** What the parent approves: the visible specification, bound to specificationDigest (approvals expire when it changes). */
 export function specificationApprovalView(doc: EpicDocV1): ApprovalView {
-  return {contentDigest: specificationDigest(doc), text: renderEpicVisible(doc)};
+  // Design, dependency and Wave sections are recorded later (basic design) and are not part of the specification.
+  return {contentDigest: specificationDigest(doc), text: renderEpicVisible({...doc, design: null, dependencyPlan: null, wavePlan: null})};
 }

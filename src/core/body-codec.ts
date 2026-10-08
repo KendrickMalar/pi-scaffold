@@ -3,7 +3,7 @@ import {
   LIMITS, decodeScaffoldDoc, failed, okValue, problem, isRepoRef, isPositiveInt,
   type Decoded, type IssueSnapshot, type PreparedIssueEdit, type Problem, type ScaffoldDocV1, type EpicDocV1,
 } from './contracts.js';
-import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, canonicalDocJson} from './epic-render.js';
+import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, renderFeatureVisible, canonicalDocJson} from './epic-render.js';
 import {sha256Text, labelsSha256} from './digests.js';
 
 export interface ParsedBody { before: string; after: string; block: string; doc: ScaffoldDocV1; projectionChecked: boolean }
@@ -111,6 +111,10 @@ export function parseIssueBody(body: string): Decoded<ParsedBody> {
   if (jsonText !== canonicalDocJson(doc)) return failed([problem('DOC_PROJECTION_MISMATCH', 'json', 'Managed JSON is not in canonical form; it was edited directly.')]);
   if (doc.kind === 'epic') {
     if (visible !== renderEpicVisible(doc)) return failed([problem('DOC_PROJECTION_MISMATCH', 'body', 'Visible body differs from the managed JSON. Reflect the edit into the structured data explicitly.')]);
+    return okValue({before, after, block, doc, projectionChecked: true});
+  }
+  if (doc.kind === 'feature') {
+    if (visible !== renderFeatureVisible(doc)) return failed([problem('DOC_PROJECTION_MISMATCH', 'body', 'Visible body differs from the managed JSON. Reflect the edit into the structured data explicitly.')]);
     return okValue({before, after, block, doc, projectionChecked: true});
   }
   return okValue({before, after, block, doc, projectionChecked: false});

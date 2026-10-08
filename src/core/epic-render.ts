@@ -1,6 +1,6 @@
 // Deterministic projection of an Epic document into the visible Issue body (#4 v1 layout).
 // User-provided text is escaped so it can never form markers, fences, details tags, headings or tables.
-import {decodeScaffoldDoc, type EpicDocV1, type ResearchItem, type ScaffoldDocV1} from './contracts.js';
+import {decodeScaffoldDoc, type EpicDocV1, type FeatureDocV1, type FeatureRole, type ResearchItem, type ScaffoldDocV1} from './contracts.js';
 
 export const MANAGED_START = '<!-- pi-scaffold:v1:start -->';
 export const MANAGED_END = '<!-- pi-scaffold:v1:end -->';
@@ -84,3 +84,20 @@ export function composeManagedBlock(visible: string, doc: ScaffoldDocV1): string
   return `${MANAGED_START}\n${visible}\n${DETAILS_OPEN}${canonicalDocJson(doc)}${DETAILS_CLOSE}${MANAGED_END}`;
 }
 export function renderEpicBlock(doc: EpicDocV1): string { return composeManagedBlock(renderEpicVisible(doc), doc); }
+
+const ROLE_LABEL: Record<FeatureRole, string> = {'coding-manager': '進行管理（coding-manager）', coder: '実装（coder）', tester: '検証（tester）'};
+/** Visible projection of a Feature; checked against the managed JSON on every read like the Epic. */
+export function renderFeatureVisible(doc: FeatureDocV1): string {
+  const sections: string[] = [];
+  const add = (title: string, body: string) => sections.push(`## ${title}\n${body}`);
+  add('目的', para(doc.purpose));
+  add('親Epic', `#${doc.parentEpic}（Feature ${doc.featureKey}）`);
+  add('編集範囲', doc.editScope.length ? list(doc.editScope.map(cell)) : CONFIRMED_NONE);
+  add('対象外', doc.outOfScope.length ? list(doc.outOfScope.map(cell)) : CONFIRMED_NONE);
+  add('基本設計', list([`パス：${cell(doc.designRef.path)}`, `SHA-256：${doc.designRef.sha256}`, `Git ref：${doc.designRef.gitRef}`]));
+  add('完了条件', table('| ID | 対応する要件 | 検証方法 | 合格基準 |', doc.criteria.map(c => row([c.id, c.requirementIds.join(', '), cell(c.verification), cell(c.expectedResult)])), UNSET));
+  add('担当モデル', table('| 役割 | モデル | thinking | 選定理由 |', (['coding-manager', 'coder', 'tester'] as const).map(r => row([ROLE_LABEL[r], cell(doc.bindings[r].model), doc.bindings[r].thinking, cell(doc.bindings[r].reason)])), UNSET));
+  add('検証の証跡', doc.evidenceRefs.length ? list(doc.evidenceRefs.map(e => `${cell(e.relativePath)}（SHA-256：${e.sha256}）`)) : NONE_YET);
+  return sections.join('\n\n') + '\n';
+}
+export function renderFeatureBlock(doc: FeatureDocV1): string { return composeManagedBlock(renderFeatureVisible(doc), doc); }

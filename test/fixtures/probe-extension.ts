@@ -7,7 +7,12 @@ export default function (pi: ExtensionAPI) {
   const runtime = createRuntime();
   pi.registerTool(createTool(runtime) as never);
   const invalidate = () => runtime.scope.invalidate();
-  pi.on('session_start', (_event, ctx) => { invalidate(); if (ctx.mode === 'tui') ctx.ui.notify('OWNED_SESSION_READY', 'info'); });
+  pi.on('session_start', (_event, ctx) => {
+    invalidate();
+    // Stand-in for pi-profile's startup snapshot (synthetic instructions only), when a native case asks for it.
+    if (process.env.OWNED_PROFILE_INSTRUCTIONS) pi.appendEntry('startup-profile-state', {version: 1, id: 'developer', label: 'developer', instructions: process.env.OWNED_PROFILE_INSTRUCTIONS});
+    if (ctx.mode === 'tui') ctx.ui.notify('OWNED_SESSION_READY', 'info');
+  });
   pi.on('session_before_switch', invalidate);
   pi.on('session_before_fork', invalidate);
   pi.on('session_before_tree', invalidate);

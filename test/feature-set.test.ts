@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFeatureSet} from '../src/ports/feature-set.js';
 import {PiGhBridge} from '../src/ports/pi-gh.js';
-import {composeManagedBlock, renderEpicBlock} from '../src/core/epic-render.js';
+import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {LIMITS, type FeatureDocV1} from '../src/core/contracts.js';
 import {FakePiGh, type FakeIssue} from './helpers/fake-pi-gh.js';
 import {makeScope} from './helpers/scope.js';
@@ -10,7 +10,7 @@ import {initialDoc, featureDoc, WORKFLOW_ID} from './helpers/docs.js';
 
 function feature(number: number, key: string, patch: Partial<FeatureDocV1> = {}, extra: Partial<FakeIssue> = {}): FakeIssue {
   const doc = {...featureDoc(), featureKey: key, ...patch};
-  return {number, title: `Feature ${key}`, body: composeManagedBlock('## 目的\n表示\n', doc), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state: 'open', ...extra};
+  return {number, title: `Feature ${key}`, body: renderFeatureBlock(doc), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state: 'open', ...extra};
 }
 function world(children: FakeIssue[]) {
   const gh = new FakePiGh();
