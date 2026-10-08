@@ -79,7 +79,7 @@ class Acceptance(unittest.TestCase):
         self.requests, self.children, self.calls = [], [], 0
         self.pi_gh = Path(OPTIONS.pi_gh).resolve()
         version = tuple(int(x) for x in json.loads((self.pi_gh / 'package.json').read_text())['version'].split('.')[:2])
-        self.assertGreaterEqual(version, (0, 4), 'pi-gh 0.4.0+ (gh_labels_list, issue-list-labels) is required')
+        self.assertGreaterEqual(version, (0, 5), 'pi-gh 0.5.0+ (gh_labels_list, issue-list-labels, *_if_current) is required')
         subprocess.run(['git', 'init', '-q', str(self.cwd)], check=True)
         subprocess.run(['git', '-C', str(self.cwd), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         body = subprocess.check_output(['node', '--input-type=module', '-e',
@@ -189,8 +189,8 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
-        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 21, 'pi-gh with gh_labels_list (KendrickMalar/pi-gh#5) is required')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_specification', 'scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
+        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
         self.run_print()

@@ -1,5 +1,8 @@
 // In-memory stand-in for a loaded pi-gh 0.2.0 reached through ctx.executeTool(). Fictional data only.
 import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('hex');
+export const labelsSha = (names: string[]) => sha(JSON.stringify([...names].sort()));
 import type {ToolExecutor, ToolOutcome} from '../../src/ports/pi-gh.js';
 
 export interface FakeLabel { name: string; color: string; description: string }
@@ -29,6 +32,7 @@ export class FakePiGh {
   readonly labelChanges: {operation: string; name?: string; issue?: number}[] = [];
   onCall?: (name: string) => void;
   readonly submitted: {draft: Record<string, unknown>; number: number}[] = [];
+  readonly conditionalChanges: {operation: string; issue: number}[] = [];
   constructor(readonly repo = 'example/demo') {}
 
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
@@ -65,10 +69,35 @@ export class FakePiGh {
       return FakePiGh.ok([...this.issues.values()].filter(i => !filter || filter.every(l => i.labels.includes(l))).sort((x, y) => x.number - y.number).map(i => this.github(i)));
     }
     if (name === 'gh_issue_validate' || name === 'gh_issue_preview' || name === 'gh_issue_submit') return this.issue(name, args as {draftPath: string; templatePath: string});
+    if (name === 'gh_issue_edit_if_current' || name === 'gh_issue_labels_if_current' || name === 'gh_issue_close_if_current') return this.conditional(name, args as {changePath: string});
     if (name === 'gh_labels_list') return FakePiGh.ok({repo: a.repo, labels: [...this.labels.values()].map(({name, color, description}) => ({name, color, description})).sort((x, y) => x.name < y.name ? -1 : 1)});
     if (name === 'gh_labels_preview' || name === 'gh_labels_apply') return this.label(name, args as {changePath: string});
     return FakePiGh.ok({repo: this.repo}, 'applied');
   };
+
+  /** pi-gh 0.5.0 *_if_current semantics: desired state → noop, then precondition, then apply. */
+  private conditional(name: string, args: {changePath: string}): ToolOutcome {
+    const c = JSON.parse(readFileSync(args.changePath, 'utf8')) as {repo: string; operation: string; issue: number; body?: string; add?: string[]; remove?: string[]; expectedBodySha256?: string; expectedLabelsSha256?: string};
+    const i = this.issues.get(c.issue);
+    if (!i || c.repo !== this.repo || c.operation !== name.replace(/^gh_/, '').replace(/_/g, '-')) return FakePiGh.err('rejected', 'ARGUMENT');
+    if (c.operation === 'issue-edit-if-current') {
+      if (i.body === c.body) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      if (sha(i.body) !== c.expectedBodySha256) return FakePiGh.err('rejected', 'PRECONDITION_FAILED');
+      i.body = c.body!;
+    } else if (c.operation === 'issue-labels-if-current') {
+      const remove = new Set((c.remove ?? []).map(l => l.toLowerCase()));
+      const desired = [...i.labels.filter(l => !remove.has(l.toLowerCase())), ...(c.add ?? []).filter(a => !i.labels.some(l => l.toLowerCase() === a.toLowerCase()))];
+      if (JSON.stringify([...desired].sort()) === JSON.stringify([...i.labels].sort())) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      if (labelsSha(i.labels) !== c.expectedLabelsSha256) return FakePiGh.err('rejected', 'PRECONDITION_FAILED');
+      i.labels = desired;
+    } else {
+      if (i.state === 'closed') return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      if (sha(i.body) !== c.expectedBodySha256) return FakePiGh.err('rejected', 'PRECONDITION_FAILED');
+      i.state = 'closed';
+    }
+    this.conditionalChanges.push({operation: c.operation, issue: c.issue});
+    return FakePiGh.ok({repo: this.repo, operation: name}, 'applied');
+  }
 
   /** Mirrors pi-gh 0.3.0 validateDraft/renderIssue closely enough for pi-scaffold tests (fictional data only). */
   private issue(name: string, args: {draftPath: string; templatePath: string}): ToolOutcome {
