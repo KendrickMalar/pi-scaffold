@@ -137,7 +137,7 @@ class Acceptance(unittest.TestCase):
     def run_print(self, **kw):
         if self.tool_args.get('expectedBodySha256') is None: self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()
         try:
-            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', **kw), env=self.env, cwd=self.cwd, text=True, capture_output=True, timeout=40)
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', **kw), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=40)
         except subprocess.TimeoutExpired as e:
             tail = lambda b: (b.decode('utf8', 'replace') if isinstance(b, bytes) else (b or ''))[-3000:]
             raise AssertionError(f'Pi --print timed out; requests={len(self.requests)}\nstdout:\n{tail(e.stdout)}\nstderr:\n{tail(e.stderr)}') from None
