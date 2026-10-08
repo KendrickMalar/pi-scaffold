@@ -7,6 +7,8 @@ export interface RepoIdentity { repoRoot: string; gitCommonDir: string; origin: 
 export interface GitReader {
   run(args: readonly string[], cwd: string): Promise<{code: number; stdout: string}>;
   repoIdentity(cwd: string): Promise<RepoIdentity>;
+  /** Exact bytes of `<commit>:<path>`, or undefined when it does not exist (read-only `git cat-file blob`). Rejects with TOO_LARGE above the artifact limit. */
+  readBlob(commit: string, path: string, cwd: string): Promise<Buffer | undefined>;
 }
 
 export function createGitReader(options: {timeoutMs?: number; gitBin?: string} = {}): GitReader {
@@ -21,8 +23,18 @@ export function createGitReader(options: {timeoutMs?: number; gitBin?: string} =
       });
     });
   };
+  const readBlob: GitReader['readBlob'] = (commit, path, cwd) => {
+    const env = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0'};
+    return new Promise((resolve, reject) => {
+      execFile(options.gitBin ?? 'git', ['cat-file', 'blob', `${commit}:${path}`], {cwd, env, encoding: 'buffer', timeout: options.timeoutMs ?? LIMITS.callTimeoutMs, maxBuffer: LIMITS.artifactBytes, shell: false},
+        (error, stdout) => {
+          if ((error as {code?: unknown} | null)?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new Error(`TOO_LARGE: ${path} exceeds ${LIMITS.artifactBytes} bytes.`));
+          resolve(error ? undefined : Buffer.from(stdout));
+        });
+    });
+  };
   return {
-    run,
+    run, readBlob,
     async repoIdentity(cwd) {
       const top = await run(['rev-parse', '--show-toplevel'], cwd);
       const common = await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);

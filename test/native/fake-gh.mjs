@@ -53,7 +53,18 @@ if (!m) fail('unsupported fake endpoint ' + endpoint);
 const file = join(state, `issue-${m[1]}.json`);
 if (!existsSync(file)) fail('not found');
 const issue = JSON.parse(readFileSync(file, 'utf8'));
-if (m[2] === 'sub_issues') out([]);
+if (m[2] === 'sub_issues') {
+  // Native sub-issues: stored as numbers on the parent; POST takes the child's REST id like GitHub.
+  if (method === 'POST') {
+    const child = issueFiles().find(i => i.id === JSON.parse(input).sub_issue_id);
+    if (!child) fail('sub-issue not found');
+    issue.sub_issues = [...new Set([...(issue.sub_issues ?? []), child.number])];
+    writeFileSync(file, JSON.stringify(issue));
+    appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint, subIssue: child.number}) + '\n');
+    out(child);
+  }
+  out(page((issue.sub_issues ?? []).map(n => JSON.parse(readFileSync(join(state, `issue-${n}.json`), 'utf8')))));
+}
 if (method === 'PATCH') {
   const delay = Number(process.env.FAKE_GH_DELAY_MS ?? 0);
   if (delay) await new Promise(r => setTimeout(r, delay));

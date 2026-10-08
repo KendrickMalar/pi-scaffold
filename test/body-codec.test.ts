@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {parseIssueBody, buildSnapshot, patchDoc, type RawIssue} from '../src/core/body-codec.js';
-import {renderEpicBlock, renderEpicVisible, composeManagedBlock, MANAGED_START, MANAGED_END} from '../src/core/epic-render.js';
+import {renderEpicBlock, renderEpicVisible, composeManagedBlock, MANAGED_START, MANAGED_END, renderFeatureBlock} from '../src/core/epic-render.js';
 import {LIMITS, type EpicDocV1, type Problem} from '../src/core/contracts.js';
 import {sha256Text, labelsSha256} from '../src/core/digests.js';
 import {initialDoc, populatedDoc, featureDoc} from './helpers/docs.js';
@@ -143,12 +143,14 @@ test('patchDoc refuses identity changes and invalid next docs', () => {
   }
 });
 
-test('feature docs parse with an unchecked projection but cannot be patched before #10 defines their template', () => {
-  const feature = buildSnapshot({...raw('前置き\n' + composeManagedBlock('## 目的\n手書きの表示\n', featureDoc())), labels: ['Type: Scaffold', 'Scope: Feature']});
+test('feature docs are checked against their visible projection (#10) and still cannot be patched as an Epic', () => {
+  const feature = buildSnapshot({...raw('前置き\n' + renderFeatureBlock(featureDoc())), labels: ['Type: Scaffold', 'Scope: Feature']});
   assert.ok(feature.ok, JSON.stringify(feature.ok ? [] : feature.problems));
   assert.equal(feature.value.doc.kind, 'feature');
-  assert.equal(feature.value.projectionChecked, false);
+  assert.equal(feature.value.projectionChecked, true);
   assert.ok(codes(problemsOf(patchDoc(feature.value, featureDoc()))).includes('UNSUPPORTED_KIND'));
+  const handWritten = buildSnapshot({...raw(composeManagedBlock('## 目的\n手書きの表示\n', featureDoc())), labels: ['Type: Scaffold', 'Scope: Feature']});
+  assert.ok(!handWritten.ok && codes(handWritten.problems).includes('DOC_PROJECTION_MISMATCH'));
 });
 
 test('a snapshot whose body changed after parsing is not patched', () => {

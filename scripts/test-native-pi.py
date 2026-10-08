@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -385,6 +385,63 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(len([w for w in self.writes() if 'patch' in w]), 2, 'one edit to begin, one to resolve')
         after = json.loads((self.state / 'issue-10.json').read_text())['body']
         self.assertIn('"state": "resolved"', after); self.assertIn('結論：p95で4.2秒（架空）', after)
+
+    def test_feature_create_through_real_pi_gh(self):
+        self.seed_all_labels()
+        env_git = dict(self.env, GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='fixture@example.com', GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='fixture@example.com')
+        design = '# 基本設計（架空）\nCSV出力の構成\n'
+        (self.cwd / 'docs/design').mkdir(parents=True); (self.cwd / 'docs/design/export.md').write_text(design)
+        subprocess.run(['git', '-C', str(self.cwd), 'add', '.'], check=True, env=env_git)
+        subprocess.run(['git', '-C', str(self.cwd), 'commit', '-qm', 'design'], check=True, env=env_git)
+        commit = subprocess.check_output(['git', '-C', str(self.cwd), 'rev-parse', 'HEAD'], text=True).strip()
+        # A basic-design Epic with a complete specification, its approval recorded with the real ApprovalStore.
+        instructions = '開発用（架空）'
+        self.env['OWNED_PROFILE_INSTRUCTIONS'] = instructions
+        script = (
+            "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';import {realpath} from 'node:fs/promises';import {join} from 'node:path';"
+            "import {ApprovalStore} from './dist/src/core/approvals.js';import {specificationApprovalView} from './dist/src/core/specification-gate.js';"
+            "import {taggedDigest, sha256Text} from './dist/src/core/digests.js';import {repoHash} from './dist/src/core/repo-context.js';"
+            "const [agent, instr] = process.argv.slice(1);"
+            "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='basic-design';d.design=null;d.dependencyPlan=null;d.wavePlan=null;d.handoff=null;"
+            "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答',sourceRef:q.sourceRef??'hearing-1'}));"
+            "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));d.constraints=d.constraints??[];d.outOfScope=[];"
+            "const root=join(agent,'pi-scaffold');const ctx={repo:'example/demo',repoRoot:'',gitCommonDir:'',workflowStateRoot:join(root,'state',repoHash('example/demo'),d.workflowId),"
+            "accountBinding:taggedDigest('account-binding',{agentDir:await realpath(agent),authMode:'file-backed'}),profileId:'developer',profileInstructionsDigest:sha256Text(instr)};"
+            "const scope={sessionId:'native-setup',leafId:'l',generation:0,signal:new AbortController().signal,isCurrent:()=>true};"
+            "const r=await new ApprovalStore(root).confirmContent('specification',d.workflowId,specificationApprovalView(d),ctx,{interactive:true,confirm:async()=>true},scope);"
+            "if(r.status!=='validated')throw new Error(JSON.stringify(r));process.stdout.write(JSON.stringify({body:renderEpicBlock(d),revision:d.revision,criterion:d.criteria[0]}));")
+        (self.agent / 'pi-scaffold').mkdir(mode=0o700, exist_ok=True)
+        pol = self.agent / 'pi-scaffold/policy.json'
+        pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': [{'model': 'owned-fixture/fixture', 'thinking': t, 'tier': 'basic', 'roles': [r]} for r, t in [('coding-manager', 'medium'), ('coder', 'high'), ('tester', 'low')]]}}})); pol.chmod(0o600)
+        made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', script, str(self.agent), instructions], cwd=ROOT, text=True))
+        issue = json.loads((self.state / 'issue-10.json').read_text()); issue['body'] = made['body']
+        issue['labels'] = [l for l in json.loads((self.state / 'labels.json').read_text()) if l['name'] in ('Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign')]
+        (self.state / 'issue-10.json').write_text(json.dumps(issue))
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_submit', 'gh_subissue_add'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
+        self.tool = 'scaffold_feature_create'
+        b = lambda t: {'model': 'owned-fixture/fixture', 'thinking': t, 'reason': '架空の理由'}
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': made['revision'], 'expectedBodySha256': hashlib.sha256(made['body'].encode()).hexdigest(),
+                          'featureKey': 'F001', 'title': 'CSV出力ボタン', 'purpose': '一覧からCSVを保存できるようにする。', 'editScope': ['src/export/'], 'outOfScope': [],
+                          'designRef': {'path': 'docs/design/export.md', 'sha256': hashlib.sha256(design.encode()).hexdigest(), 'gitRef': commit},
+                          'criteria': [made['criterion']], 'bindings': {'coding-manager': b('medium'), 'coder': b('high'), 'tester': b('low')}}
+        results = []
+        for _ in range(2):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST'), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=90)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['applied', 'noop'], results)
+        n = results[0]['data']['number']
+        self.assertTrue(results[0]['data']['parentAttached'])
+        created = [w for w in self.writes() if 'created' in w]
+        self.assertEqual(len(created), 1, 'one Issue across both runs'); self.assertEqual(created[0]['created'], n)
+        epic = json.loads((self.state / 'issue-10.json').read_text())
+        self.assertEqual(epic['sub_issues'], [n]); self.assertEqual(epic['body'], made['body'], 'the Epic body is unchanged')
+        feature = json.loads((self.state / f'issue-{n}.json').read_text())
+        self.assertEqual(sorted(l['name'] for l in feature['labels']), ['Scope: Feature', 'Stage: BasicDesign', 'Type: Scaffold'])
+        self.assertIn('"kind": "feature"', feature['body']); self.assertIn('"parentEpic": 10', feature['body'])
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

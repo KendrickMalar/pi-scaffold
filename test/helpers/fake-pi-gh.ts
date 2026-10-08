@@ -69,6 +69,16 @@ export class FakePiGh {
       return FakePiGh.ok([...this.issues.values()].filter(i => !filter || filter.every(l => i.labels.includes(l))).sort((x, y) => x.number - y.number).map(i => this.github(i)));
     }
     if (name === 'gh_issue_validate' || name === 'gh_issue_preview' || name === 'gh_issue_submit') return this.issue(name, args as {draftPath: string; templatePath: string});
+    if (name === 'gh_subissue_add') {
+      // pi-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
+      const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;
+      if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'issue', 'relatedIssue'].includes(k))) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
+      const parent = this.issues.get(c.issue as number), child = this.issues.get(c.relatedIssue as number);
+      if (c.repo !== this.repo || c.operation !== 'subissue-add' || !parent || !child || parent === child) return FakePiGh.err('rejected', 'ARGUMENT');
+      if ((parent.subIssues ?? []).includes(child.number)) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      parent.subIssues = [...(parent.subIssues ?? []), child.number];
+      return FakePiGh.ok({issue: parent.number, relatedIssue: child.number}, 'applied');
+    }
     if (name === 'gh_issue_edit_if_current' || name === 'gh_issue_labels_if_current' || name === 'gh_issue_close_if_current') return this.conditional(name, args as {changePath: string});
     if (name === 'gh_labels_list') return FakePiGh.ok({repo: a.repo, labels: [...this.labels.values()].map(({name, color, description}) => ({name, color, description})).sort((x, y) => x.name < y.name ? -1 : 1)});
     if (name === 'gh_labels_preview' || name === 'gh_labels_apply') return this.label(name, args as {changePath: string});
