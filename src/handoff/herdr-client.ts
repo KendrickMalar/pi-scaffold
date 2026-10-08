@@ -63,10 +63,14 @@ export function createHerdrCli(options: {bin?: string; socketPath?: string; time
     },
     async tabList(workspaceId) {
       const r = json(await run(['tab', 'list', '--workspace', workspaceId], false));
-      const tabs: Rec[] = [];
-      const walk = (v: unknown) => { if (Array.isArray(v)) v.forEach(walk); else if (isRec(v)) { if (typeof v.tab_id === 'string') tabs.push(v); else Object.values(v).forEach(walk); } };
-      walk(r.result);
-      return tabs.map(t => ({tabId: t.tab_id as string, label: typeof t.label === 'string' ? t.label : '', ...(find(t, 'pane_id') ? {paneId: find(t, 'pane_id')!} : {})}));
+      // 0.9.1: tab list has no pane ids; the root pane is the first pane listed for the tab.
+      const tabs = (isRec(r.result) && Array.isArray(r.result.tabs) ? r.result.tabs : []).filter(isRec);
+      const panes = json(await run(['pane', 'list', '--workspace', workspaceId], false));
+      const paneList = (isRec(panes.result) && Array.isArray(panes.result.panes) ? panes.result.panes : []).filter(isRec);
+      return tabs.filter(t => typeof t.tab_id === 'string').map(t => {
+        const pane = paneList.find(p => p.tab_id === t.tab_id && typeof p.pane_id === 'string');
+        return {tabId: t.tab_id as string, label: typeof t.label === 'string' ? t.label : '', ...(pane ? {paneId: pane.pane_id as string} : {})};
+      });
     },
     async processInfo(paneId) {
       const r = json(await run(['pane', 'process-info', '--pane', paneId], false));

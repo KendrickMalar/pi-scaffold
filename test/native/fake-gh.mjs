@@ -53,6 +53,8 @@ if (method === 'PATCH') {
   const patch = JSON.parse(input);
   if (typeof patch.body === 'string') issue.body = patch.body;
   if (typeof patch.title === 'string') issue.title = patch.title;
+  if (Array.isArray(patch.labels)) issue.labels = patch.labels.map(n => labels().find(l => l.name === n)).filter(Boolean);
+  if (typeof patch.state === 'string') { issue.state = patch.state; issue.state_reason = patch.state_reason ?? null; }
   writeFileSync(file, JSON.stringify(issue));
   appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint, patch}) + '\n');
 }
