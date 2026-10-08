@@ -64,7 +64,9 @@ function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem
 }
 
 async function verifyDesignRef(call: ToolCall, repoRoot: string, ref: DesignRef): Promise<Problem[]> {
-  const bytes = await call.runtime.git.readBlob(ref.gitRef, ref.path, repoRoot);
+  let bytes: Buffer | undefined;
+  try { bytes = await call.runtime.git.readBlob(ref.gitRef, ref.path, repoRoot); }
+  catch (e) { return [problem(/TOO_LARGE/.test((e as Error).message) ? 'DESIGN_TOO_LARGE' : 'DESIGN_UNREADABLE', 'designRef', (e as Error).message)]; }
   if (!bytes) return [problem('DESIGN_NOT_FOUND', 'designRef', `${ref.path} does not exist at ${ref.gitRef} in the local repository.`)];
   return sha256Bytes(bytes) === ref.sha256 ? [] : [problem('DESIGN_HASH_MISMATCH', 'designRef.sha256', `${ref.path} at ${ref.gitRef} has a different sha256.`)];
 }
@@ -94,41 +96,45 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
   const journal = call.journal(ctx);
   const record = await journal.load(input.operationId);
 
-  // ---- preconditions (zero side effects). A recorded operation resumes; its Issue may already exist. ----
-  const pre: Problem[] = [];
-  if (epicSnap.value.state !== 'open') pre.push(problem('ISSUE_CLOSED', 'epicIssue', 'The Epic is closed.'));
-  if (epic.stage !== 'basic-design') pre.push(problem('STAGE_MISMATCH', 'stage', `Features are created during basic design; the Epic is in ${epic.stage}.`));
-  if (epicSnap.value.labels.includes('Blocked')) pre.push(problem('EPIC_BLOCKED', 'labels', 'The Epic is Blocked.'));
-  if (!record) {
+  // Once this operation has (possibly) posted, the creation checks are history: a resume only finds the Issue and attaches it.
+  const posted = !!record && record.steps.some(s => (s.name === 'submit' && s.phase !== 'failed') || s.name === 'found');
+  let existing: number | undefined;
+  if (!posted) {
+    // ---- preconditions (zero side effects) ----
+    const pre: Problem[] = [];
+    if (epicSnap.value.state !== 'open') pre.push(problem('ISSUE_CLOSED', 'epicIssue', 'The Epic is closed.'));
+    if (epic.stage !== 'basic-design') pre.push(problem('STAGE_MISMATCH', 'stage', `Features are created during basic design; the Epic is in ${epic.stage}.`));
+    if (epicSnap.value.labels.includes('Blocked')) pre.push(problem('EPIC_BLOCKED', 'labels', 'The Epic is Blocked.'));
     if (epicSnap.value.bodySha256 !== input.expectedBodySha256) pre.push(problem('STALE_BODY', 'expectedBodySha256', 'The Epic body changed; read it again.'));
     if (epic.revision !== input.expectedRevision) pre.push(problem('STALE_REVISION', 'expectedRevision', `The Epic is at revision ${epic.revision}.`));
+    if (pre.length) return blocked(pre);
+    const approval = await call.approvals.requireContentApproval('specification', epic.workflowId, approvalViewDigest('specification', specificationApprovalView(epic)), ctx);
+    if (!approval.ok) return blocked([problem('SPECIFICATION_NOT_APPROVED', 'specification', 'The current specification has no valid parent approval (it changed, or was never approved).'), ...approval.problems]);
+    const policy = await call.policy();
+    if (!policy.ok) return blocked(policy.problems);
+    const checks = [
+      ...checkCriteria(epic, input.criteria),
+      ...checkFeatureBindings({repo: input.repo, bindings: input.bindings, policy: policy.value, availableModels: call.env.availableModels(), scopedModels: call.env.scopedModels()}),
+      ...await verifyDesignRef(call, ctx.repoRoot, input.designRef),
+    ];
+    if (checks.length) return blocked(checks);
+    const labels = await readLabels(call, input.repo);
+    if ('error' in labels) return blocked(labels.error);
+    const absent = FEATURE_LABELS.filter(l => labels.labels.get(l.toLowerCase())?.name !== l);
+    if (absent.length) return blocked([problem('LABELS_NOT_READY', 'labels', `Management labels are missing (${absent.join(', ')}); run scaffold_labels_ensure first.`)]);
+    // ---- the Feature set (native children, closed included, plus created-but-unattached Issues from the journal) ----
+    const knownCreated = (await journal.list())
+      .filter(r => r.operation === operation && !r.abandonedAt)
+      .flatMap(r => { const n = (r.steps.find(s => s.name === 'submit' && s.phase === 'done')?.data ?? r.steps.find(s => s.name === 'found')?.data) as {number?: number} | undefined; return n?.number ? [{number: n.number, createOperationId: r.operationId}] : []; });
+    const set = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId, knownCreated});
+    if (!set.ok) return blocked(set.problems);
+    const all = [...set.value.features, ...set.value.unattached];
+    const sameKey = all.filter(f => f.doc.featureKey === input.featureKey);
+    if (sameKey.some(f => f.doc.createOperationId !== input.operationId)) return blocked([problem('DUPLICATE_FEATURE_KEY', 'featureKey', `${input.featureKey} is already used by #${sameKey.map(f => f.number).join(', #')}.`)]);
+    if (!sameKey.length && all.length >= LIMITS.features) return blocked([problem('LIMIT_EXCEEDED', 'features', `The Epic already has ${all.length} Features (closed included; at most ${LIMITS.features}).`)]);
+    // Already a child created by this operation (e.g. its journal was lost): adopt it instead of posting.
+    existing = sameKey[0]?.number;
   }
-  if (pre.length) return blocked(pre);
-  const approval = await call.approvals.requireContentApproval('specification', epic.workflowId, approvalViewDigest('specification', specificationApprovalView(epic)), ctx);
-  if (!approval.ok) return blocked([problem('SPECIFICATION_NOT_APPROVED', 'specification', 'The current specification has no valid parent approval (it changed, or was never approved).'), ...approval.problems]);
-  const policy = await call.policy();
-  if (!policy.ok) return blocked(policy.problems);
-  const checks = [
-    ...checkCriteria(epic, input.criteria),
-    ...checkFeatureBindings({repo: input.repo, bindings: input.bindings, policy: policy.value, availableModels: call.env.availableModels(), scopedModels: call.env.scopedModels()}),
-    ...await verifyDesignRef(call, ctx.repoRoot, input.designRef),
-  ];
-  if (checks.length) return blocked(checks);
-  const labels = await readLabels(call, input.repo);
-  if ('error' in labels) return blocked(labels.error);
-  const absent = FEATURE_LABELS.filter(l => labels.labels.get(l.toLowerCase())?.name !== l);
-  if (absent.length) return blocked([problem('LABELS_NOT_READY', 'labels', `Management labels are missing (${absent.join(', ')}); run scaffold_labels_ensure first.`)]);
-
-  // ---- the Feature set (native children, closed included, plus our created-but-unattached Issues) ----
-  const knownCreated = (await journal.list())
-    .filter(r => r.operation === operation && !r.abandonedAt)
-    .flatMap(r => { const n = (r.steps.find(s => s.name === 'submit' && s.phase === 'done')?.data ?? r.steps.find(s => s.name === 'found')?.data) as {number?: number} | undefined; return n?.number ? [{number: n.number, createOperationId: r.operationId}] : []; });
-  const set = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId, knownCreated});
-  if (!set.ok) return blocked(set.problems);
-  const all = [...set.value.features, ...set.value.unattached];
-  const sameKey = all.filter(f => f.doc.featureKey === input.featureKey);
-  if (sameKey.some(f => f.doc.createOperationId !== input.operationId)) return blocked([problem('DUPLICATE_FEATURE_KEY', 'featureKey', `${input.featureKey} is already used by #${sameKey.map(f => f.number).join(', #')}.`)]);
-  if (!sameKey.length && all.length >= LIMITS.features) return blocked([problem('LIMIT_EXCEEDED', 'features', `The Epic already has ${all.length} Features (closed included; at most ${LIMITS.features}).`)]);
 
   // ---- the document and draft ------------------------------------------------------------------------
   const doc: FeatureDocV1 = {
@@ -147,19 +153,25 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
   const args = {draftPath, templatePath: snapshot.templatePath};
   const payloadDigest = taggedDigest('feature-create', {repo: input.repo, epicIssue: input.epicIssue, title: input.title, doc: JSON.parse(canonicalDocJson(doc))});
   if (record && record.payloadDigest !== payloadDigest) return blocked([problem('OPERATION_PAYLOAD_MISMATCH', 'operationId', 'This operationId was already used with different content.')]);
-  if (!record) {
+  if (!posted) {
     const validated = await call.bridge.call('gh_issue_validate', args, () => true as const, call.scope);
     if (validated.status !== 'ok') return {status: validated.status === 'cancelled' ? 'cancelled' : 'blocked', operation, problems: validated.problems};
   }
 
-  /** Feature Issues whose managed body was created by this operation under this Epic. */
-  const candidates = async (): Promise<{number: number}[] | Problem[]> => {
-    const r = await call.bridge.call('gh_issue_list', {repo: input.repo, state: 'all', labels: ['Type: Scaffold', 'Scope: Feature']}, decodeIssueList, call.scope);
-    if (r.status !== 'ok' || r.data!.some(i => !i)) return r.problems.length ? r.problems : [problem('ISSUE_LIST_FAILED', 'issues', 'Issues could not be listed completely.')];
-    return r.data!.filter(i => i!.body?.includes(input.operationId)).filter(i => {
+  /**
+   * Reconcile an uncertain post: a just-created Feature is open and carries all three labels, which keeps the list small.
+   * 'unknown' whenever an Issue mentions this operation but cannot be confirmed as ours (never treated as "not created").
+   */
+  const reconcileSubmit = async (): Promise<{state: 'applied'; number: number} | {state: 'not-applied' | 'unknown'}> => {
+    const r = await call.bridge.call('gh_issue_list', {repo: input.repo, state: 'open', labels: [...FEATURE_LABELS]}, decodeIssueList, call.scope);
+    if (r.status !== 'ok' || r.data!.some(i => !i)) return {state: 'unknown'};
+    const mentions = r.data!.filter(i => i!.body?.includes(input.operationId));
+    const ours = mentions.filter(i => {
       const p = parseIssueBody(i!.body ?? '');
       return p.ok && p.value.doc.kind === 'feature' && p.value.doc.createOperationId === input.operationId && p.value.doc.parentEpic === input.epicIssue;
-    }).map(i => ({number: i!.number}));
+    });
+    if (ours.length === 1 && mentions.length === 1) return {state: 'applied', number: ours[0]!.number};
+    return mentions.length ? {state: 'unknown'} : {state: 'not-applied'};
   };
   const attachPath = join(dir, 'attach.json');
   const attached = async (n: number) => {
@@ -170,16 +182,11 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
   const result = await withOperation<FeatureCreateData>({operation, repo: input.repo, workflowId: epic.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     const pending = run.record.steps.some(s => s.name === 'submit' && (s.phase === 'requested' || s.phase === 'unknown'));
     let number = (run.done('submit') as {number: number} | undefined)?.number ?? (run.done('found') as {number: number} | undefined)?.number;
-    if (number === undefined && !pending) {
-      const c = await candidates();
-      if (c.length && 'code' in c[0]!) return run.stop(c as Problem[]);
-      if (c.length > 1) return run.stop([problem('DUPLICATE_CANDIDATES', 'issues', `Several Issues (${(c as {number: number}[]).map(x => '#' + x.number).join(', ')}) carry this operation; choose one manually.`)]);
-      if (c.length === 1) { number = (c[0] as {number: number}).number; run.note('found', {number}); }
-    }
+    if (number === undefined && !pending && existing !== undefined) { number = existing; run.note('found', {number}); }
     if (number === undefined) {
       let found: number | undefined;
       const created = await run.write('submit', () => call.bridge.call('gh_issue_submit', args, decodeCreated(input.repo), call.scope), {
-        reconcile: async () => { const c = await candidates(); if (c.length === 1 && !('code' in c[0]!)) { found = (c[0] as {number: number}).number; return 'applied'; } return c.length === 0 ? 'not-applied' : 'unknown'; },
+        reconcile: async () => { const c = await reconcileSubmit(); if (c.state === 'applied') found = c.number; return c.state; },
       });
       number = created?.number ?? found;
       if (number !== undefined && !created) run.note('found', {number});

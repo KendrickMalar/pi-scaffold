@@ -307,3 +307,68 @@ test('no credential or full model descriptor is written into the Feature', async
   const body = gh.issues.get((out.r.data as Data).number)!.body;
   assert.ok(!/apiKey|FAKE_LOCAL_KEY|baseUrl|auth\.json/.test(body));
 });
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a fresh creation does not list every Feature Issue of the repository', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(gh.count('gh_issue_list'), 0);
+});
+
+test('reconciling an unknown post lists only open Issues with all three Feature labels', async t => {
+  const gh = world();
+  const real = gh.execute;
+  gh.overrides.set('gh_issue_submit', async args => { gh.overrides.delete('gh_issue_submit'); await real('gh_issue_submit', args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+  const h = await harness(t, gh);
+  await h.invoke(); await h.invoke();
+  const lists = gh.calls.filter(c => c.name === 'gh_issue_list').map(c => c.args as {state: string; labels: string[]});
+  assert.ok(lists.length >= 1);
+  for (const a of lists) { assert.equal(a.state, 'open'); assert.deepEqual([...a.labels].sort(), ['Scope: Feature', 'Stage: BasicDesign', 'Type: Scaffold']); }
+});
+
+test('after a definitely failed post, a retry re-checks the Epic the caller saw', async t => {
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_issue_submit', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  const h = await harness(t, gh);
+  const p = base(gh);
+  assert.equal((await h.invoke(p)).r.status, 'blocked');
+  gh.issues.get(10)!.body = 'メモ\n\n' + gh.issues.get(10)!.body;
+  const again = await h.invoke(p);
+  assert.equal(again.r.status, 'blocked');
+  assert.ok(again.r.problems.some(x => x.code === 'STALE_BODY'), JSON.stringify(again.r.problems));
+  assert.equal(gh.submitted.length, 0);
+});
+
+test('a resume after create-but-not-attached only attaches, even if policy or labels changed meanwhile', async t => {
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_subissue_add', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  const h = await harness(t, gh);
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  const n = (first.r.data as Data).number;
+  // The owner removes the coder model and someone marks the Epic Blocked before the resume.
+  const {writeFile} = await import('node:fs/promises');
+  await writeFile(join(h.agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify({...policy, repos: {'example/demo': {...policy.repos['example/demo']!, models: policy.repos['example/demo']!.models.filter(m => m.model !== MODELS.coder)}}}), {mode: 0o600});
+  gh.issues.get(10)!.labels.push('Blocked');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.deepEqual(gh.issues.get(10)!.subIssues, [n]);
+  assert.equal(gh.submitted.length, 1);
+});
+
+test('an Issue that carries this operation but no longer parses keeps the outcome unknown (no second post)', async t => {
+  const gh = world();
+  const real = gh.execute;
+  gh.overrides.set('gh_issue_submit', async args => { gh.overrides.delete('gh_issue_submit'); await real('gh_issue_submit', args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const n = gh.submitted[0]!.number;
+  gh.issues.get(n)!.body = gh.issues.get(n)!.body.replace('## 目的', '## 目的（手で変更）');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'unknown', JSON.stringify(resumed.r));
+  assert.equal(gh.submitted.length, 1, 'never posted again');
+});
