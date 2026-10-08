@@ -505,13 +505,16 @@ class Acceptance(unittest.TestCase):
         res = self.last_result()
         self.assertEqual(res['status'], 'validated', res); self.assertTrue(res['data']['passed'])
         self.assertEqual(self.writes(), [], 'read-only')
-        # Same Wave for a dependent pair: not passed, still zero writes.
-        lab = json.loads((self.state / 'issue-13.json').read_text()); lab['labels'] = pick(('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', 'Wave: 1'))
-        (self.state / 'issue-13.json').write_text(json.dumps(lab))
+        # A proposed plan putting the dependent pair #11 → #13 in the same Wave: not passed, still zero writes.
+        saved = res['data']
+        proposed = {'version': 1, 'assignments': [{'issue': 11, 'wave': 1}, {'issue': 12, 'wave': 1}, {'issue': 13, 'wave': 1}], 'featureSetDigest': saved['featureSetDigest'],
+                    'dependencyDigest': json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import {parseIssueBody} from './dist/src/core/body-codec.js';import {readFileSync} from 'node:fs';process.stdout.write(JSON.stringify(parseIssueBody(JSON.parse(readFileSync(process.argv[1],'utf8')).body).value.doc.wavePlan.dependencyDigest))", str(self.state / 'issue-10.json')], cwd=ROOT, text=True))}
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'plan': proposed}
         self.requests.clear()
         r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=90)
         res = self.last_result()
-        self.assertFalse(res['data']['passed']); self.assertIn('WAVE_LABEL_MISMATCH', json.dumps(res)); self.assertEqual(self.writes(), [])
+        self.assertFalse(res['data']['passed']); self.assertIn('DEPENDENCY_ORDER', json.dumps(res)); self.assertFalse(res['data']['matchesSavedPlan'])
+        self.assertEqual(self.writes(), [])
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

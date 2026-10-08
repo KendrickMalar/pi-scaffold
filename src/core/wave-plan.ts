@@ -6,21 +6,29 @@ import {StrictReader, problem, readWavePlan, type Problem, type WaveCheck, type 
 export interface WaveFeature { issue: number; featureKey: string; editScope: readonly string[]; labels: readonly string[] }
 export interface WaveEdge { from: number; to: number }
 
-/** Repo-relative, slash-normalized path without a trailing slash; undefined when it cannot be judged safely. */
+/**
+ * Repo-relative, slash-normalized path without a trailing slash; undefined when it cannot be judged safely
+ * (globs, absolute, "..", control/zero-width characters, segments ending in a dot or space).
+ */
 export function normalizeScope(raw: string): string | undefined {
-  if (typeof raw !== 'string' || !raw.trim() || /[\\*?[\]{}]/.test(raw) || raw.startsWith('/') || /\s/.test(raw)) return undefined;
+  if (typeof raw !== 'string' || !raw.trim() || /[\\*?[\]{}]/.test(raw) || raw.startsWith('/') || /[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202f\u2060\ufeff]/.test(raw)) return undefined;
   const parts = raw.split('/').filter(p => p !== '' && p !== '.');
-  if (!parts.length || parts.includes('..')) return undefined;
+  if (!parts.length || parts.includes('..') || parts.some(p => /[.\s]$/.test(p) || /^\s/.test(p))) return undefined;
   return parts.join('/');
 }
-const overlaps = (a: string, b: string) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+/** Comparison form: case-folded NFC (macOS/Windows file systems are case-insensitive; NFC/NFD name the same file). */
+const fold = (p: string) => p.normalize('NFC').toLowerCase();
+const overlaps = (a: string, b: string) => { const x = fold(a), y = fold(b); return x === y || x.startsWith(y + '/') || y.startsWith(x + '/'); };
 
 /** Files every package/manifest change touches together (shared lockfiles), and shared state. */
-const MANIFEST = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|deno\.jsonc?|deno\.lock|tsconfig(\..+)?\.json|Cargo\.(toml|lock)|go\.(mod|sum|work)|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|requirements(-.+)?\.txt|setup\.(py|cfg)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|Package\.(swift|resolved)|mix\.(exs|lock)|pubspec\.(yaml|lock))$/;
-const isState = (p: string) => p.split('/').some(s => s === 'migrations' || s === 'migrate') || p === '.github/workflows' || p.startsWith('.github/workflows/') || /(^|\/)(schema\.(prisma|sql|rb|graphql)|structure\.sql)$/.test(p);
+const MANIFEST = /^(\.npmrc|\.yarnrc(\.yml)?|go\.work\.sum|flake\.(nix|lock)|packages\.lock\.json|directory\.(packages|build)\.props|.+\.(csproj|fsproj|vbproj)|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|deno\.jsonc?|deno\.lock|tsconfig(\..+)?\.json|Cargo\.(toml|lock)|go\.(mod|sum|work)|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|requirements(-.+)?\.txt|setup\.(py|cfg)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|Package\.(swift|resolved)|mix\.(exs|lock)|pubspec\.(yaml|lock))$/i;
+const isState = (raw: string) => { const p = fold(raw); return p.split('/').some(s => s === 'migrations' || s === 'migrate') || p === '.github/workflows' || p.startsWith('.github/workflows/') || /(^|\/)(schema\.(prisma|sql|rb|graphql)|structure\.sql)$/.test(p); };
 const kindOf = (p: string): 'manifest' | 'state' | undefined => MANIFEST.test(p.split('/').at(-1)!) ? 'manifest' : isState(p) ? 'state' : undefined;
 
-export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeature[], edges: readonly WaveEdge[], digests: {featureSetDigest: Sha256; dependencyDigest: Sha256}): WaveCheck {
+/** Files inside a scope as the repository has them (a file scope may return itself or nothing). */
+export type ScopeContents = (scope: string) => readonly string[];
+
+export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeature[], edges: readonly WaveEdge[], digests: {featureSetDigest: Sha256; dependencyDigest: Sha256}, contents: ScopeContents = () => []): WaveCheck {
   const checks: string[] = [], problems: Problem[] = [];
   if (rawPlan === null || rawPlan === undefined) return {passed: false, checks, problems: [problem('PLAN_UNSET', 'wavePlan', 'No Wave plan is set yet (it is filled in during basic design).')]};
   const r = new StrictReader();
@@ -58,7 +66,9 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
       const a = scopes.get(issues[i]!), b = scopes.get(issues[j]!);
       if (!a || !b) continue;
       const path = a.flatMap(x => b.filter(y => overlaps(x, y)).map(y => `${x} / ${y}`))[0];
-      const shared = (['manifest', 'state'] as const).find(k => a.some(x => kindOf(x) === k) && b.some(y => kindOf(y) === k));
+      // A directory scope touches whatever shared files it holds in the repository.
+      const touches = (scope: string[], k: 'manifest' | 'state') => scope.some(x => kindOf(x) === k || contents(x).some(f => kindOf(f) === k));
+      const shared = (['manifest', 'state'] as const).find(k => touches(a, k) && touches(b, k));
       if (path || shared) problems.push(problem('EDIT_CONFLICT', `wave ${w}`, `#${issues[i]} and #${issues[j]} share Wave ${w} but ${path ? `edit overlapping paths (${path})` : `both change shared ${shared === 'manifest' ? 'manifests/lockfiles' : 'state (migrations, workflows, schema)'}`}.`));
     }
   }
@@ -71,7 +81,7 @@ export function checkWaveLabels(plan: WavePlan, features: readonly WaveFeature[]
   const problems: Problem[] = [];
   const wave = new Map(plan.assignments.map(a => [a.issue, a.wave]));
   for (const f of features) {
-    const waveLike = f.labels.filter(l => /^\s*wave\b/i.test(l));
+    const waveLike = f.labels.filter(l => /^\s*waves?(\b|[0-9:_\-\s])/i.test(l));
     const at = `features[#${f.issue}].labels`;
     if (!waveLike.length) { problems.push(problem('WAVE_LABEL_MISSING', at, `#${f.issue} has no Wave label.`)); continue; }
     if (waveLike.length > 1) { problems.push(problem('WAVE_LABEL_MULTIPLE', at, `#${f.issue} has several Wave labels (${waveLike.join(', ')}).`)); continue; }
@@ -80,4 +90,9 @@ export function checkWaveLabels(plan: WavePlan, features: readonly WaveFeature[]
     if (wave.get(f.issue) !== Number(m[1])) problems.push(problem('WAVE_LABEL_MISMATCH', at, `#${f.issue} is labeled ${waveLike[0]} but the plan says Wave ${wave.get(f.issue) ?? '(none)'}.`));
   }
   return problems;
+}
+
+/** Canonical form of a plan for digests and storage: assignments ordered by Issue number. */
+export function canonicalWavePlan(plan: WavePlan): WavePlan {
+  return {...plan, assignments: [...plan.assignments].sort((x, y) => x.issue - y.issue)};
 }

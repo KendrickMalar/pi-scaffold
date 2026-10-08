@@ -3,14 +3,15 @@
 // Never fixes anything, creates labels or touches Projects.
 import {StrictReader, isRepoRef, problem, type Decoded, type EpicDocV1, type Problem, type ScaffoldResult} from '../core/contracts.js';
 import {canonicalJson, taggedDigest, wavePlanDigest} from '../core/digests.js';
-import {checkWaveLabels, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
+import {canonicalWavePlan, checkWaveLabels, normalizeScope, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
+import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 
 export const WAVES_VERIFY = 'scaffold_waves_verify';
 export interface WavesVerifyInput { repo: string; epicIssue: number; plan?: unknown }
-export interface WavesVerifyData { passed: boolean; checks: string[]; featureSetDigest: string | null; wavePlanDigest: string | null }
+export interface WavesVerifyData { passed: boolean; checks: string[]; featureSetDigest: string | null; wavePlanDigest: string | null; matchesSavedPlan: boolean }
 
 export function decodeWavesVerifyInput(value: unknown): Decoded<WavesVerifyInput> {
   const r = new StrictReader();
@@ -56,7 +57,7 @@ async function readAll(input: WavesVerifyInput, call: ToolCall): Promise<Reading
 export async function verifyWaves(input: WavesVerifyInput, call: ToolCall): Promise<ScaffoldResult<WavesVerifyData>> {
   const operation = WAVES_VERIFY;
   const notPassed = (problems: Problem[], extra: Partial<WavesVerifyData> = {}): ScaffoldResult<WavesVerifyData> =>
-    ({status: 'blocked', operation, problems, data: {passed: false, checks: [], featureSetDigest: null, wavePlanDigest: null, ...extra}});
+    ({status: 'blocked', operation, problems, data: {passed: false, checks: [], featureSetDigest: null, wavePlanDigest: null, matchesSavedPlan: false, ...extra}});
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list', 'gh_dependencies_list'], call.scope);
   if (!caps.ok) return notPassed(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);
@@ -72,17 +73,26 @@ export async function verifyWaves(input: WavesVerifyInput, call: ToolCall): Prom
   else {
     const saved = epic.dependencyPlan.edges.map(e => ({from: e.from, to: e.to})).sort((a, b) => a.from - b.from || a.to - b.to);
     if (canonicalJson(saved) !== canonicalJson(edges)) problems.push(problem('DEPENDENCIES_DIFFER', 'dependencyPlan', 'GitHub dependencies differ from the Epic\'s saved dependency plan.'));
+    // The saved dependency plan must still describe exactly these Features (keys and edit scopes).
+    const graph = validateDependencyGraph(edges, epic.dependencyPlan, features.map(f => ({issue: f.issue, featureKey: f.featureKey, editScope: f.editScope})));
+    problems.push(...graph.problems.filter(p => p.code !== 'UNDECLARED_EDGE'));
+  }
+  // Directory scopes are expanded with the local repository so shared manifests/state inside them count.
+  const tree = new Map<string, readonly string[]>();
+  for (const scope of new Set(features.flatMap(f => f.editScope.map(normalizeScope).filter((x): x is string => !!x)))) {
+    tree.set(scope, (await call.runtime.git.listTree('HEAD', scope, repoOnly.value.repoRoot)) ?? []);
   }
   const rawPlan = input.plan !== undefined ? input.plan : epic.wavePlan;
-  const check = validateWavePlan(rawPlan, features, edges, {featureSetDigest: second.featureSetDigest, dependencyDigest: taggedDigest('dependency-plan', epic.dependencyPlan)});
+  const check = validateWavePlan(rawPlan, features, edges, {featureSetDigest: second.featureSetDigest, dependencyDigest: taggedDigest('dependency-plan', epic.dependencyPlan)}, s => tree.get(s) ?? []);
   problems.push(...check.problems);
   const checks = [...check.checks];
-  let digest: string | null = null;
+  let digest: string | null = null, matchesSavedPlan = false;
   if (check.checks.includes('plan-format')) {
-    const plan = rawPlan as Parameters<typeof checkWaveLabels>[0];
+    const plan = canonicalWavePlan(rawPlan as Parameters<typeof checkWaveLabels>[0]);
     digest = wavePlanDigest({...epic, wavePlan: plan});
+    matchesSavedPlan = epic.wavePlan !== null && digest === wavePlanDigest({...epic, wavePlan: canonicalWavePlan(epic.wavePlan)});
     problems.push(...checkWaveLabels(plan, features)); checks.push('labels');
   }
-  const data = {passed: problems.length === 0, checks, featureSetDigest: second.featureSetDigest, wavePlanDigest: digest};
+  const data = {passed: problems.length === 0, checks, featureSetDigest: second.featureSetDigest, wavePlanDigest: digest, matchesSavedPlan};
   return problems.length ? {status: 'blocked', operation, problems, data} : {status: 'validated', operation, problems: [], data};
 }

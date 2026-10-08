@@ -94,3 +94,44 @@ test('labels: exactly one canonical "Wave: N" matching the plan', () => {
   assert.deepEqual(checkWaveLabels(plan, [feat(11, [], ['Wave: 3']), feat(12, [], ['Wave: 2']), feat(13, [], ['Wave: 2'])]).map(p => p.code), ['WAVE_LABEL_MISMATCH']);
   assert.deepEqual(checkWaveLabels(plan, [feat(11, [], ['Wave:1']), feat(12, [], ['Wave: 2']), feat(13, [], ['Wave: 2'])]).map(p => p.code), ['WAVE_LABEL_NONCANONICAL']);
 });
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+for (const [label, a, b] of [
+  ['case difference', ['src/A.ts'], ['src/a.ts']],
+  ['manifest case difference', ['Package.json'], ['package.json']],
+  ['NFC/NFD', ['docs/café.md'], ['docs/café.md']],
+  ['go.work.sum in different places', ['a/go.work.sum'], ['b/go.work.sum']],
+  ['.npmrc and yarn config', ['.npmrc'], ['tools/.yarnrc.yml']],
+  ['NuGet and flake lockfiles', ['src/App/packages.lock.json'], ['flake.lock']],
+] as const) {
+  test(`same Wave with ${label} conflicts`, () => {
+    const c = validateWavePlan(planOf([[11, 1], [12, 1]]), [feat(11, [...a]), feat(12, [...b])], [], digests);
+    assert.equal(c.passed, false, JSON.stringify(c.problems));
+  });
+}
+
+for (const [label, scope] of [['trailing dot', ['src/a.']], ['zero-width', ['src/x.ts​']], ['control char', ['src/\u0007x']], ['trailing space segment', ['src/a /b']]] as const) {
+  test(`an undecidable scope (${label}) never passes`, () => {
+    const c = validateWavePlan(planOf([[11, 1], [12, 2]]), [feat(11, [...scope]), feat(12, ['src/b/'])], [], digests);
+    assert.ok(codes(c).includes('UNKNOWN_SCOPE'), JSON.stringify(c.problems));
+  });
+}
+
+test('a directory scope counts the manifests/state it contains (from the repository)', () => {
+  const contents = (scope: string) => scope === 'packages/a' ? ['packages/a/package.json', 'packages/a/src/x.ts'] : scope === 'db' ? ['db/migrations/001.sql'] : [];
+  const pkg = validateWavePlan(planOf([[11, 1], [12, 1]]), [feat(11, ['packages/a/']), feat(12, ['packages/b/package.json'])], [], digests, contents);
+  assert.equal(pkg.passed, false, 'a directory holding package.json touches a shared manifest');
+  const state = validateWavePlan(planOf([[11, 1], [12, 1]]), [feat(11, ['db']), feat(12, ['prisma/migrations/1.sql'])], [], digests, contents);
+  assert.equal(state.passed, false);
+  const plain = validateWavePlan(planOf([[11, 1], [12, 1]]), [feat(11, ['src/a/']), feat(12, ['src/b/'])], [], digests, contents);
+  assert.equal(plain.passed, true, 'ordinary directories stay parallel');
+});
+
+test('any Wave-like label counts toward "one Wave label"', () => {
+  const plan = planOf([[11, 1]]) as unknown as WavePlan;
+  for (const extra of ['Wave2', 'Waves: 3', 'wave_1', 'WAVE-4']) {
+    const p = checkWaveLabels(plan, [feat(11, [], ['Wave: 1', extra])]);
+    assert.deepEqual(p.map(x => x.code), ['WAVE_LABEL_MULTIPLE'], extra);
+  }
+});

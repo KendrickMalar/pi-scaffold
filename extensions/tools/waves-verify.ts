@@ -17,7 +17,8 @@ export function createTool(runtime: ScaffoldRuntime) {
       epicIssue: Type.Integer({minimum: 1}),
       plan: Type.Optional(Type.Object({
         version: Type.Literal(1),
-        assignments: Type.Array(Type.Object({issue: Type.Integer({minimum: 1}), wave: Type.Integer({minimum: 1, maximum: 200})}, {additionalProperties: false}), {maxItems: 50}),
+        // wave is checked by the tool (1–200 integer) so a bad value is reported as "not passed" instead of a schema error.
+        assignments: Type.Array(Type.Object({issue: Type.Integer({minimum: 1}), wave: Type.Unknown({description: 'Integer 1–200'})}, {additionalProperties: false}), {maxItems: 50}),
         dependencyDigest: Type.String({pattern: '^[0-9a-f]{64}$'}), featureSetDigest: Type.String({pattern: '^[0-9a-f]{64}$'}),
       }, {additionalProperties: false})),
     }, {additionalProperties: false}),

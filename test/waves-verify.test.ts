@@ -119,10 +119,16 @@ for (const [label, change] of [
 ] as const) {
   test(`${label} changing while reading never passes`, async t => {
     const gh = world();
-    let reads = 0, changed = false;
-    gh.onCall = name => { if (name === 'gh_issue_get' && ++reads === 4 && !changed) { changed = true; change(gh); } };
+    let reads = 0, deps = 0, changed = false;
+    // Change right after the first full pass (its last dependency read), before the second pass.
+    gh.onCall = name => {
+      if (changed) return;
+      if (name === 'gh_issue_get') reads++;
+      if (name === 'gh_dependencies_list' && ++deps === 3 && reads >= 4) { changed = true; change(gh); }
+    };
     const out = await (await harness(t, gh)).invoke();
     assert.equal((out.r.data as Data | undefined)?.passed ?? false, false, JSON.stringify(out.r));
+    assert.ok(out.r.problems.some(p => p.code === 'CHANGED_DURING_READ'), JSON.stringify(out.r.problems));
     assert.equal(writes(gh), 0);
   });
 }
@@ -154,4 +160,43 @@ test('a concurrent, self-consistent update during reading (plan and label move t
   const out = await (await harness(t, gh)).invoke();
   assert.equal((out.r.data as Data | undefined)?.passed ?? false, false, JSON.stringify(out.r));
   assert.ok(out.r.problems.some(p => p.code === 'CHANGED_DURING_READ'), JSON.stringify(out.r.problems));
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a dependency plan that no longer covers the Feature set does not pass', async t => {
+  const gh = world();
+  const {parseIssueBody} = parse;
+  const doc = (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+  // The saved dependency plan names #12 with an old edit scope.
+  const stale = {...dependencyPlan, nodes: dependencyPlan.nodes.map(n => n.issue === 12 ? {...n, editScope: ['src/old/']} : n)};
+  gh.issues.get(10)!.body = renderEpicBlock({...doc, dependencyPlan: stale, wavePlan: plan(WAVES, {dependencyDigest: taggedDigest('dependency-plan', stale)})});
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal((out.r.data as Data).passed, false);
+  assert.ok(out.r.problems.some(p => p.code === 'EDIT_SCOPE_MISMATCH'), JSON.stringify(out.r.problems));
+});
+
+test('through Pi\'s own validation, out-of-range waves in an input plan come back as "not passed"', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  for (const wave of [0, 201, 1.5, '1']) {
+    const p = plan(WAVES) as unknown as {assignments: {issue: number; wave: unknown}[]};
+    p.assignments[0]!.wave = wave;
+    const out = await h.invokeAsPi({repo: 'example/demo', epicIssue: 10, plan: p});
+    assert.equal(out.piRejected, false, `Pi must pass ${String(wave)} through to the tool: ${JSON.stringify(out)}`);
+    if (!out.piRejected) assert.equal((out.r.data as Data).passed, false);
+  }
+});
+
+test('the result says whether the checked plan is the saved one; the digest ignores assignment order', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  const saved = await h.invoke();
+  assert.equal((saved.r.data as Data & {matchesSavedPlan: boolean}).matchesSavedPlan, true);
+  const reordered = plan(WAVES); reordered.assignments.reverse();
+  const out = await h.invoke({repo: 'example/demo', epicIssue: 10, plan: reordered});
+  assert.equal((out.r.data as Data & {matchesSavedPlan: boolean}).matchesSavedPlan, true);
+  assert.equal((out.r.data as Data).wavePlanDigest, (saved.r.data as Data).wavePlanDigest);
+  const other = await h.invoke({repo: 'example/demo', epicIssue: 10, plan: plan({11: 1, 12: 2, 13: 3})});
+  assert.equal((other.r.data as Data & {matchesSavedPlan: boolean}).matchesSavedPlan, false);
 });
