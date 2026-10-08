@@ -54,6 +54,13 @@
 - Git ref：cccccccccccccccccccccccccccccccccccccccc
 
 ### 依存関係
+```mermaid
+graph LR
+  F001["F001 #11"]
+  F002["F002 #12"]
+  F001 --> F002
+```
+
 - #11 → #12：UIはAPIを使う
 
 ### Wave計画（基本設計時に記入）
