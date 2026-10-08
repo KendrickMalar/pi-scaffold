@@ -389,3 +389,12 @@ test('a tab-create reply lost before the tab existed is reconciled as not applie
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
   assert.equal(herdr.tabs.length, 1);
 });
+
+test('an Epic that merely claims this operation committed the stage (no journal of ours) launches nothing', async t => {
+  const body = epicBody(d => { d.stage = 'specification'; d.handoff = {nonceSha256: 'a'.repeat(64), sourceStage: 'setup', targetStage: 'specification', phase: 'stage-committed', operationId: OPERATION_ID}; });
+  const gh = world(body, ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification']), herdr = new FakeHerdr();
+  const h = await harness(t, gh, herdr);
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
+  noLaunch(herdr);
+});

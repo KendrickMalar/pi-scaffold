@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real Herdr acceptance for the setup → specification handoff (#5).
+"""Real Herdr acceptance for the setup → specification handoff (#5) and specification → basic-design (#9).
 
 Runs ONLY in an isolated, named Herdr session (`pst`) under a synthetic HOME: its own Herdr config/socket,
 its own Pi agent dir/profiles, a stateful fake `gh`, and a loopback model. It never touches the user's
@@ -31,8 +31,19 @@ class Acceptance(unittest.TestCase):
         defs = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', "import {labelDefinitions} from './dist/src/core/label-definitions.js';process.stdout.write(JSON.stringify(labelDefinitions()))"], cwd=ROOT, text=True))
         labels = [{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(defs)]
         (self.state / 'labels.json').write_text(json.dumps(labels))
-        self.body = subprocess.check_output(['node', '--input-type=module', '-e', "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';process.stdout.write(renderEpicBlock(JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'))))"], cwd=ROOT, text=True)
-        epic_labels = [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Epic')]
+        self.basic = self._testMethodName == 'test_basic_design_handoff_after_parent_tui_approval'
+        if self.basic:
+            # A complete specification (every REQ covered, questions answered, research resolved, [] = confirmed none).
+            make = ("const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='specification';d.design=null;d.dependencyPlan=null;d.wavePlan=null;d.handoff=null;"
+                    "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答（架空）',sourceRef:q.sourceRef??'hearing-1'}));"
+                    "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論（架空）',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));"
+                    "d.constraints=d.constraints??[];d.outOfScope=[];")
+            self.revision = json.loads((ROOT / 'test/fixtures/epic-v1.populated.json').read_text())['revision']
+        else:
+            make = "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'));"
+            self.revision = 1
+        self.body = subprocess.check_output(['node', '--input-type=module', '-e', "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';" + make + "process.stdout.write(renderEpicBlock(d))"], cwd=ROOT, text=True)
+        epic_labels = [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Epic') + (('Stage: Specification',) if self.basic else ())]
         (self.state / 'issue-10.json').write_text(json.dumps({'id': 1010, 'node_id': 'I_example10', 'number': 10, 'title': '一覧をCSVで保存できるようにする', 'body': self.body, 'state': 'open', 'labels': epic_labels, 'html_url': 'https://github.com/example/demo/issues/10'}))
         shutil.copyfile(ROOT / 'test/native/fake-gh.mjs', self.bin / 'gh'); (self.bin / 'gh').chmod(0o755)
         for name in ['node', 'git', 'herdr']:
@@ -50,8 +61,10 @@ class Acceptance(unittest.TestCase):
                 tool_done = any(m.get('role') == 'tool' for m in msgs[msgs.index(users[-1]) + 1:]) if users else False
                 self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
                 if 'OWNED_TOOL_REQUEST' in last and not tool_done:
-                    args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': 1, 'expectedBodySha256': hashlib.sha256(owner.body.encode()).hexdigest(), 'expectedStage': 'setup', 'nextStage': 'specification'}
-                    delta = {'role': 'assistant', 'tool_calls': [{'index': 0, 'id': f'call-{len(owner.requests)}', 'type': 'function', 'function': {'name': 'scaffold_handoff_specification', 'arguments': json.dumps(args)}}]}; end = 'tool_calls'
+                    args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': owner.revision, 'expectedBodySha256': hashlib.sha256(owner.body.encode()).hexdigest()}
+                    if not owner.basic: args.update(expectedStage='setup', nextStage='specification')
+                    name = 'scaffold_handoff_basic_design' if owner.basic else 'scaffold_handoff_specification'
+                    delta = {'role': 'assistant', 'tool_calls': [{'index': 0, 'id': f'call-{len(owner.requests)}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}; end = 'tool_calls'
                 else:
                     delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'pi-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
                 for d, finish in [(delta, None), ({}, end)]:
@@ -146,11 +159,68 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(any('pi-scaffold:' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the stage prompt reached the new session')
 
 
+    def approve_in_parent_tui(self):
+        """Real Pi TUI (not in a real Herdr pane, same synthetic HOME): the tool asks the parent approval, Yes is chosen, then it stops at HERDR_UNAVAILABLE."""
+        master, slave = pty.openpty(); fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 140, 0, 0))
+        # Herdr-looking variables with a socket that does not exist: the cheap checks pass, the dialog is shown, then the driver cannot reach Herdr.
+        env = dict(self.env, HERDR_ENV='1', HERDR_WORKSPACE_ID='w0', HERDR_PANE_ID='w0:p0', HERDR_SOCKET_PATH=str(self.home / 'no-such-herdr.sock'))
+        tui = subprocess.Popen(['pi-profile', 'launch', '--profile', 'developer', '--', '--approve', '--model', 'owned-fixture/fixture', '--thinking', 'medium'],
+                               stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self.repo, start_new_session=True)
+        os.close(slave); os.set_blocking(master, False)
+        data = b''
+        def pump_until(pred, timeout):
+            nonlocal data
+            end = time.monotonic() + timeout
+            while time.monotonic() < end:
+                if select.select([master], [], [], .1)[0]:
+                    try:
+                        b = os.read(master, 65536); data += b
+                        if b'\x1b[6n' in b: os.write(master, b'\x1b[1;1R')
+                    except OSError: pass
+                if pred(): return True
+            return False
+        text = lambda: data.decode('utf8', 'replace')
+        try:
+            self.assertTrue(pump_until(lambda: 'fixture' in text(), 30), 'TUI did not start:\n' + text()[-2000:])
+            time.sleep(1); os.write(master, b'OWNED_TOOL_REQUEST\r')
+            self.assertTrue(pump_until(lambda: '仕様の内容承認' in text(), 60), 'no approval dialog:\n' + text()[-3000:])
+            time.sleep(.5); os.write(master, b'\r')
+            done = lambda: any('HERDR_UNAVAILABLE' in json.dumps(m.get('content'), ensure_ascii=False) for r in self.requests for m in r.get('messages', []) if m.get('role') == 'tool')
+            self.assertTrue(pump_until(done, 60), 'tool did not finish after approval:\n' + text()[-3000:])
+        finally:
+            os.killpg(tui.pid, signal.SIGTERM)
+            try: tui.wait(timeout=5)
+            except subprocess.TimeoutExpired: os.killpg(tui.pid, signal.SIGKILL)
+            os.close(master)
+        approvals = list((self.agent / 'pi-scaffold/state').rglob('approvals/specification/*.json'))
+        self.assertEqual(len(approvals), 1, approvals)
+        self.requests.clear()
+
+    def test_basic_design_handoff_after_parent_tui_approval(self):
+        self.approve_in_parent_tui()
+        self.start_session()
+        pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
+        out, done = self.home / 'sender.out', self.home / 'sender.done'
+        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+               f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
+        self.herdr('pane', 'run', pane, cmd)
+        end = time.monotonic() + 180
+        while not done.exists() and time.monotonic() < end: time.sleep(1)
+        self.assertTrue(done.exists(), 'sender did not finish; output:\n' + (out.read_text() if out.exists() else ''))
+        results = [m.get('content') for r in self.requests for m in r.get('messages', []) if m.get('role') == 'tool']
+        last = json.loads(results[-1][results[-1].find('{'):results[-1].rfind('}') + 1]) if results else {}
+        self.assertEqual(last.get('status'), 'applied', json.dumps(last, ensure_ascii=False)[:2000] + '\n' + out.read_text()[-2000:])
+        issue = json.loads((self.state / 'issue-10.json').read_text())
+        self.assertEqual(sorted(l['name'] for l in issue['labels']), ['Scope: Epic', 'Stage: BasicDesign', 'Type: Scaffold'])
+        self.assertIn('"stage": "basic-design"', issue['body'])
+        self.assertTrue(any('基本設計（BasicDesign）' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the BasicDesign prompt reached the new session')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
     parser.add_argument('--pi-gh', required=True)
     parser.add_argument('--pi-profile', required=True)
+    parser.add_argument('--case')
     OPTIONS = parser.parse_args()
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([Acceptance('test_handoff_starts_a_new_specification_session')]))
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(n) for n in (['test_' + OPTIONS.case] if OPTIONS.case else ['test_handoff_starts_a_new_specification_session', 'test_basic_design_handoff_after_parent_tui_approval'])))
     raise SystemExit(0 if result.wasSuccessful() else 1)
