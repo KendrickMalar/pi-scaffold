@@ -269,7 +269,7 @@ test('resuming before the stage commit re-checks the Epic against the input (thi
 test('a second operation cannot start while a handoff is in progress, and an Epic committed by another operation is never overwritten', async t => {
   const gh = world(), herdr = new FakeHerdr();
   let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
-  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const h = await harness(t, gh, herdr, {confirm: false}); agentDir = h.agentDir;
   assert.equal((await h.invoke()).r.status, 'partial');
   const other = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
   assert.equal(other.r.status, 'blocked');
@@ -301,7 +301,7 @@ test('values that a shell could interpret are refused before any tab is created'
     const gh = world(), herdr = new FakeHerdr();
     const out = await (await harness(t, gh, herdr, {model: {provider: id.split('/')[0]!, id: id.split('/')[1]!}})).invoke();
     assert.equal(out.r.status, 'blocked', id);
-    assert.ok(out.r.problems.some(p => p.code === 'UNSAFE_LAUNCH_VALUE'), id);
+    assert.ok(out.r.problems.some(p => p.code === 'UNSAFE_LAUNCH_VALUE' && p.message.includes('model')), id);
     noLaunch(herdr);
   }
 });
@@ -343,4 +343,49 @@ test('only the stage prompt turn counts as started', async t => {
   assert.equal(await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'target-session', prompt: 'こんにちは'}), false);
   assert.equal(await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'other-session', prompt: (herdr.calls.find(c => c.command === 'agentPrompt')!.args as {text: string}).text}), false);
   assert.equal((await h.invoke()).r.status, 'partial');
+});
+
+test('a stuck handoff can be abandoned only through the parent TUI confirmation; tabs are never closed', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+  let answer = false;
+  const h = await harness(t, gh, herdr, {confirm: () => answer}); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  const next = params(gh, {operationId: '66666666-6666-4666-8666-666666666666'});
+  const declined = await h.invoke(next);
+  assert.equal(declined.r.status, 'blocked');
+  assert.ok(declined.r.problems.some(p => p.code === 'HANDOFF_IN_PROGRESS'));
+  assert.equal(declined.confirmCalls, 1, 'the human is asked in the parent TUI');
+  assert.equal(herdr.tabCreates, 1);
+  receiver(herdr, () => agentDir);
+  answer = true;
+  const fresh = await h.invoke(next);
+  assert.equal(fresh.r.status, 'applied', JSON.stringify(fresh.r.problems));
+  assert.equal(herdr.tabCreates, 2, 'a new tab; the old one is kept');
+  assert.ok(herdr.tabs.length === 2);
+  const old = await h.invoke();
+  assert.notEqual(old.r.status, 'applied', 'the abandoned operation cannot be resumed');
+});
+
+test('headless or child sessions cannot abandon a stuck handoff', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+  const h = await harness(t, gh, herdr, {interactive: false}); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  const next = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
+  assert.equal(next.r.status, 'blocked');
+  assert.equal(next.confirmCalls, 0);
+  assert.equal(herdr.tabCreates, 1);
+});
+
+test('a tab-create reply lost before the tab existed is reconciled as not applied and created once', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir);
+  herdr.fail.tabCreate = 'unknown-before';
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  delete herdr.fail.tabCreate;
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(herdr.tabs.length, 1);
 });

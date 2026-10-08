@@ -78,8 +78,20 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   // Until this operation commits the stage itself, the Epic must still match the caller's input — also on resume.
   if (!committedBy(snap.value, input)) { const p = await readyForCommit(snap.value, input, gate); if (p.length) return blocked(p); }
   const journal = call.journal(ctx);
-  const busy = (await journal.list()).filter(r => r.operationId !== input.operationId && r.operation === operation && ['running', 'partial', 'unknown'].includes(r.status));
-  if (busy.length) return blocked([problem('HANDOFF_IN_PROGRESS', 'operationId', `Another handoff of this Epic is in progress (${busy.map(r => r.operationId).join(', ')}); resume it instead of starting a new one.`)]);
+  const busy = (await journal.list()).filter(r => !r.abandonedAt && r.operationId !== input.operationId && r.operation === operation && ['running', 'partial', 'unknown'].includes(r.status));
+  if (busy.length) {
+    const stuck = problem('HANDOFF_IN_PROGRESS', 'operationId', `Another handoff of this Epic is in progress (${busy.map(r => r.operationId).join(', ')}); resume it, or abandon it from the parent TUI to start over.`);
+    // Only a human in the parent TUI may abandon a stuck handoff. Its tab and any receiving session are left as they are.
+    if (!call.env.approvalUi.interactive) return blocked([stuck]);
+    const details = busy.map(r => {
+      const tab = r.steps.find(s => s.name === 'tab-ids')?.data as {tabId?: string; paneId?: string} | undefined;
+      return `- operation ${r.operationId}（状態: ${r.status}、最後の段階: ${r.steps.at(-1)?.name ?? 'なし'}${tab?.tabId ? `、タブ ${tab.tabId}` : ''}）`;
+    }).join('\n');
+    let ok = false;
+    try { ok = await call.env.approvalUi.confirm('pi-scaffold: 止まっている引き継ぎを放棄しますか？', `Epic #${input.epicIssue}（${input.repo}）に、終わっていない引き継ぎがあります。\n${details}\n\n放棄すると、その引き継ぎは再開できなくなり、新しい引き継ぎを始めます。既存のタブや起動済みのPiは閉じません。GitHubのStage・本文は変えません。`, {signal: call.scope.signal}); } catch { ok = false; }
+    if (!ok || !call.scope.isCurrent()) return blocked([stuck]);
+    for (const r of busy) await journal.abandon(r.operationId);
+  }
   if (ctx.profileId !== 'developer' || !ctx.profileInstructionsDigest) return blocked([problem('PROFILE_NOT_DEVELOPMENT', 'profile', 'Stage sessions start only from the Development (developer) Profile.')]);
   if (!ctx.accountBinding) return blocked([problem('ACCOUNT_UNBOUND', 'account', 'Owner policy must declare authMode "file-backed" for this repository.')]);
   const names = call.env.toolNames();
@@ -93,7 +105,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const model = call.env.currentModel();
   const dir = handoffDir(ctx.workflowStateRoot, input.operationId);
   const unsafe = unsafeLaunchValues({packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
-  if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), 'Launch values must be plain tokens ([A-Za-z0-9._/:@+-]); nothing was started.')]);
+  if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
   const payloadDigest = taggedDigest('handoff', {input, requiredTools});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
@@ -124,9 +136,9 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     let found: {tabId: string; paneId: string} | undefined;
     const tab = (await run.write('tab-create', () => herdrStep(() => herdr.tabCreate({workspaceId: binding.workspaceId, cwd: ctx.repoRoot, label})), {
       reconcile: async () => {
-        try { const t = (await herdr.tabList(binding.workspaceId)).find(x => x.label === label); if (t?.paneId) { found = {tabId: t.tabId, paneId: t.paneId}; return 'applied'; } }
-        catch { /* stays unknown */ }
-        return 'unknown';
+        // The label is unique per packet: a complete listing without it means the tab was never created.
+        try { const tabs = await herdr.tabList(binding.workspaceId); const t = tabs.find(x => x.label === label); if (t?.paneId) { found = {tabId: t.tabId, paneId: t.paneId}; return 'applied'; } return t ? 'unknown' : 'not-applied'; }
+        catch { return 'unknown'; }
       },
     })) ?? found ?? run.done('tab-ids') as {tabId: string; paneId: string} | undefined;
     if (!tab) return run.stop([problem('HERDR_TAB_UNKNOWN', 'herdr', 'The created tab could not be identified.')]);

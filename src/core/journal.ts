@@ -10,8 +10,10 @@ export interface JournalStep { name: string; phase: StepPhase; data?: unknown; /
 export interface OperationRecord {
   version: 1; operationId: UUID; repo: string; workflowId: string; operation: string; payloadDigest: Sha256;
   status: 'running' | ScaffoldStatus; steps: JournalStep[]; result?: unknown; startedAt: string; updatedAt: string;
+  /** Set when a human abandoned this operation in the parent TUI; it is never resumed and holds nothing. */
+  abandonedAt?: string;
 }
-export type BeginOutcome = {kind: 'new' | 'resume' | 'completed'; record: OperationRecord} | {kind: 'conflict'; code: 'OPERATION_PAYLOAD_MISMATCH' | 'WORKFLOW_UNRESOLVED' | 'JOURNAL_INVALID'; message: string};
+export type BeginOutcome = {kind: 'new' | 'resume' | 'completed'; record: OperationRecord} | {kind: 'conflict'; code: 'OPERATION_PAYLOAD_MISMATCH' | 'WORKFLOW_UNRESOLVED' | 'JOURNAL_INVALID' | 'OPERATION_ABANDONED'; message: string};
 
 /** A workflow is held only while a change may be in flight or has an unconfirmed outcome. */
 const UNRESOLVED = new Set(['running', 'unknown']);
@@ -47,6 +49,13 @@ export class OperationJournal {
     for (const n of names) { const id = n.replace(/\.json$/, ''); if (!n.endsWith('.json') || !isUuid(id)) continue; try { const r = await this.load(id); if (r) out.push(r); } catch { /* skip */ } }
     return out;
   }
+  /** Marks an operation abandoned (after an explicit human confirmation). Remote state is left untouched. */
+  async abandon(operationId: UUID): Promise<void> {
+    const r = await this.load(operationId);
+    if (!r || r.abandonedAt) return;
+    r.status = 'cancelled'; r.abandonedAt = new Date().toISOString();
+    await this.save(r);
+  }
   async save(record: OperationRecord): Promise<void> {
     record.updatedAt = new Date().toISOString();
     await writeOwnedFile(this.recordPath(record.operationId), JSON.stringify(record, null, 2), {root: this.root});
@@ -59,7 +68,7 @@ export class OperationJournal {
       const id = name.replace(/\.json$/, '');
       if (!name.endsWith('.json') || id === operationId || !isUuid(id)) continue;
       const r = await this.load(id);
-      if (!r || UNRESOLVED.has(r.status) || hasUncertainStep(r)) out.push(id);
+      if (!r || (!r.abandonedAt && (UNRESOLVED.has(r.status) || hasUncertainStep(r)))) out.push(id);
     }
     return out;
   }
@@ -68,6 +77,7 @@ export class OperationJournal {
   async begin(intent: {operationId: UUID; repo: string; workflowId: string; operation: string; payloadDigest: Sha256}): Promise<BeginOutcome> {
     let existing: OperationRecord | undefined;
     try { existing = await this.load(intent.operationId); } catch (e) { return {kind: 'conflict', code: 'JOURNAL_INVALID', message: (e as Error).message}; }
+    if (existing?.abandonedAt) return {kind: 'conflict', code: 'OPERATION_ABANDONED', message: 'This operation was abandoned; start a new one.'};
     if (existing) {
       if (existing.payloadDigest !== intent.payloadDigest || existing.repo !== intent.repo || existing.workflowId !== intent.workflowId || existing.operation !== intent.operation)
         return {kind: 'conflict', code: 'OPERATION_PAYLOAD_MISMATCH', message: 'This operationId was already used with a different repo/workflow/tool/payload.'};
