@@ -28,16 +28,19 @@ function find(v: unknown, key: string): string | undefined {
 }
 const SHELLS = /^-?(zsh|bash|fish|sh|dash|ksh)$/;
 
-export function createHerdrCli(options: {bin?: string; socketPath?: string; timeoutMs?: number} = {}): HerdrPort {
+/** caller: HERDR_PANE_ID/WORKSPACE_ID/TAB_ID/SESSION of the calling pane; without them `--current` means the focused pane. */
+export function createHerdrCli(options: {bin?: string; socketPath?: string; timeoutMs?: number; caller?: Record<string, string | undefined>} = {}): HerdrPort {
   const run = (args: string[], mutation: boolean): Promise<string> => new Promise((resolve, reject) => {
     const env: Record<string, string> = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C.UTF-8'};
     if (options.socketPath) env.HERDR_SOCKET_PATH = options.socketPath;
+    for (const k of ['HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_TAB_ID', 'HERDR_SESSION']) { const v = options.caller?.[k]; if (v) env[k] = v; }
     execFile(options.bin ?? 'herdr', args, {env, timeout: options.timeoutMs ?? LIMITS.callTimeoutMs, maxBuffer: 1024 * 1024, shell: false}, (error, stdout, stderr) => {
       if (!error) return resolve(String(stdout));
       const e = error as NodeJS.ErrnoException & {killed?: boolean; signal?: string};
       if (e.code === 'ENOENT') return reject(new HerdrError('not-started', 'herdr is not installed.'));
-      // A timeout or signal during a change may have applied it; a refused change exits with an error report.
-      if (e.killed || e.signal) return reject(new HerdrError(mutation ? 'unknown' : 'failed', `herdr ${args[0]} did not finish.`));
+      // A change that did not finish cleanly may already have been typed/applied: it is unknown, never definitely failed.
+      if (mutation) return reject(new HerdrError('unknown', `herdr ${args.slice(0, 2).join(' ')} did not confirm: ${String(stderr).trim().slice(0, 200)}`));
+      if (e.killed || e.signal) return reject(new HerdrError('failed', `herdr ${args[0]} did not finish.`));
       reject(new HerdrError('failed', `herdr ${args.slice(0, 2).join(' ')} failed: ${String(stderr).trim().slice(0, 200)}`));
     });
   });

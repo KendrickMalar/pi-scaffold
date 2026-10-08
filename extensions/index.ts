@@ -37,9 +37,9 @@ export default function (pi: ExtensionAPI) {
     };
     void attempt();
   });
-  pi.on('before_agent_start', async (_event, ctx) => {
+  pi.on('before_agent_start', async (event, ctx) => {
     if (accepted && ctx.sessionManager.getSessionId() === accepted.sessionId) {
-      await recordTurnStarted({packetPath: accepted.packetPath, agentDir: runtime.agentDir, sessionId: accepted.sessionId});
+      await recordTurnStarted({packetPath: accepted.packetPath, agentDir: runtime.agentDir, sessionId: accepted.sessionId, prompt: event.prompt});
     }
     return undefined;
   });

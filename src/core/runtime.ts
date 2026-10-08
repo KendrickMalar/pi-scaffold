@@ -79,6 +79,6 @@ export class ToolCall {
     });
   }
   environment(): Record<string, string | undefined> { return this.runtime.environment ? this.runtime.environment() : process.env; }
-  herdr(): HerdrPort { const env = this.environment(); return this.runtime.herdr ? this.runtime.herdr() : createHerdrCli({...(env.HERDR_BIN_PATH ? {bin: env.HERDR_BIN_PATH} : {}), ...(env.HERDR_SOCKET_PATH ? {socketPath: env.HERDR_SOCKET_PATH} : {})}); }
+  herdr(): HerdrPort { const env = this.environment(); return this.runtime.herdr ? this.runtime.herdr() : createHerdrCli({...(env.HERDR_BIN_PATH ? {bin: env.HERDR_BIN_PATH} : {}), ...(env.HERDR_SOCKET_PATH ? {socketPath: env.HERDR_SOCKET_PATH} : {}), caller: env}); }
   journal(context: RepoContext): OperationJournal { return new OperationJournal({root: this.namespaceRoot, workflowStateRoot: context.workflowStateRoot}); }
 }

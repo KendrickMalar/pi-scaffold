@@ -38,9 +38,12 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
 }
 
 /** Called on the first agent turn of the accepting session. Only that session can record the start. */
-export async function recordTurnStarted(input: {packetPath: string; agentDir: string; sessionId: string}): Promise<boolean> {
+export const promptTag = (nonceSha256: string) => `scaffold-${nonceSha256.slice(0, 12)}`;
+export async function recordTurnStarted(input: {packetPath: string; agentDir: string; sessionId: string; prompt: string}): Promise<boolean> {
   const root = join(input.agentDir, 'pi-scaffold'), dir = dirname(input.packetPath);
   const ready = await readReceipt(dir, 'receiver-ready', root);
+  // Only the fixed stage prompt (carrying this packet's tag) starts the handoff turn.
+  if (!ready || !input.prompt.includes(promptTag(ready.nonceSha256))) return false;
   if (!ready || ready.sessionId !== input.sessionId || await readReceipt(dir, 'turn-started', root)) return false;
   await writeReceipt(dir, {...ready, phase: 'turn-started', at: new Date().toISOString()}, root);
   return true;

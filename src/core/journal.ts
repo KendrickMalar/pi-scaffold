@@ -39,6 +39,14 @@ export class OperationJournal {
       return record;
     } catch (e) { if (e instanceof OwnedFileError && e.code === 'NOT_FOUND') return undefined; throw e; }
   }
+  /** All readable records of this workflow (malformed ones are skipped). */
+  async list(): Promise<OperationRecord[]> {
+    let names: string[];
+    try { names = await readdir(this.dir); } catch { return []; }
+    const out: OperationRecord[] = [];
+    for (const n of names) { const id = n.replace(/\.json$/, ''); if (!n.endsWith('.json') || !isUuid(id)) continue; try { const r = await this.load(id); if (r) out.push(r); } catch { /* skip */ } }
+    return out;
+  }
   async save(record: OperationRecord): Promise<void> {
     record.updatedAt = new Date().toISOString();
     await writeOwnedFile(this.recordPath(record.operationId), JSON.stringify(record, null, 2), {root: this.root});

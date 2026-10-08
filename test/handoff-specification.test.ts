@@ -37,7 +37,7 @@ function receiver(herdr: FakeHerdr, agentDir: () => string, opts: {ready?: boole
     const r = await acceptStartupPacket({packetPath, agentDir: agentDir(), cwd: opts.cwd ?? '/synthetic/repo', sessionId: 'target-session', sessionEntries: opts.entries ?? [profile()], toolNames: opts.tools ?? TOOLS, policy});
     assert.ok(r.ok || opts.cwd || opts.entries || opts.tools, JSON.stringify(r));
   };
-  herdr.onPrompt = async () => { if (opts.started !== false) await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'target-session'}); };
+  herdr.onPrompt = async (_pane, text) => { if (opts.started !== false) await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'target-session', prompt: text}); };
   return {packetPath: () => packetPath};
 }
 async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, herdr: FakeHerdr, scenario: Scenario = {}) {
@@ -154,7 +154,8 @@ test('ready without a started turn is not applied; the same operation resumes wi
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial');
   assert.equal(first.r.resumeToken, OPERATION_ID);
-  await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'target-session'});
+  const prompt = (herdr.calls.find(c => c.command === 'agentPrompt')!.args as {text: string}).text;
+  await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'target-session', prompt});
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
   assert.equal(herdr.tabCreates, 1); assert.equal(herdr.count('paneRun'), 1); assert.equal(herdr.count('agentPrompt'), 1);
@@ -249,4 +250,97 @@ test('a packet changed after it was written is detected by the driver before any
   assert.equal(gh.conditionalChanges.length, 0);
   assert.equal(herdr.count('agentPrompt'), 0);
   void rx;
+});
+
+test('resuming before the stage commit re-checks the Epic against the input (third-party edit, blank title)', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; const rx = receiver(herdr, () => agentDir, {ready: false});
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  gh.issues.get(10)!.body += '\n第三者の追記'; gh.issues.get(10)!.title = '  ';
+  await acceptStartupPacket({packetPath: rx.packetPath(), agentDir, cwd: '/synthetic/repo', sessionId: 'target-session', sessionEntries: [profile()], toolNames: TOOLS, policy});
+  const resumed = await h.invoke();
+  assert.notEqual(resumed.r.status, 'applied');
+  assert.ok(resumed.r.problems.some(p => p.code === 'STALE_BODY'), JSON.stringify(resumed.r.problems));
+  assert.equal(gh.conditionalChanges.length, 0);
+  assert.equal(herdr.count('agentPrompt'), 0);
+});
+
+test('a second operation cannot start while a handoff is in progress, and an Epic committed by another operation is never overwritten', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  const other = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
+  assert.equal(other.r.status, 'blocked');
+  assert.ok(other.r.problems.some(p => p.code === 'HANDOFF_IN_PROGRESS'), JSON.stringify(other.r.problems));
+  assert.equal(herdr.tabCreates, 1);
+  // Someone else committed the stage meanwhile: resuming the first operation must stop, not overwrite.
+  const doc = (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+  gh.issues.get(10)!.body = renderEpicBlock({...doc, stage: 'specification', revision: 2, handoff: {nonceSha256: 'e'.repeat(64), sourceStage: 'setup', targetStage: 'specification', phase: 'stage-committed', operationId: '66666666-6666-4666-8666-666666666666'}});
+  const resumed = await h.invoke();
+  assert.notEqual(resumed.r.status, 'applied');
+  assert.equal(herdr.count('agentPrompt'), 0);
+  assert.ok(gh.issues.get(10)!.body.includes('66666666-6666-4666-8666-666666666666'));
+});
+
+test('Blocked appearing while waiting stops before the body is changed', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir);
+  const run = herdr.onPaneRun!;
+  herdr.onPaneRun = async (p, c) => { await run(p, c); gh.issues.get(10)!.labels.push('Blocked'); };
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const out = await h.invoke();
+  assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'BLOCKED'), JSON.stringify(out.r.problems));
+  assert.equal(gh.conditionalChanges.length, 0, 'the stage is not written while Blocked');
+});
+
+test('values that a shell could interpret are refused before any tab is created', async t => {
+  for (const id of ["prov/x\\';echo INJECTED;#", 'prov/a b', 'prov/$(id)']) {
+    const gh = world(), herdr = new FakeHerdr();
+    const out = await (await harness(t, gh, herdr, {model: {provider: id.split('/')[0]!, id: id.split('/')[1]!}})).invoke();
+    assert.equal(out.r.status, 'blocked', id);
+    assert.ok(out.r.problems.some(p => p.code === 'UNSAFE_LAUNCH_VALUE'), id);
+    noLaunch(herdr);
+  }
+});
+
+test('a failed launch is never resent blindly', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir);
+  herdr.fail.paneRun = 'not-started';
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  assert.notEqual((await h.invoke()).r.status, 'applied');
+  delete herdr.fail.paneRun; herdr.shellReady = false;
+  const again = await h.invoke();
+  assert.notEqual(again.r.status, 'applied');
+  assert.equal(herdr.count('paneRun'), 1, 'not resent while the pane is not an idle shell');
+});
+
+test('the call budget pauses between steps instead of running minutes in one call', async t => {
+  let clock = 0;
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir);
+  const create = herdr.tabCreate.bind(herdr);
+  herdr.tabCreate = async o => { clock += 70_000; return create(o); };
+  const h = await harness(t, gh, herdr, {budgetMs: 60_000, now: () => clock}); agentDir = h.agentDir;
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  assert.ok(first.r.problems.some(p => p.code === 'CALL_BUDGET_EXHAUSTED'));
+  assert.equal(herdr.count('paneRun'), 0);
+  clock = 0; herdr.tabCreate = create;
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(herdr.tabCreates, 1);
+});
+
+test('only the stage prompt turn counts as started', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; const rx = receiver(herdr, () => agentDir, {started: false});
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  assert.equal(await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'target-session', prompt: 'こんにちは'}), false);
+  assert.equal(await recordTurnStarted({packetPath: rx.packetPath(), agentDir, sessionId: 'other-session', prompt: (herdr.calls.find(c => c.command === 'agentPrompt')!.args as {text: string}).text}), false);
+  assert.equal((await h.invoke()).r.status, 'partial');
 });
