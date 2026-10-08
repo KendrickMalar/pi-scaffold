@@ -11,6 +11,8 @@ export const PI_GH_CONTRACT_VERSION = 1;
 export const B_PROPOSAL_TOOLS = ['gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current'] as const;
 const READ_TOOLS = new Set(['gh_capabilities', 'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items', 'gh_issue_validate', 'gh_issue_preview', 'gh_labels_validate', 'gh_labels_preview', 'gh_issue_form']);
 export const isReadTool = (name: string) => READ_TOOLS.has(name);
+/** Replacement text pi-gh 0.2.0 uses when masking secret candidates in results. */
+export const PI_GH_MASK = '[REDACTED]';
 const SUCCESS = new Set(['read', 'validated', 'preview', 'generated', 'created', 'applied']);
 
 type Rec = Record<string, unknown>;
@@ -88,6 +90,8 @@ export async function readIssue(repo: string, number: number, bridge: PiGhBridge
   if (r.status !== 'ok') return failed(r.problems);
   const issue = r.data!;
   if (issue.pull_request !== undefined || issue.number !== number || issue.html_url.toLowerCase() !== `https://github.com/${repo}/issues/${number}`.toLowerCase()) return failed([problem('GITHUB_IDENTITY', `issues/${number}`, 'Expected exactly this repository Issue (not a PR).')]);
+  // pi-gh 0.2.0 redacts secret candidates in results without a flag; such text is not the real Issue content.
+  if ((issue.body ?? '').includes(PI_GH_MASK) || issue.title.includes(PI_GH_MASK)) return failed([problem('BODY_MASKED', `issues/${number}`, 'pi-gh redacted part of this Issue as a secret candidate, so its exact content cannot be read. Remove the secret-like text from the Issue first.')]);
   return buildSnapshot({repo, number, title: issue.title, body: issue.body ?? '', labels: issue.labels, state: issue.state});
 }
 export {decodeGithubIssue};

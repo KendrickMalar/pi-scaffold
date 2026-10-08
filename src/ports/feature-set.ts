@@ -10,10 +10,16 @@ export interface FeatureSetOptions {
 }
 export interface FeatureSet { features: FeatureSnapshot[]; unattached: FeatureSnapshot[]; featureSetDigest: Sha256 }
 
-function decodeChildNumbers(d: unknown): number[] | undefined {
+interface Child { number: number; htmlUrl: string }
+function decodeChildren(d: unknown): Child[] | undefined {
   if (!Array.isArray(d)) return undefined;
-  const numbers = d.map(x => (typeof x === 'object' && x !== null ? (x as {number?: unknown}).number : undefined));
-  return numbers.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n > 0) ? numbers as number[] : undefined;
+  const out: Child[] = [];
+  for (const x of d) {
+    const c = x as {number?: unknown; html_url?: unknown};
+    if (typeof x !== 'object' || x === null || typeof c.number !== 'number' || !Number.isSafeInteger(c.number) || c.number < 1 || typeof c.html_url !== 'string') return undefined;
+    out.push({number: c.number, htmlUrl: c.html_url});
+  }
+  return out;
 }
 
 function checkFeature(s: Awaited<ReturnType<typeof readIssue>>, number: number, epicIssue: number, options: FeatureSetOptions, problems: Problem[]): FeatureSnapshot | undefined {
@@ -30,9 +36,12 @@ function checkFeature(s: Awaited<ReturnType<typeof readIssue>>, number: number, 
 
 /** Reads every native child (all pages, closed included) and validates workflow/parent/classification/limits. */
 export async function readFeatureSet(repo: string, epicIssue: number, bridge: PiGhBridge, scope: CallScope, options: FeatureSetOptions): Promise<Decoded<FeatureSet>> {
-  const listed = await bridge.call('gh_subissues_list', {repo, issue: epicIssue}, decodeChildNumbers, scope);
+  const listed = await bridge.call('gh_subissues_list', {repo, issue: epicIssue}, decodeChildren, scope);
   if (listed.status !== 'ok') return failed([problem('FEATURE_SET_INCOMPLETE', 'features', 'The native sub-issue list could not be read completely.'), ...listed.problems]);
-  const numbers = listed.data!;
+  // Sub-issues may live in another repository of the same owner; never map them onto a local number.
+  const foreign = listed.data!.filter(c => c.htmlUrl.toLowerCase() !== `https://github.com/${repo}/issues/${c.number}`.toLowerCase());
+  if (foreign.length) return failed(foreign.map(c => problem('FOREIGN_CHILD', `features[${c.htmlUrl}]`, `${c.htmlUrl} is not an Issue of ${repo}; cross-repository Features are not supported.`)));
+  const numbers = listed.data!.map(c => c.number);
   const extra = (options.knownCreated ?? []).filter(k => !numbers.includes(k.number));
   if (numbers.length + extra.length > LIMITS.features) return failed([problem('LIMIT_EXCEEDED', 'features', `An Epic may have at most ${LIMITS.features} Features (found ${numbers.length + extra.length}).`)]);
   const problems: Problem[] = [];

@@ -83,3 +83,8 @@ test('the git reader reads a real worktree with fixed argv only', async t => {
   await assert.rejects(git.run(['push'], dir), /not allowed/);
   await assert.rejects(git.run(['fetch'], dir), /not allowed/);
 });
+
+test('workflowId must be a UUID before it becomes a state path', async () => {
+  const r = await deriveRepoContext(base({workflowId: '../aaaa/11111111-1111-4111-8111-111111111111'}));
+  assert.ok(!r.ok && r.problems[0]!.code === 'INVALID_FORMAT');
+});

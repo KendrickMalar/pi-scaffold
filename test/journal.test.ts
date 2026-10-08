@@ -149,3 +149,28 @@ test('runtime scope invalidation aborts leases and expires queued work', async (
   await blocker;
   await assert.rejects(after, /expired/);
 });
+
+test('an unreconciled unknown step is never downgraded to blocked/cancelled on resume', async t => {
+  const {journal} = await setup(t);
+  await withOperation(spec(journal), fourWrites([ok, unknown, ok, ok], []));
+  const resumed = await withOperation(spec(journal), async run => run.stop([{code: 'STALE_BODY', path: '', message: 'changed'}]));
+  assert.equal(resumed.status, 'unknown');
+  assert.equal(resumed.resumeToken, OPERATION_ID);
+  const scope = makeScope(); scope.expire();
+  const expired = await withOperation(spec(journal, scope), fourWrites([ok, ok, ok, ok], []));
+  assert.notEqual(expired.status, 'applied');
+  const other = await withOperation(spec(journal, makeScope(), OTHER_OP), fourWrites([ok, ok, ok, ok], []));
+  assert.ok(other.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
+});
+
+test('resuming an existing operationId still respects another unresolved operation', async t => {
+  const {journal} = await setup(t);
+  const b = await withOperation(spec(journal, makeScope(), OTHER_OP), async run => run.stop([{code: 'PRECONDITION', path: '', message: 'not yet'}]));
+  assert.equal(b.status, 'blocked');
+  await withOperation(spec(journal), fourWrites([ok, unknown, ok, ok], []));
+  const log: string[] = [];
+  const resumedB = await withOperation(spec(journal, makeScope(), OTHER_OP), fourWrites([ok, ok, ok, ok], log));
+  assert.equal(resumedB.status, 'blocked');
+  assert.ok(resumedB.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
+  assert.deepEqual(log, []);
+});

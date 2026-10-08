@@ -61,10 +61,11 @@ export class OperationJournal {
     if (existing) {
       if (existing.payloadDigest !== intent.payloadDigest || existing.repo !== intent.repo || existing.workflowId !== intent.workflowId || existing.operation !== intent.operation)
         return {kind: 'conflict', code: 'OPERATION_PAYLOAD_MISMATCH', message: 'This operationId was already used with a different repo/workflow/tool/payload.'};
-      return {kind: COMPLETED.has(existing.status) ? 'completed' : 'resume', record: existing};
+      if (COMPLETED.has(existing.status)) return {kind: 'completed', record: existing};
     }
     const others = await this.unresolvedOthers(intent.operationId);
     if (others.length) return {kind: 'conflict', code: 'WORKFLOW_UNRESOLVED', message: `Workflow has unresolved operations (${others.join(', ')}); resume them with their own operationId after checking GitHub.`};
+    if (existing) return {kind: 'resume', record: existing};
     const now = new Date().toISOString();
     const record: OperationRecord = {version: 1, ...intent, status: 'running', steps: [], startedAt: now, updatedAt: now};
     await this.save(record);

@@ -1,7 +1,7 @@
 // RepoContext is derived from the environment only: cwd's worktree, origin, Pi project trust,
 // the session's pi-profile snapshot and the owner policy. Tool input cannot supply trust/account/profile.
 import {isAbsolute, join} from 'node:path';
-import {failed, okValue, problem, type Decoded, type RepoContext, type Sha256} from './contracts.js';
+import {failed, okValue, problem, isUuid, type Decoded, type RepoContext, type Sha256} from './contracts.js';
 import {sha256Text, taggedDigest} from './digests.js';
 import type {OwnerPolicy} from './model-bindings.js';
 import {parseGithubRemote, type GitReader} from '../ports/git-read.js';
@@ -38,6 +38,7 @@ export interface RepoContextInput {
   policy: OwnerPolicy | undefined; git: GitReader;
 }
 export async function deriveRepoContext(input: RepoContextInput): Promise<Decoded<RepoContext>> {
+  if (input.workflowId !== null && !isUuid(input.workflowId)) return failed([problem('INVALID_FORMAT', 'workflowId', 'workflowId must be a UUID.')]);
   if (!input.trusted) return failed([problem('UNTRUSTED_PROJECT', 'cwd', 'Pi project trust is not active for this working directory.')]);
   let identity: Awaited<ReturnType<GitReader["repoIdentity"]>>;
   try { identity = await input.git.repoIdentity(input.cwd); } catch { return failed([problem('NOT_A_WORKTREE', 'cwd', 'The working directory is not inside a git worktree.')]); }

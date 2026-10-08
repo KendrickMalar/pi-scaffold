@@ -69,7 +69,9 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
   if (begun.kind === 'conflict') return {...base, status: 'blocked', problems: [problem(begun.code, 'operationId', begun.message)]};
   const record = begun.record;
   if (begun.kind === 'completed') return {...base, status: 'noop', data: record.result as T, problems: []};
-  const anyDone = () => record.steps.some(s => s.phase === 'done');
+  /** A remote change may exist: finished, or requested with an unconfirmed outcome. */
+  const anyDone = () => record.steps.some(s => s.phase === 'done' || s.phase === 'requested' || s.phase === 'unknown');
+  const uncertain = () => record.steps.some(s => s.phase === 'requested' || s.phase === 'unknown');
   const save = () => spec.journal.save(record);
   let inFlight = false;
   const run: OperationRun = {
@@ -103,7 +105,10 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
       throw new Stop(anyDone() ? 'partial' : 'blocked', outcome.problems);
     },
   };
-  const finish = async (status: ScaffoldStatus, problems: Problem[], data?: unknown): Promise<ScaffoldResult<never>> => {
+  const finish = async (requested: ScaffoldStatus, problems: Problem[], data?: unknown): Promise<ScaffoldResult<never>> => {
+    // An unreconciled step keeps the operation unresolved; it is never downgraded to blocked/cancelled/applied.
+    const status: ScaffoldStatus = uncertain() ? 'unknown' : requested;
+    if (status !== requested) problems = [...problems, problem('RECONCILE_REQUIRED', '', 'A previous change of this operation has an uncertain outcome; inspect GitHub and resume with the same operationId.')];
     record.status = status;
     if (data !== undefined) record.result = data;
     await save();

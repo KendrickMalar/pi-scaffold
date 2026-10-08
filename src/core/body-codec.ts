@@ -91,9 +91,12 @@ export function parseIssueBody(body: string): Decoded<ParsedBody> {
   if (e < s) return failed([invalid('End marker precedes start marker.')]);
   const endOfEnd = e + MANAGED_END.length;
   const block = body.slice(s, endOfEnd), before = body.slice(0, s), after = body.slice(endOfEnd);
-  const inner = block.slice(MANAGED_START.length + 1, block.length - MANAGED_END.length);
+  // GitHub's web editor may save CRLF. The managed block is regenerated anyway, so parse it LF-normalized;
+  // bytes outside the block are kept exactly as they are.
+  const lf = block.replace(/\r\n/g, '\n');
+  const inner = lf.slice(MANAGED_START.length + 1, lf.length - MANAGED_END.length);
   const detailsAt = inner.lastIndexOf('\n' + DETAILS_OPEN);
-  if (!block.startsWith(MANAGED_START + '\n') || detailsAt < 0 || !inner.endsWith(DETAILS_CLOSE)) return failed([invalid('Managed block structure is not recognized.')]);
+  if (!lf.startsWith(MANAGED_START + '\n') || detailsAt < 0 || !inner.endsWith(DETAILS_CLOSE)) return failed([invalid('Managed block structure is not recognized.')]);
   const visible = inner.slice(0, detailsAt);
   const jsonText = inner.slice(detailsAt + 1 + DETAILS_OPEN.length, inner.length - DETAILS_CLOSE.length);
   if (Buffer.byteLength(jsonText) > LIMITS.jsonBytes) return failed([problem('LIMIT_EXCEEDED', 'json', `Managed JSON exceeds ${LIMITS.jsonBytes} bytes.`)]);

@@ -143,3 +143,9 @@ test('interactive writes wait for human approval beyond the call limit; reads an
   scope.abort();
   assert.equal((await pending).status, 'unknown', 'a cancelled in-flight write is never assumed not to have happened');
 });
+
+test('bodies masked by pi-gh secret redaction are not usable snapshots', async () => {
+  const masked = {...epicIssue(), body: epicIssue().body + '\nメモ: [REDACTED]'};
+  const r = await readIssue('example/demo', 10, new PiGhBridge(new FakePiGh().add(masked).execute), makeScope());
+  assert.ok(!r.ok && r.problems.some(p => p.code === 'BODY_MASKED'));
+});

@@ -71,6 +71,7 @@ export async function readOwnedFile(path: string, options: OwnedOptions): Promis
     const buffer = Buffer.alloc(Math.min(max, fst.size) + 1);
     let total = 0;
     for (;;) { const {bytesRead} = await handle.read(buffer, total, buffer.length - total, total); if (!bytesRead) break; total += bytesRead; if (total > max) throw new OwnedFileError('TOO_LARGE', path, `File exceeds ${max} bytes.`); if (total === buffer.length) break; }
+    if (total !== fst.size) throw new OwnedFileError('CHANGED', path, 'File changed while reading.');
     return buffer.subarray(0, total);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ELOOP') throw new OwnedFileError('SYMLINK', path, 'Symbolic links are not followed.');

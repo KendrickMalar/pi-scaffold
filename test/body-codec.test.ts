@@ -156,3 +156,15 @@ test('a snapshot whose body changed after parsing is not patched', () => {
   const stale = {...snap.value, body: snap.value.body + '\n手で追記'};
   assert.ok(codes(problemsOf(patchDoc(stale, structuredClone(snap.value.doc) as EpicDocV1))).includes('STALE_SNAPSHOT'));
 });
+
+test('CRLF bodies (web editor saves) parse and keep outside bytes', () => {
+  const crlf = ('メモ\n\n' + renderEpicBlock(initialDoc()) + '\n追記\n').replace(/\n/g, '\r\n');
+  const parsed = parseIssueBody(crlf);
+  assert.ok(parsed.ok, JSON.stringify(parsed.ok ? [] : parsed.problems));
+  assert.equal(parsed.value.before, 'メモ\r\n\r\n');
+  assert.equal(parsed.value.after, '\r\n追記\r\n');
+  const snap = buildSnapshot(raw(crlf)); assert.ok(snap.ok);
+  const edit = patchDoc(snap.value, structuredClone(snap.value.doc) as EpicDocV1); assert.ok(edit.ok);
+  assert.ok(edit.value.body.startsWith('メモ\r\n\r\n') && edit.value.body.endsWith('\r\n追記\r\n'));
+  assert.equal(parseIssueBody(edit.value.body).ok, true);
+});

@@ -83,3 +83,10 @@ test('feature set digest depends only on membership', async () => {
   assert.equal(a.value.featureSetDigest, b.value.featureSetDigest);
   assert.notEqual(a.value.featureSetDigest, c.value.featureSetDigest);
 });
+
+test('a sub-issue from another repository is never mistaken for a local Issue', async () => {
+  const {gh, bridge} = world([feature(11, 'F001')]);
+  gh.overrides.set('gh_subissues_list', () => FakePiGh.ok([{...gh.github(gh.issues.get(11)!), html_url: 'https://github.com/example/other/issues/11', repository_url: 'https://api.github.com/repos/example/other'}]));
+  const r = await read(bridge);
+  assert.ok(!r.ok && r.problems.some(p => p.code === 'FOREIGN_CHILD'));
+});
