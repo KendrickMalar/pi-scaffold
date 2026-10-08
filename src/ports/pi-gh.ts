@@ -21,19 +21,27 @@ function upstreamProblems(sc: Rec): Problem[] {
 
 export class PiGhBridge {
   private readonly timeoutMs: number;
-  constructor(private readonly execute: ToolExecutor, options: {timeoutMs?: number} = {}) { this.timeoutMs = options.timeoutMs ?? LIMITS.callTimeoutMs; }
+  private readonly interactiveWrites: boolean;
+  /**
+   * `interactiveWrites`: pi-gh may hold a write open for a human TUI approval, so writes are bounded only by
+   * cancellation/session change, never by the call limit (a timed-out approval would be recorded as unknown).
+   */
+  constructor(private readonly execute: ToolExecutor, options: {timeoutMs?: number; interactiveWrites?: boolean} = {}) {
+    this.timeoutMs = options.timeoutMs ?? LIMITS.callTimeoutMs;
+    this.interactiveWrites = options.interactiveWrites ?? false;
+  }
 
   /** Calls one pi-gh tool. Writes whose result cannot be decoded are `unknown`; reads are `blocked`. */
   async call<T>(name: string, args: unknown, decode: (data: unknown) => T | undefined, scope: CallScope): Promise<GhOutcome<T>> {
     const write = !isReadTool(name);
     const lost = (code: string, message: string): GhOutcome<T> => ({status: write ? 'unknown' : 'blocked', problems: [problem(code, name, message)], isError: true});
     if (!scope.isCurrent() || scope.signal.aborted) return {status: 'cancelled', problems: [problem('STALE_SCOPE', name, 'Session changed or the call was cancelled before it started.')], isError: true};
-    const timeout = AbortSignal.timeout(this.timeoutMs);
-    const signal = AbortSignal.any([scope.signal, timeout]);
+    const timeout = write && this.interactiveWrites ? undefined : AbortSignal.timeout(this.timeoutMs);
+    const signal = timeout ? AbortSignal.any([scope.signal, timeout]) : scope.signal;
     let outcome: ToolOutcome;
     try {
       outcome = await new Promise<ToolOutcome>((resolve, reject) => {
-        const onAbort = () => reject(timeout.aborted ? new Error('TIMEOUT') : new Error('ABORTED'));
+        const onAbort = () => reject(timeout?.aborted ? new Error('TIMEOUT') : new Error('ABORTED'));
         signal.addEventListener('abort', onAbort, {once: true});
         this.execute(name, args, {signal}).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
       });

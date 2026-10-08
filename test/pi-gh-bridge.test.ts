@@ -127,3 +127,19 @@ test('tool results flag every non-success status as an error', () => {
     assert.equal(r.content[0]!.type, 'text');
   }
 });
+
+test('interactive writes wait for human approval beyond the call limit; reads and headless writes do not', async () => {
+  const gh = new FakePiGh();
+  const late = (data: unknown, status: string) => () => new Promise<ReturnType<typeof FakePiGh.ok>>(r => setTimeout(() => r(FakePiGh.ok(data, status)), 60));
+  gh.overrides.set('gh_issue_edit', late({repo: 'example/demo'}, 'applied'));
+  gh.overrides.set('gh_issue_get', late({}, 'read'));
+  const interactive = new PiGhBridge(gh.execute, {timeoutMs: 20, interactiveWrites: true});
+  assert.equal((await interactive.call('gh_issue_edit', {changePath: '/x'}, anyData, makeScope())).status, 'ok');
+  assert.equal((await interactive.call('gh_issue_get', {repo: 'example/demo', issue: 1}, anyData, makeScope())).status, 'blocked');
+  const headless = new PiGhBridge(gh.execute, {timeoutMs: 20});
+  assert.equal((await headless.call('gh_issue_edit', {changePath: '/x'}, anyData, makeScope())).status, 'unknown');
+  const scope = makeScope();
+  const pending = interactive.call('gh_issue_edit', {changePath: '/x'}, anyData, scope);
+  scope.abort();
+  assert.equal((await pending).status, 'unknown', 'a cancelled in-flight write is never assumed not to have happened');
+});

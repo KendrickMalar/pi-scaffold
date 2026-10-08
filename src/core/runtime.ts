@@ -39,7 +39,7 @@ export class ToolCall {
   readonly namespaceRoot: string;
   readonly approvals: ApprovalStore;
   constructor(readonly runtime: ScaffoldRuntime, readonly env: ToolEnv, readonly scope: CallScope) {
-    this.bridge = new PiGhBridge(env.executeTool, runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {});
+    this.bridge = new PiGhBridge(env.executeTool, {interactiveWrites: env.approvalUi.interactive, ...(runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {})});
     this.namespaceRoot = join(runtime.agentDir, 'pi-scaffold');
     this.approvals = new ApprovalStore(this.namespaceRoot);
   }
