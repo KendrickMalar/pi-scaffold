@@ -2,7 +2,9 @@
 
 [Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが実行できる個別のTypeScriptツールとして提供する拡張です。
 
-現在はリポジトリとIssueの準備段階です。製品コード、依存インストール、Piへの導入はまだありません。
+現在は共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の実装段階です。AI用ツールはまだ1つも登録されていません。npm公開・Piへの導入はしていません。
+
+開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.2.0のcheckout、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。
 
 ## 役割の分担
 
