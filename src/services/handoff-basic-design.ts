@@ -4,7 +4,8 @@
 import {decodeMutationInput, problem, type Decoded, type EpicDocV1, type IssueSnapshot, type MutationInput, type ScaffoldResult} from '../core/contracts.js';
 import {approvalViewDigest} from '../core/approvals.js';
 import {checkSpecificationReady, specificationApprovalView} from '../core/specification-gate.js';
-import {handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
+import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
+import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 
@@ -22,17 +23,27 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
   if (doc.kind !== 'epic') return blocked([problem('NOT_AN_EPIC', 'epicIssue', `#${input.epicIssue} is not a Scaffold Epic.`)]);
   const context = await call.repoContext(input.repo, doc.workflowId);
   if (!context.ok) return blocked(context.problems);
-  // Nothing is asked for a stage mismatch or an incomplete specification (an operation already committed by us skips this; the driver handles it).
-  const ours = doc.stage === 'basic-design' && doc.handoff?.operationId === input.operationId;
+  const handoff = {...input, expectedStage: 'specification' as const, nextStage: 'basic-design' as const};
+  // Nothing is asked for a handoff that cannot proceed. Only an operation this journal really committed skips the checks (the driver resumes it).
+  const ours = await committedByUs(snap.value, handoff, call.journal(context.value));
   if (!ours) {
+    const env = call.environment();
+    if (env.HERDR_ENV !== '1' || !env.HERDR_WORKSPACE_ID || !env.HERDR_PANE_ID) return blocked([problem('HERDR_UNAVAILABLE', 'herdr', 'This session is not running inside Herdr.')]);
+    if (env.PI_SUBAGENT_CHILD) return blocked([problem('CHILD_SESSION', 'session', 'A subagent child cannot approve the specification or start a stage session.')]);
     if (doc.stage !== 'specification') return blocked([problem('STAGE_MISMATCH', 'stage', `Epic is in ${doc.stage}, not specification.`)]);
+    const stale = [
+      ...(snap.value.bodySha256 !== input.expectedBodySha256 ? [problem('STALE_BODY', 'expectedBodySha256', 'Epic body changed; read it again.')] : []),
+      ...(doc.revision !== input.expectedRevision ? [problem('STALE_REVISION', 'expectedRevision', `Epic revision is ${doc.revision}.`)] : []),
+    ];
+    if (stale.length) return blocked(stale);
+    const labels = prepareLabelEdit(snap.value, {type: 'Scaffold', scope: 'Epic', stage: 'basic-design'});
+    if (!labels.ok) return blocked(labels.problems);
     const gate = checkSpecificationReady(doc);
     if (gate.status !== 'validated') return blocked(gate.problems);
     const view = specificationApprovalView(doc);
     const existing = await call.approvals.requireContentApproval('specification', doc.workflowId, approvalViewDigest('specification', view), context.value);
     if (!existing.ok) {
       if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
-      if (call.environment().PI_SUBAGENT_CHILD) return blocked([problem('APPROVAL_UI_REQUIRED', 'specification', 'A subagent child cannot record the specification approval.')]);
       const confirmed = await call.approvals.confirmContent('specification', doc.workflowId, view, context.value, call.env.approvalUi, call.scope);
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
     }
@@ -45,5 +56,5 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
     const approved = await call.approvals.requireContentApproval('specification', d.workflowId, approvalViewDigest('specification', specificationApprovalView(d)), context.value);
     return approved.ok ? ready : {status: 'blocked', problems: approved.problems, artifactDigests: ready.artifactDigests};
   };
-  return handoffStage({...input, expectedStage: 'specification', nextStage: 'basic-design'}, gate, call, operation);
+  return handoffStage(handoff, gate, call, operation);
 }

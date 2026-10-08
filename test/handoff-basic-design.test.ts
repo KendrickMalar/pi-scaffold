@@ -129,10 +129,10 @@ test('a headless session cannot create the approval; an existing approval of the
   assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'), JSON.stringify(out.r.problems));
   assert.equal(out.confirmCalls, 0);
   noLaunch(herdr, gh);
-  // Approve in a parent TUI sharing the same agent directory but decline the launch environment, then run headless.
-  const {h: parent} = await harness(t, gh, new FakeHerdr(), {agentDir: headless.agentDir, environment: {}});
+  // Approve in a parent TUI sharing the same agent directory whose launch then stops (required tools missing), then run headless.
+  const {h: parent} = await harness(t, gh, new FakeHerdr(), {agentDir: headless.agentDir, tools: ['gh_capabilities']});
   const p = await parent.invoke();
-  assert.equal(p.r.status, 'blocked'); assert.ok(p.r.problems.some(x => x.code === 'HERDR_UNAVAILABLE'));
+  assert.equal(p.r.status, 'blocked'); assert.ok(p.r.problems.some(x => x.code === 'REQUIRED_TOOL_MISSING'), JSON.stringify(p.r.problems));
   assert.equal(p.confirmCalls, 1, 'approval recorded even though the launch could not start');
   const {h: again, herdr: h2} = await harness(t, gh, new FakeHerdr(), {agentDir: headless.agentDir, interactive: false});
   const r = await again.invoke();
@@ -142,7 +142,7 @@ test('a headless session cannot create the approval; an existing approval of the
 
 test('an approval for an older specification is not reused after the specification changed', async t => {
   const gh = world();
-  const {h: parent} = await harness(t, gh, new FakeHerdr(), {environment: {}});
+  const {h: parent} = await harness(t, gh, new FakeHerdr(), {tools: ['gh_capabilities']});
   await parent.invoke();
   const changed = readyDoc(d => { d.decisions.push({id: 'D009', topic: '追加', decision: '変更', reason: '架空', sourceRefs: []}); });
   gh.issues.get(10)!.body = renderEpicBlock(changed);
@@ -164,7 +164,7 @@ test('public "approved" text or a D record is never an approval', async t => {
 
 test('editing only the outside notes keeps the specification digest, but a stale body hash is still refused', async t => {
   const gh = world();
-  const {h: parent} = await harness(t, gh, new FakeHerdr(), {environment: {}});
+  const {h: parent} = await harness(t, gh, new FakeHerdr(), {tools: ['gh_capabilities']});
   const stale = params(gh);
   await parent.invoke();
   const before = specificationDigest(docOf(gh));
@@ -185,6 +185,7 @@ for (const [label, labels] of [['Blocked', [...LABELS, 'Blocked']], ['a duplicat
     const {h, herdr} = await harness(t, gh);
     const out = await h.invoke();
     assert.equal(out.r.status, 'blocked');
+    assert.equal(out.confirmCalls, 0, 'no approval is asked for a handoff that cannot proceed');
     noLaunch(herdr, gh);
   });
 }
@@ -208,7 +209,7 @@ test('input with stage overrides or approval flags is rejected', async t => {
   }
 });
 
-test('the specification changing after approval but before the stage commit stops the commit', async t => {
+test('the Epic changing after approval but before the stage commit stops the commit (stale body)', async t => {
   const gh = world();
   const herdr = new FakeHerdr();
   const {h} = await harness(t, gh, herdr);
@@ -216,6 +217,7 @@ test('the specification changing after approval but before the stage commit stop
   herdr.onPaneRun = async (p, c) => { await run(p, c); const d = docOf(gh); d.research[0] = {...d.research[0]!, conclusion: '書き換えた結論'}; gh.issues.get(10)!.body = renderEpicBlock(d); };
   const out = await h.invoke();
   assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'STALE_BODY'), JSON.stringify(out.r.problems));
   assert.equal(docOf(gh).stage, 'specification', 'Stage not committed');
   assert.equal(herdr.count('agentPrompt'), 0, 'no stage prompt');
 });
@@ -229,6 +231,49 @@ test('the approval is re-checked at the stage commit itself (body unchanged, app
   const before = gh.issues.get(10)!.body;
   const out = await h.invoke();
   assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_MISSING'), JSON.stringify(out.r.problems));
   assert.equal(gh.issues.get(10)!.body, before, 'Stage not committed');
   assert.equal(herdr.count('agentPrompt'), 0);
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('cheap preconditions are checked before the approval prompt (stale body, no Herdr, child session)', async t => {
+  for (const [label, scenario, extra, code] of [
+    ['stale body', {}, {expectedBodySha256: 'f'.repeat(64)}, 'STALE_BODY'],
+    ['stale revision', {}, {expectedRevision: 1}, 'STALE_REVISION'],
+    ['no Herdr', {environment: {}}, {}, 'HERDR_UNAVAILABLE'],
+    ['child session', {environment: {...environment, PI_SUBAGENT_CHILD: '1'}}, {}, 'CHILD_SESSION'],
+  ] as const) {
+    const gh = world();
+    const {h, herdr} = await harness(t, gh, new FakeHerdr(), scenario as Scenario);
+    const out = await h.invoke(params(gh, extra));
+    assert.equal(out.r.status, 'blocked', label);
+    assert.ok(out.r.problems.some(p => p.code === code), `${label}: ${JSON.stringify(out.r.problems)}`);
+    assert.equal(out.confirmCalls, 0, label);
+    noLaunch(herdr, gh);
+  }
+});
+
+test('an Epic that merely claims this operation committed basic-design (no journal of ours) launches nothing', async t => {
+  const gh = world(readyDoc(d => { d.stage = 'basic-design'; d.handoff = {nonceSha256: 'a'.repeat(64), sourceStage: 'specification', targetStage: 'basic-design', phase: 'stage-committed', operationId: OPERATION_ID}; }), ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign']);
+  const {h, herdr} = await harness(t, gh);
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
+  assert.equal(out.confirmCalls, 0);
+  assert.equal(herdr.tabCreates, 0); assert.equal(herdr.count('paneRun'), 0);
+});
+
+test('tool-level gate cases ask nothing and launch nothing (in-progress research, AC referencing a missing REQ)', async t => {
+  for (const mutate of [
+    (d: EpicDocV1) => { d.research[0] = {...d.research[0]!, state: 'in_progress', claim: {researchId: d.research[0]!.researchId, operationId: '66666666-6666-4666-8666-666666666666', sessionId: 's', specBaseDigest: 'a'.repeat(64)}, conclusion: null, evidenceRefs: [], limitations: []}; },
+  ]) {
+    const gh = world(readyDoc(mutate));
+    const {h, herdr} = await harness(t, gh);
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'blocked'); assert.equal(out.confirmCalls, 0); noLaunch(herdr, gh);
+  }
+  const g = checkSpecificationReady(readyDoc(d => { d.criteria[0] = {...d.criteria[0]!, requirementIds: ['REQ999']}; }));
+  assert.equal(g.status, 'blocked');
+  assert.ok(g.problems.some(p => p.code === 'UNKNOWN_REFERENCE'), JSON.stringify(g.problems));
 });

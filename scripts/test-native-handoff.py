@@ -160,10 +160,12 @@ class Acceptance(unittest.TestCase):
 
 
     def approve_in_parent_tui(self):
-        """Real Pi TUI (outside Herdr, same synthetic HOME): the tool asks the parent approval, Yes is chosen, then it stops at HERDR_UNAVAILABLE."""
+        """Real Pi TUI (not in a real Herdr pane, same synthetic HOME): the tool asks the parent approval, Yes is chosen, then it stops at HERDR_UNAVAILABLE."""
         master, slave = pty.openpty(); fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 140, 0, 0))
+        # Herdr-looking variables with a socket that does not exist: the cheap checks pass, the dialog is shown, then the driver cannot reach Herdr.
+        env = dict(self.env, HERDR_ENV='1', HERDR_WORKSPACE_ID='w0', HERDR_PANE_ID='w0:p0', HERDR_SOCKET_PATH=str(self.home / 'no-such-herdr.sock'))
         tui = subprocess.Popen(['pi-profile', 'launch', '--profile', 'developer', '--', '--approve', '--model', 'owned-fixture/fixture', '--thinking', 'medium'],
-                               stdin=slave, stdout=slave, stderr=slave, env=self.env, cwd=self.repo, start_new_session=True)
+                               stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self.repo, start_new_session=True)
         os.close(slave); os.set_blocking(master, False)
         data = b''
         def pump_until(pred, timeout):

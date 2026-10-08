@@ -43,6 +43,10 @@ async function readyForCommit(snapshot: IssueSnapshot, input: HandoffInput, gate
 }
 /** This operation has already committed the stage (its own handoff state is in the Epic). */
 const committedBy = (s: IssueSnapshot, input: HandoffInput) => s.doc.kind === 'epic' && s.doc.stage === input.nextStage && s.doc.handoff?.operationId === input.operationId;
+/** committedBy, and this journal really holds that operation (not abandoned). */
+export async function committedByUs(s: IssueSnapshot, input: HandoffInput, journal: {list(): Promise<{operationId: string; abandonedAt?: string}[]>}): Promise<boolean> {
+  return committedBy(s, input) && (await journal.list()).some(r => r.operationId === input.operationId && !r.abandonedAt);
+}
 
 async function herdrStep<T>(fn: () => Promise<T>): Promise<GhOutcome<T>> {
   try { return {status: 'ok', data: await fn(), problems: [], isError: false}; }
@@ -75,9 +79,10 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const context = await call.repoContext(input.repo, doc.workflowId);
   if (!context.ok) return blocked(context.problems);
   const ctx = context.value;
-  // Until this operation commits the stage itself, the Epic must still match the caller's input — also on resume.
-  if (!committedBy(snap.value, input)) { const p = await readyForCommit(snap.value, input, gate); if (p.length) return blocked(p); }
   const journal = call.journal(ctx);
+  // Until this operation commits the stage itself, the Epic must still match the caller's input — also on resume.
+  // An Epic that only *names* this operation (no live journal record here) is not trusted as our commit.
+  if (!(await committedByUs(snap.value, input, journal))) { const p = await readyForCommit(snap.value, input, gate); if (p.length) return blocked(p); }
   const busy = (await journal.list()).filter(r => !r.abandonedAt && r.operationId !== input.operationId && r.operation === operation && ['running', 'partial', 'unknown'].includes(r.status));
   if (busy.length) {
     const stuck = problem('HANDOFF_IN_PROGRESS', 'operationId', `Another handoff of this Epic is in progress (${busy.map(r => r.operationId).join(', ')}); resume it, or abandon it from the parent TUI to start over.`);
