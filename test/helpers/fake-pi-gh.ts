@@ -79,6 +79,8 @@ export class FakePiGh {
     if (kind === 'parent' && draft.parentIssue !== undefined) return FakePiGh.err('rejected', 'DRAFT_PARENT');
     if (kind === 'task' && !draft.parentIssue) return FakePiGh.err('rejected', 'DRAFT_PARENT');
     if (!draft.title?.trim() || /[\r\n]/.test(draft.title)) return FakePiGh.err('rejected', 'DRAFT_TITLE');
+    const policy = JSON.parse(readFileSync(args.templatePath.replace(/[^/]+$/, 'models.yml'), 'utf8')) as {agents: Record<string, {model: string; thinking: string}[]>};
+    for (const [role, a] of Object.entries(draft.agents)) if (!policy.agents[role]?.some(p => p.model === a.model && p.thinking === a.thinking)) return FakePiGh.err('rejected', 'AGENT_PROFILE');
     if (name === 'gh_issue_validate') return {result: {content: [], structuredContent: {status: 'validated'}}, isError: false};
     for (const l of draft.labels ?? []) if (!this.labels.has(l.toLowerCase())) return FakePiGh.err('rejected', 'LABEL_MISSING');
     const labels = [...template.matchAll(/^    label: (.+)$/gm)].map(m => m[1]!);

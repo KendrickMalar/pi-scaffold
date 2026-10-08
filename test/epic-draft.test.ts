@@ -243,13 +243,27 @@ test('a changed session model does not break resuming the same operation', async
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'unknown');
   const {createTool} = await loadToolModule('extensions/tools/epic-draft.ts');
-  const h2 = await createHarness(createTool, {scenario: {gh, defaultParams: base(), thinkingLevel: 'high'}});
-  t.after(h2.dispose);
-  const resumedElsewhere = await h2.invoke();
-  assert.notEqual(resumedElsewhere.r.problems[0]?.code, 'OPERATION_PAYLOAD_MISMATCH');
-  const resumed = await h.invoke();
+  const same = await createHarness(createTool, {scenario: {gh, defaultParams: base(), thinkingLevel: 'high', agentDir: h.agentDir}});
+  const resumed = await same.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
   assert.ok(gh.issues.get(10)!.body.includes('`medium`'), 'the recorded planner stays the one that created the draft');
+  assert.equal(gh.submitted.length, 1);
+});
+
+test('equivalent inputs are one operation; a different input under a recorded operation is refused, also in prepare', async t => {
+  const gh = withLabels();
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'applied');
+  for (const same of [{...base(), background: null}, {...base(), initialFacts: []}, {...base(), research: []}]) {
+    const out = await h.invoke(same);
+    assert.equal(out.r.status, 'noop', JSON.stringify(same) + JSON.stringify(out.r.problems));
+  }
+  for (const mode of ['prepare', 'publish']) {
+    const out = await h.invoke({...base(), title: '別の題', mode});
+    assert.equal(out.r.status, 'blocked', mode);
+    assert.ok(out.r.problems.some(p => p.code === 'OPERATION_PAYLOAD_MISMATCH'), mode);
+  }
+  assert.equal(gh.submitted.length, 1);
 });
 
 test('an unrelated Issue that merely mentions the operationId is never a candidate', async t => {

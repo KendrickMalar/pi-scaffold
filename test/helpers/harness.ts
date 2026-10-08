@@ -4,7 +4,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createJiti} from 'jiti';
-import {Check, Convert, Errors} from 'typebox/value';
+import {Check, Errors} from 'typebox/value';
+import {validateToolArguments} from '@earendil-works/pi-ai';
 import type {TSchema} from 'typebox';
 import {createRuntime, type ScaffoldRuntime} from '../../src/core/runtime.js';
 import type {GitReader} from '../../src/ports/git-read.js';
@@ -22,6 +23,8 @@ export interface Scenario {
   gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
   defaultParams?: Record<string, unknown>; herdr?: FakeHerdr; budgetMs?: number; now?: () => number;
+  /** Reuse another harness's agent directory (same journal), e.g. to resume from a different session model. */
+  agentDir?: string;
   /** Session model; null means Pi reports no model. */
   model?: {provider: string; id: string} | null; thinkingLevel?: string | null;
 }
@@ -39,7 +42,7 @@ export async function loadToolModule(relativePath: string): Promise<{createTool:
 
 export async function createHarness(createTool: CreateTool, {scenario = {}}: {scenario?: Scenario} = {}) {
   const home = await mkdtemp(join(tmpdir(), 'pi-scaffold-harness-'));
-  const agentDir = join(home, 'agent');
+  const agentDir = scenario.agentDir ?? join(home, 'agent');
   await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700});
   if (scenario.policy) await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify(scenario.policy), {mode: 0o600});
   const gh = scenario.gh ?? new FakePiGh();
@@ -83,9 +86,9 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     /** Pi's own pipeline: prepareArguments → structuredClone → Value.Convert → schema check → execute. */
     async invokeAsPi(raw: unknown): Promise<{piRejected: true; errors: string[]; ghWrites: number} | (Invocation & {piRejected: false})> {
       const prepared = tool.prepareArguments ? tool.prepareArguments(raw) : raw;
-      const args = structuredClone(prepared);
-      Convert(tool.parameters, args);
-      if (!Check(tool.parameters, args)) return {piRejected: true, errors: [...Errors(tool.parameters, args)].map(e => `${e.instancePath} ${e.message}`), ghWrites: 0};
+      let args: unknown;
+      try { args = validateToolArguments(tool as never, {type: 'toolCall', id: 'pi', name: tool.name, arguments: prepared} as never); }
+      catch (e) { return {piRejected: true, errors: [(e as Error).message], ghWrites: 0}; }
       return {...await this.invoke(args), piRejected: false};
     },
     dispose: () => rm(home, {recursive: true, force: true}),

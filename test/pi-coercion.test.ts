@@ -46,3 +46,20 @@ test('labels_ensure rejects a non-string operationId before coercion', async t =
   const h = await harness(t, 'extensions/tools/labels-ensure.ts', gh);
   assert.equal((await h.invokeAsPi({repo: 'example/demo', operationId: 123})).piRejected, true);
 });
+
+test('Pi-accepted optional nulls still work and format errors come back as ScaffoldResults', async t => {
+  const gh = new FakePiGh().seedLabels(labelDefinitions());
+  const h = await harness(t, 'extensions/tools/epic-draft.ts', gh);
+  for (const ok of [{...epic(), initialFacts: null}, {...epic(), research: null}, {...epic(), background: null}]) {
+    const out = await h.invokeAsPi(ok);
+    assert.ok(!out.piRejected && out.r.status === 'prepared', JSON.stringify(ok) + JSON.stringify(out));
+  }
+  const tab = await h.invokeAsPi({...epic(), title: 'CSV\t出力'});
+  assert.ok(!tab.piRejected && tab.r.status === 'blocked' && tab.r.problems.some(p => p.path === 'title' && p.code === 'INVALID_FORMAT'), JSON.stringify(tab));
+  for (const bad of [{...epic(), title: null}, {...epic(), originalRequest: {text: null, sourceRefs: []}}]) {
+    assert.equal((await h.invokeAsPi(bad)).piRejected, true, JSON.stringify(bad));
+  }
+  const labels = await harness(t, 'extensions/tools/labels-ensure.ts', new FakePiGh().seedLabels(labelDefinitions()));
+  const nullMode = await labels.invokeAsPi({repo: 'example/demo', operationId: OPERATION_ID, onMismatch: null});
+  assert.ok(!nullMode.piRejected && nullMode.r.status === 'noop', JSON.stringify(nullMode));
+});

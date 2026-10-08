@@ -95,17 +95,23 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   if (Buffer.byteLength(block) > LIMITS.bodyBytes - 1024) return blocked([problem('LIMIT_EXCEEDED', 'body', 'The Epic body would exceed the Issue body limit.')]);
 
   const dir = join(context.value.workflowStateRoot, 'artifacts', input.operationId);
-  const binding = {model: planner.model, thinking: planner.thinking as never, reason: 'Epic下書きを作成したセッションのモデル（記録のみ）'};
-  const snapshot = await buildTemplateSnapshot('epic', {planner: binding}, join(dir, 'template'), call.namespaceRoot);
-  const draft = {version: 1, template: TEMPLATE_IDS.epic, repo: input.repo, title: input.title, labels: [...EPIC_LABELS], fields: {[TEMPLATE_FIELD]: block}, agents: {planner: {model: planner.model, thinking: planner.thinking, reason: binding.reason}}};
   const draftPath = join(dir, 'draft.json');
   const journal = call.journal(context.value);
-  let draftText = JSON.stringify(draft, null, 2) + '\n';
-  if (await journal.load(input.operationId)) {
-    // A recorded operation keeps its own artifacts (e.g. the planner of the first call); never rewrite them.
-    try { draftText = (await readOwnedFile(draftPath, {root: call.namespaceRoot})).toString('utf8'); }
-    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw e; await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot}); }
-  } else await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot});
+  // The operation is bound to the normalized content (defaults applied), never to the session model.
+  const payloadDigest = taggedDigest('epic-draft', {repo: input.repo, title: input.title, doc: JSON.parse(canonicalDocJson(doc))});
+  const record = await journal.load(input.operationId);
+  if (record && record.payloadDigest !== payloadDigest) return blocked([problem('OPERATION_PAYLOAD_MISMATCH', 'operationId', 'This operationId was already used with different content.')]);
+  let recorded: {agents?: {planner?: {model: string; thinking: string; reason: string}}} | undefined;
+  if (record) {
+    try { recorded = JSON.parse((await readOwnedFile(draftPath, {root: call.namespaceRoot})).toString('utf8')); }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw e; }
+  }
+  // A recorded operation keeps the planner of its first call, so its draft and policy snapshot stay consistent.
+  const plannerBinding = recorded?.agents?.planner ?? {model: planner.model, thinking: planner.thinking, reason: 'Epic下書きを作成したセッションのモデル（記録のみ）'};
+  const snapshot = await buildTemplateSnapshot('epic', {planner: plannerBinding as never}, join(dir, 'template'), call.namespaceRoot);
+  const draft = {version: 1, template: TEMPLATE_IDS.epic, repo: input.repo, title: input.title, labels: [...EPIC_LABELS], fields: {[TEMPLATE_FIELD]: block}, agents: {planner: plannerBinding}};
+  const draftText = JSON.stringify(draft, null, 2) + '\n';
+  await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot});
   const args = {draftPath, templatePath: snapshot.templatePath};
   const base: EpicDraftData = {draftRef: {path: draftPath, sha256: sha256Text(draftText)}, workflowId, missingFields: missingFields(doc)};
 
@@ -125,9 +131,6 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
     // Only a readable managed Epic created by this operation counts; mentions of the id elsewhere are ignored.
     return r.data!.filter(i => i!.body?.includes(input.operationId)).filter(i => { const p = parseIssueBody(i!.body ?? ''); return p.ok && p.value.doc.kind === 'epic' && p.value.doc.createOperationId === input.operationId; }).map(i => ({number: i!.number}));
   };
-  // Bound to the caller's input, not to the session model, so a resumed call from another model is the same operation.
-  const {mode: _mode, ...content} = input;
-  const payloadDigest = taggedDigest('epic-draft', content);
   const result = await withOperation({operation, repo: input.repo, workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     let found: number | undefined;
     const pending = run.record.steps.some(s => s.name === 'submit' && (s.phase === 'requested' || s.phase === 'unknown'));

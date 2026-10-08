@@ -1,5 +1,5 @@
 // Pi entry helpers: TypeBox schemas and the adapter from Pi's tool context to the node-only services.
-import {Type, type TSchema} from '@earendil-works/pi-ai';
+import {Type, validateToolArguments, type TSchema} from '@earendil-works/pi-ai';
 import type {ExtensionToolContext, ToolDefinition} from '@earendil-works/pi-coding-agent';
 import {problem, type Decoded, type ScaffoldResult} from '../dist/src/core/contracts.js';
 import {createCallScope} from '../dist/src/core/lifecycle.js';
@@ -48,37 +48,43 @@ export interface ScaffoldToolSpec<I> {
   run(input: I, call: ToolCall): Promise<ScaffoldResult>;
 }
 
-const TYPE_CODES = new Set(['INVALID_TYPE', 'INVALID_INTEGER', 'INVALID_FORMAT', 'INVALID_VALUE', 'INVALID_WAVE']);
-/** Replaces the value at a decoder path (`a.b[0]`) with one Pi's Value.Convert cannot coerce into the schema type. */
-function poison(root: unknown, path: string): void {
-  const keys = path.match(/[^.[\]]+/g) ?? [];
-  if (!keys.length || typeof root !== 'object' || root === null) return;
-  let node = root as Record<string, unknown>;
-  for (const key of keys.slice(0, -1)) {
-    const next = node[key];
-    if (typeof next !== 'object' || next === null) return;
-    node = next as Record<string, unknown>;
+/** Paths of primitive values (incl. null) that Pi's own argument pipeline would rewrite (e.g. 42 → "42", null → "null"). */
+function coercedPaths(raw: unknown, converted: unknown, path: (string | number)[] = []): (string | number)[][] {
+  if (Array.isArray(raw)) return Array.isArray(converted) ? raw.flatMap((v, i) => coercedPaths(v, converted[i], [...path, i])) : [path];
+  if (raw !== null && typeof raw === 'object') {
+    if (converted === null || typeof converted !== 'object' || Array.isArray(converted)) return [path];
+    // A key Pi removed (an optional null) is not a coercion.
+    return Object.entries(raw).flatMap(([k, v]) => Object.hasOwn(converted, k) ? coercedPaths(v, (converted as Record<string, unknown>)[k], [...path, k]) : []);
   }
-  node[keys.at(-1)!] = {invalidInput: 'This value has the wrong type and is not converted.'};
+  return Object.is(raw, converted) ? [] : [path];
 }
 /**
- * Pi converts tool arguments to the schema types (42 → "42", "1" → 1) after prepareArguments and before
- * validation. Type errors found on the raw arguments are made unconvertible here, so Pi rejects the call and the
- * tool never runs on coerced input.
+ * Pi converts tool arguments to the schema types after prepareArguments and before validation. Values that this
+ * conversion would rewrite are replaced by an unconvertible marker, so Pi rejects the call and the tool never runs
+ * on coerced input. Everything else (format/semantic errors) reaches the decoder and comes back as a ScaffoldResult.
  */
-export function strictArguments<I>(decode: (raw: unknown) => Decoded<I>) {
+export function strictArguments(parameters: TSchema, name: string) {
   return (raw: unknown): unknown => {
-    const decoded = decode(raw);
-    if (decoded.ok || typeof raw !== 'object' || raw === null) return raw;
-    const copy = structuredClone(raw);
-    for (const p of decoded.problems) if (TYPE_CODES.has(p.code)) poison(copy, p.path);
+    let converted: unknown;
+    try { converted = validateToolArguments({name, description: '', parameters} as never, {type: 'toolCall', id: 'strict', name, arguments: raw} as never); }
+    catch { return raw; }
+    const paths = coercedPaths(raw, converted);
+    if (!paths.length) return raw;
+    const copy = structuredClone(raw) as Record<string | number, unknown>;
+    for (const p of paths) {
+      if (!p.length) return {invalidInput: 'Arguments have the wrong type and are not converted.'};
+      let node = copy;
+      for (const k of p.slice(0, -1)) node = node[k] as Record<string | number, unknown>;
+      const original = node[p.at(-1)!];
+      node[p.at(-1)!] = {invalidInput: `${original === null ? 'null' : typeof original} ${JSON.stringify(original)} has the wrong type and is not converted.`};
+    }
     return copy;
   };
 }
 
 export function defineScaffoldTool<I>(runtime: ScaffoldRuntime, spec: ScaffoldToolSpec<I>): ToolDefinition {
   return {
-    prepareArguments: strictArguments(spec.decode),
+    prepareArguments: strictArguments(spec.parameters, spec.name),
     name: spec.name, label: spec.label, description: spec.description, parameters: spec.parameters, outputSchema: scaffoldOutputSchema,
     exposure: 'direct', executionMode: spec.executionMode,
     annotations: {readOnlyHint: spec.readOnly, destructiveHint: !spec.readOnly, idempotentHint: spec.readOnly, openWorldHint: true},
