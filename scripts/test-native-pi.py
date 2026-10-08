@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_specification', 'scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -312,6 +312,34 @@ class Acceptance(unittest.TestCase):
         self.assertIn('Validation failed', results)
         self.assertNotIn('"status":"prepared"', results)
         self.assertFalse(list((self.agent / 'pi-scaffold').rglob('draft.json')) if (self.agent / 'pi-scaffold').exists() else [], 'the tool body never ran')
+
+    def test_specification_update_through_real_pi_gh(self):
+        body = subprocess.check_output(['node', '--input-type=module', '-e',
+            "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';"
+            "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'));d.stage='specification';"
+            "process.stdout.write('外のメモ\\n\\n'+renderEpicBlock(d)+'\\n\\n末尾メモ\\n')"], cwd=ROOT, text=True)
+        issue = json.loads((self.state / 'issue-10.json').read_text()); issue['body'] = body
+        (self.state / 'issue-10.json').write_text(json.dumps(issue))
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
+        self.tool = 'scaffold_specification_update'
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': 1, 'expectedBodySha256': hashlib.sha256(body.encode()).hexdigest(),
+                          'facts': [{'questionId': 'Q101', 'kind': 'question', 'question': '対象は？', 'answer': None, 'required': True, 'sourceRef': None}],
+                          'requirements': [{'id': 'REQ001', 'description': '一覧をCSVで保存できる'}], 'criteria': [], 'constraints': [], 'outOfScope': None, 'decisions': []}
+        results = []
+        for _ in range(2):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['applied', 'noop'], results)
+        self.assertEqual(len([w for w in self.writes() if 'patch' in w]), 1, 'one conditional body edit across both runs')
+        after = json.loads((self.state / 'issue-10.json').read_text())['body']
+        self.assertTrue(after.startswith('外のメモ\n\n') and after.endswith('\n\n末尾メモ\n'), 'outside notes are preserved')
+        self.assertIn('"revision": 2', after)
+        self.assertIn('criteria.REQ001', json.dumps(results[0]['data']['missingFields']))
+        self.assertIn('questions.Q101.answer', results[0]['data']['missingFields'])
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()
