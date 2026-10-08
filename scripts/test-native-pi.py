@@ -189,7 +189,7 @@ class Acceptance(unittest.TestCase):
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
         self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
-        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 20)
+        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 21, 'pi-gh with gh_labels_list (KendrickMalar/pi-gh#5) is required')
 
     def test_nested_write_without_grant_is_blocked(self):
         self.run_print()
@@ -248,7 +248,7 @@ class Acceptance(unittest.TestCase):
         return json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
             "import {labelDefinitions} from './dist/src/core/label-definitions.js';process.stdout.write(JSON.stringify(labelDefinitions()))"], cwd=ROOT, text=True))
 
-    def test_labels_ensure_creates_missing_and_resumes(self):
+    def test_labels_ensure_creates_only_missing(self):
         defs = self.label_defs()
         seeded = [d for d in defs if d['name'] not in ('Blocked', 'Wave: 200')]
         (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(seeded)]))

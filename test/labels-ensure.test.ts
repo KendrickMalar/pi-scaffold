@@ -4,6 +4,7 @@ import {labelDefinitions, waveLabelDefinition, FIXED_LABEL_DEFINITIONS} from '..
 import {FIXED_LABEL_NAMES} from '../src/core/label-policy.js';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh, PI_GH_020_OPERATIONS} from './helpers/fake-pi-gh.js';
+import type {ToolOutcome} from '../src/ports/pi-gh.js';
 import {OPERATION_ID} from './helpers/docs.js';
 
 const params = (extra: Record<string, unknown> = {}) => ({repo: 'example/demo', operationId: OPERATION_ID, ...extra});
@@ -82,16 +83,16 @@ test('update without approval/permission changes nothing', async t => {
   assert.equal(gh.labels.get('type: scaffold')?.color, 'ffffff');
 });
 
-test('a preview error other than LABEL_MISSING never leads to creation', async t => {
+test('a failed label listing never leads to creation', async t => {
   const gh = new FakePiGh();
-  gh.overrides.set('gh_labels_preview', () => FakePiGh.err('rejected', 'GITHUB_READ'));
+  gh.overrides.set('gh_labels_list', () => FakePiGh.err('rejected', 'GITHUB_LIMIT'));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'blocked');
-  assert.ok(out.r.problems.some(p => p.code === 'GITHUB_READ'));
+  assert.ok(out.r.problems.some(p => p.code === 'GITHUB_LIMIT'));
   assert.equal(applies(gh), 0);
 });
 
-test('the call budget pauses as partial and the same operation resumes without rechecking or recreating', async t => {
+test('the call budget pauses as partial and the same operation resumes without recreating', async t => {
   let clock = 0;
   const gh = new FakePiGh().seedLabels(all().slice(0, 100));
   gh.onCall = () => { clock += 1000; };
@@ -99,15 +100,14 @@ test('the call budget pauses as partial and the same operation resumes without r
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial');
   assert.equal(first.r.resumeToken, OPERATION_ID);
-  assert.equal(applies(gh), 0, 'nothing is created before every definition is checked');
   const other = await h.invoke(params({operationId: '55555555-5555-4555-8555-555555555555'}));
   assert.ok(other.r.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
   let last = first;
   for (let i = 0; i < 40 && last.r.status === 'partial'; i++) last = await h.invoke();
   assert.equal(last.r.status, 'applied', JSON.stringify(last.r.problems));
-  assert.equal(gh.count('gh_labels_preview'), 211, 'each definition is previewed exactly once across calls');
-  assert.equal(applies(gh), 111);
+  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-create').length, 111, 'no duplicate creation across calls');
   assert.equal(gh.labels.size, 211);
+  assert.equal(gh.count('gh_labels_preview'), 0);
 });
 
 test('an unknown create stops later applies and is reconciled on resume', async t => {
@@ -147,8 +147,67 @@ test('input is strict: no partial wave selection, unknown keys or modes', async 
 test('untrusted projects and missing pi-gh label tools stop before any GitHub call', async t => {
   const gh = new FakePiGh();
   assert.ok((await (await harness(t, gh, {trusted: false})).invoke()).r.problems.some(p => p.code === 'UNTRUSTED_PROJECT'));
-  const old = new FakePiGh(); old.operations = PI_GH_020_OPERATIONS.filter(o => o !== 'gh_labels_apply');
+  const old = new FakePiGh(); old.operations = old.operations.filter(o => o !== 'gh_labels_apply');
   const out = await (await harness(t, old)).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING'));
-  assert.equal(old.count('gh_labels_preview'), 0);
+  assert.equal(old.count('gh_labels_list'), 0);
+});
+
+test('an update that was applied but reported unknown is reconciled, not stuck', async t => {
+  const defs = all(); defs[0]!.color = 'ffffff';
+  const gh = new FakePiGh().seedLabels(defs);
+  let first = true;
+  gh.overrides.set('gh_labels_apply', () => { if (!first) return undefined; first = false; gh.labels.set('type: scaffold', {...gh.labels.get('type: scaffold')!, color: '7057ff'}); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome; });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke(params({onMismatch: 'update'}))).r.status, 'unknown');
+  const resumed = await h.invoke(params({onMismatch: 'update'}));
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(applies(gh), 1, 'the uncertain edit is confirmed by reading, not resent');
+  const other = await h.invoke(params({operationId: '55555555-5555-4555-8555-555555555555'}));
+  assert.equal(other.r.status, 'noop');
+});
+
+test('a label created by someone else meanwhile does not dead-end the operation', async t => {
+  let clock = 0;
+  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
+  const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  gh.seedLabels([labelDefinitions().find(d => d.name === 'Wave: 200')!]);
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(applies(gh), 1);
+});
+
+test('labels deleted while paused are detected on resume, never reported unchanged', async t => {
+  let clock = 0;
+  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
+  const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
+  assert.equal((await h.invoke()).r.status, 'partial');
+  gh.labels.delete('blocked');
+  let resumed = await h.invoke();
+  for (let i = 0; i < 5 && resumed.r.status === 'partial'; i++) resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  const data = resumed.r.data as {created: string[]; unchanged: string[]};
+  assert.ok(data.created.includes('Blocked'));
+  assert.ok(!data.unchanged.includes('Blocked'));
+  assert.ok(gh.labels.has('blocked'));
+});
+
+test('success requires a final read-back of every definition', async t => {
+  const gh = new FakePiGh().seedLabels(all().filter(d => d.name !== 'Wave: 1'));
+  let lists = 0;
+  gh.overrides.set('gh_labels_list', () => { lists++; if (lists === 2) gh.labels.delete('blocked'); return undefined; });
+  const out = await (await harness(t, gh)).invoke();
+  assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'LABEL_READBACK_MISMATCH'));
+});
+
+test('pi-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t => {
+  const old = new FakePiGh(); old.operations = [...PI_GH_020_OPERATIONS];
+  const out = await (await harness(t, old)).invoke();
+  assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING' && p.path === 'gh_labels_list'));
+  assert.equal(old.calls.filter(c => c.name !== 'gh_capabilities').length, 0);
 });
