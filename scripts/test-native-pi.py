@@ -86,7 +86,7 @@ class Acceptance(unittest.TestCase):
             "process.stdout.write(renderEpicBlock(JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'))))"], cwd=ROOT, text=True)
         self.body = body
         issue = {'id': 1010, 'node_id': 'I_example10', 'number': 10, 'title': '一覧をCSVで保存できるようにする', 'body': body, 'state': 'open',
-                 'labels': [{'id': 1, 'name': 'Type: Scaffold'}, {'id': 2, 'name': 'Scope: Epic'}], 'html_url': 'https://github.com/example/demo/issues/10'}
+                 'labels': [{'id': 9001, 'node_id': 'LA_9001', 'name': 'Type: Scaffold', 'color': '7057ff', 'description': 'Scaffold'}, {'id': 9002, 'node_id': 'LA_9002', 'name': 'Scope: Epic', 'color': '5319e7', 'description': 'Epic'}], 'html_url': 'https://github.com/example/demo/issues/10'}
         (self.state / 'issue-10.json').write_text(json.dumps(issue))
         self.bin = self.home / 'bin'; self.bin.mkdir()
         shutil.copyfile(ROOT / 'test/native/fake-gh.mjs', self.bin / 'gh'); (self.bin / 'gh').chmod(0o755)
@@ -188,8 +188,8 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual([n for n in names if n and n.startswith('scaffold_')], [], 'no unimplemented scaffold tool may be registered')
-        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 20)
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_labels_ensure'], 'only accepted scaffold tools are registered')
+        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 21, 'pi-gh with gh_labels_list (KendrickMalar/pi-gh#5) is required')
 
     def test_nested_write_without_grant_is_blocked(self):
         self.run_print()
@@ -243,6 +243,34 @@ class Acceptance(unittest.TestCase):
             p.stdin.close(); p.stdin = None
             try: p.communicate(timeout=3)
             except subprocess.TimeoutExpired: p.terminate(); p.communicate(timeout=3)
+
+    def label_defs(self):
+        return json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
+            "import {labelDefinitions} from './dist/src/core/label-definitions.js';process.stdout.write(JSON.stringify(labelDefinitions()))"], cwd=ROOT, text=True))
+
+    def test_labels_ensure_creates_only_missing(self):
+        defs = self.label_defs()
+        seeded = [d for d in defs if d['name'] not in ('Blocked', 'Wave: 200')]
+        (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(seeded)]))
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_label_create'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
+        self.tool, self.tool_args = 'scaffold_labels_ensure', {'repo': 'example/demo', 'operationId': OPERATION_ID}
+        statuses = []
+        for _ in range(12):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=150)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            statuses.append(self.last_result()['status'])
+            if statuses[-1] != 'partial': break
+        self.assertEqual(statuses[-1], 'applied', statuses)
+        self.assertTrue(all(s == 'partial' for s in statuses[:-1]), statuses)
+        writes = self.writes()
+        self.assertEqual(sorted(w['label']['name'] for w in writes), ['Blocked', 'Wave: 200'])
+        final = {l['name']: (l['color'], l['description']) for l in json.loads((self.state / 'labels.json').read_text())}
+        self.assertEqual(final, {d['name']: (d['color'], d['description']) for d in defs})
+        self.assertFalse(any('/issues/' in w.get('endpoint', '') for w in writes), 'no Issue label changes')
+        print(f'\n  labels_ensure calls: {statuses}', end=' ')
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

@@ -2,7 +2,13 @@
 
 [Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが実行できる個別のTypeScriptツールとして提供する拡張です。
 
-現在は共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の実装段階です。AI用ツールはまだ1つも登録されていません。npm公開・Piへの導入はしていません。
+共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の上に、受け入れ済みのツールだけを登録しています。npm公開・Piへの導入はしていません。
+
+| ツール | 内容 |
+|---|---|
+| `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を一覧1回で照合し、不足分だけpi-gh経由で作成。最後に全件を読み戻してから成功を返す。色・説明・大小文字の違いは既定で停止（`onMismatch: "update"`で更新）。無関係ラベルの改名・削除、Issueへの付与はしない。1回の呼び出しは約60秒で区切り、`partial`なら同じoperationIdで続きを実行 |
+
+pi-ghの`gh_labels_list`（[KendrickMalar/pi-gh#5](https://github.com/KendrickMalar/pi-gh/issues/5)）が必要です。ない版では`CAPABILITY_MISSING`で止まります。ラベル作成はpi-ghの承認を1件ずつ通ります。`onMismatch: "update"`の更新はpi-ghのlabel-editを使うため、pi-gh側で影響範囲としてIssue一覧を読みます。Issueが非常に多いリポジトリでは更新が`GITHUB_LIMIT`で止まることがあります（作成だけなら影響しません）。TUIで承認するか、所有者がpi-ghの許可ファイルに`gh_label_create`を明示した場合だけ自動で進みます。
 
 開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.2.0のcheckout、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。
 

@@ -149,3 +149,11 @@ test('bodies masked by pi-gh secret redaction are not usable snapshots', async (
   const r = await readIssue('example/demo', 10, new PiGhBridge(new FakePiGh().add(masked).execute), makeScope());
   assert.ok(!r.ok && r.problems.some(p => p.code === 'BODY_MASKED'));
 });
+
+test('gh_labels_list is a read: timeouts apply even for interactive callers', async () => {
+  const gh = new FakePiGh();
+  gh.overrides.set('gh_labels_list', () => new Promise<never>(() => {}));
+  const r = await new PiGhBridge(gh.execute, {timeoutMs: 20, interactiveWrites: true}).call('gh_labels_list', {repo: 'example/demo'}, anyData, makeScope());
+  assert.equal(r.status, 'blocked');
+  assert.ok(r.problems.some(p => p.code === 'TIMEOUT'));
+});

@@ -39,7 +39,7 @@ export function createCallScope(runtime: RuntimeScope, identity: () => {sessionI
   };
 }
 
-class Stop extends Error { constructor(readonly status: ScaffoldStatus, readonly problems: Problem[]) { super(status); } }
+class Stop extends Error { constructor(readonly status: ScaffoldStatus, readonly problems: Problem[], readonly data?: unknown) { super(status); } }
 export type Reconcile = () => Promise<'applied' | 'not-applied' | 'unknown'>;
 export interface OperationRun {
   readonly record: OperationRecord;
@@ -49,7 +49,11 @@ export interface OperationRun {
   /** Throws (stops the operation) if the session changed. */
   checkpoint(): void;
   /** Stop with a definite reason; becomes `partial` once any write of this operation is done. */
-  stop(problems: Problem[]): never;
+  stop(problems: Problem[], data?: unknown): never;
+  /** Stop for now (e.g. call budget used up) and resume later with the same operationId: always `partial`. */
+  pause(problems: Problem[], data?: unknown): never;
+  /** Records read-only progress (no remote change) so a resumed run can skip it. */
+  note(step: string, data: unknown): void;
   /**
    * Performs one remote change exactly once. A step left `requested`/`unknown` by an earlier run is never
    * resent blindly: `reconcile` must read the remote state back first.
@@ -70,7 +74,7 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
   const record = begun.record;
   if (begun.kind === 'completed') return {...base, status: 'noop', data: record.result as T, problems: []};
   /** A remote change may exist: finished, or requested with an unconfirmed outcome. */
-  const anyDone = () => record.steps.some(s => s.phase === 'done' || s.phase === 'requested' || s.phase === 'unknown');
+  const anyDone = () => record.steps.some(s => (s.phase === 'done' && !s.note) || s.phase === 'requested' || s.phase === 'unknown');
   const uncertain = () => record.steps.some(s => s.phase === 'requested' || s.phase === 'unknown');
   const save = () => spec.journal.save(record);
   let inFlight = false;
@@ -78,7 +82,13 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
     record, scope: spec.scope,
     done: step => record.steps.find(s => s.name === step && s.phase === 'done')?.data,
     checkpoint() { if (!spec.scope.isCurrent()) throw new Stop(anyDone() ? 'partial' : 'cancelled', [problem('STALE_SCOPE', '', 'Session changed or the call was cancelled; stopped before the next change.')]); },
-    stop(problems) { throw new Stop(anyDone() ? 'partial' : 'blocked', problems); },
+    stop(problems, data) { throw new Stop(anyDone() ? 'partial' : 'blocked', problems, data); },
+    pause(problems, data) { throw new Stop('partial', problems, data); },
+    note(step, data) {
+      const prev = record.steps.find(s => s.name === step);
+      if (prev && prev.phase !== 'done') throw new Error(`Step ${step} is a pending write, not a note.`);
+      if (prev) prev.data = data; else record.steps.push({name: step, phase: 'done', data, note: true});
+    },
     async write(step, fn, options = {}) {
       const prev = record.steps.find(s => s.name === step);
       if (prev?.phase === 'done') return prev.data as never;
@@ -120,7 +130,7 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
     const result = await work(run);
     return await finish(result.status, [], result.data);
   } catch (error) {
-    if (error instanceof Stop) return finish(error.status, error.problems);
+    if (error instanceof Stop) return finish(error.status, error.problems, error.data);
     if (inFlight) return finish('unknown', [problem('WRITE_INTERRUPTED', '', 'A change was requested but its outcome could not be confirmed; inspect GitHub before retrying.')]);
     return finish(anyDone() ? 'partial' : 'blocked', [problem('INTERNAL_ERROR', '', (error as Error)?.message ?? 'Operation failed.')]);
   }
