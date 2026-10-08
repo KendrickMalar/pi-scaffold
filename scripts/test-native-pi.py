@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -366,6 +366,25 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(len([w for w in self.writes() if 'patch' in w]), 1)
         after = json.loads((self.state / 'issue-10.json').read_text())['body']
         self.assertIn('"state": "in_progress"', after); self.assertIn(f'"operationId": "{OPERATION_ID}"', after)
+
+    def test_research_begin_then_resolve_through_real_pi_gh(self):
+        self.test_research_begin_through_real_pi_gh()
+        body = json.loads((self.state / 'issue-10.json').read_text())['body']
+        self.tool = 'scaffold_research_resolve'
+        resolve_op = '99999999-9999-4999-8999-999999999999'
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': resolve_op, 'expectedRevision': 2, 'expectedBodySha256': hashlib.sha256(body.encode()).hexdigest(),
+                          'resolutions': [{'researchId': 'R001', 'claimOperationId': OPERATION_ID, 'conclusion': 'p95で4.2秒（架空）', 'evidenceRefs': ['https://example.com/bench/1'], 'limitations': ['開発機のみ'], 'disposition': 'resolved'}]}
+        results = []
+        for _ in range(2):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['applied', 'noop'], results)
+        self.assertEqual(results[0]['data']['evidence'], [{'ref': 'https://example.com/bench/1', 'kind': 'url', 'checked': 'format-only'}])
+        self.assertEqual(len([w for w in self.writes() if 'patch' in w]), 2, 'one edit to begin, one to resolve')
+        after = json.loads((self.state / 'issue-10.json').read_text())['body']
+        self.assertIn('"state": "resolved"', after); self.assertIn('結論：p95で4.2秒（架空）', after)
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

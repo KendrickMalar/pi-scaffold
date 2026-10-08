@@ -71,3 +71,41 @@ export function researchBrief(doc: EpicDocV1, researchId: string, epic: string):
     stopConditions: [...RESEARCH_STOP_CONDITIONS], purpose: doc.purpose, background: doc.background, epic, specBaseDigest: specBaseDigest(doc),
   };
 }
+
+// ---- #8 results -----------------------------------------------------------------------------------
+
+export type ResearchDisposition = 'resolved' | 'needs-more-work';
+export interface ResearchResolution {
+  researchId: string; claimOperationId: UUID; conclusion: string | null; evidenceRefs: string[]; limitations: string[]; disposition: ResearchDisposition;
+}
+export type EvidenceRef = {kind: 'url'; ref: string} | {kind: 'artifact'; ref: string; path: string; sha256: Sha256};
+
+const ARTIFACT_RE = /^artifact:([^@\s]+)@sha256:([0-9a-f]{64})$/;
+/** Evidence is an https URL or an owned artifact (`artifact:<path under the workflow's artifacts/>@sha256:<hex>`). Format only. */
+export function parseEvidenceRef(ref: string): EvidenceRef | undefined {
+  const m = ARTIFACT_RE.exec(ref);
+  if (m) {
+    const path = m[1]!;
+    if (path.startsWith('/') || path.split(/[\\/]/).some(s => s === '..' || s === '' || s === '.')) return undefined;
+    return {kind: 'artifact', ref, path, sha256: m[2]!};
+  }
+  if (/\s/.test(ref)) return undefined;
+  try { const u = new URL(ref); return u.protocol === 'https:' && u.hostname ? {kind: 'url', ref} : undefined; } catch { return undefined; }
+}
+
+/** The research item as it looks once this resolution is applied. Submitted results stay visible; pending holds no claim. */
+export function applyResolution(item: ResearchItem, res: ResearchResolution): ResearchItem {
+  return {...item, state: res.disposition === 'resolved' ? 'resolved' : 'pending', claim: null, conclusion: res.conclusion, evidenceRefs: [...res.evidenceRefs], limitations: [...res.limitations]};
+}
+
+/** 'done' when the item already shows exactly this result; otherwise the claim must be the one named, on the current baseline. */
+export function checkResolution(doc: EpicDocV1, res: ResearchResolution, path: string): {done: true} | {done: false; problems: Problem[]} {
+  const item = doc.research.find(r => r.researchId === res.researchId);
+  if (!item) return {done: false, problems: [problem('UNKNOWN_RESEARCH', `${path}.researchId`, `${res.researchId} is not registered in the Epic.`)]};
+  if (JSON.stringify(applyResolution(item, res)) === JSON.stringify(item)) return {done: true};
+  if (item.state !== 'in_progress' || !item.claim || item.claim.operationId !== res.claimOperationId) {
+    return {done: false, problems: [problem('CLAIM_MISMATCH', `${path}.claimOperationId`, `${res.researchId} is not in progress under operation ${res.claimOperationId}; start it with scaffold_research_begin first.`)]};
+  }
+  if (item.claim.specBaseDigest !== specBaseDigest(doc)) return {done: false, problems: [problem('STALE_CLAIM', `${path}.claimOperationId`, `${res.researchId} was claimed on another specification baseline; the result is not applied.`)]};
+  return {done: false, problems: []};
+}
