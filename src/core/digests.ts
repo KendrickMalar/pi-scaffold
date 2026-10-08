@@ -18,8 +18,8 @@ export function canonicalJson(value: unknown): string {
 /** Domain-separated digest so different digest kinds can never be confused with each other. */
 export function taggedDigest(tag: string, value: unknown): Sha256 { return sha256Text(`pi-scaffold:${tag}:v1\n` + canonicalJson(value)); }
 
-/** Order-insensitive digest of an Issue's label names. */
-export function labelsSha256(labels: readonly string[]): Sha256 { return taggedDigest('labels', [...labels].sort()); }
+/** Label-set digest shared with pi-gh *_if_current: sha256 of JSON.stringify(names sorted by UTF-16 code units). */
+export function labelsSha256(labels: readonly string[]): Sha256 { return sha256Text(JSON.stringify([...labels].sort())); }
 
 /** Specification inputs that research claims are bound to (excludes research progress/results and decisions). */
 export function specBaseDigest(doc: EpicDocV1): Sha256 {

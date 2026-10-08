@@ -18,11 +18,16 @@ export interface ToolDefinitionLike {
   execute(id: string, params: unknown, signal: AbortSignal | undefined, update: unknown, ctx: unknown): Promise<{structuredContent: unknown; isError: boolean; content: unknown[]}>;
 }
 export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinitionLike;
-export interface FakeHerdr { calls: {command: string; args: unknown}[] }
+import type {HerdrPort} from '../../src/handoff/herdr-client.js';
+export interface FakeHerdrLike { calls: {command: string; args: unknown}[] }
 export interface Scenario {
   gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
-  defaultParams?: Record<string, unknown>; herdr?: FakeHerdr; budgetMs?: number; now?: () => number;
+  defaultParams?: Record<string, unknown>; herdr?: FakeHerdrLike & Partial<HerdrPort>;
+  /** Process environment seen by the tool (HERDR_*, PI_SUBAGENT_CHILD…). */
+  environment?: Record<string, string | undefined>; waitMs?: number; pollMs?: number;
+  /** Tool names registered in the calling session (ctx.tools). */
+  tools?: string[]; budgetMs?: number; now?: () => number;
   /** Reuse another harness's agent directory (same journal), e.g. to resume from a different session model. */
   agentDir?: string;
   /** Session model; null means Pi reports no model. */
@@ -51,7 +56,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     run: async () => ({code: 1, stdout: ''}),
     repoIdentity: async () => ({repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', origin: scenario.origin ?? 'https://github.com/example/demo.git'}),
   };
-  const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});
+  const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.environment ? {environment: () => scenario.environment!} : {}), ...(scenario.herdr && 'tabCreate' in scenario.herdr ? {herdr: () => scenario.herdr as HerdrPort} : {}), ...(scenario.waitMs !== undefined ? {waitMs: scenario.waitMs} : {}), ...(scenario.pollMs !== undefined ? {pollMs: scenario.pollMs} : {}), ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});
   const tool = createTool(runtime);
   let confirmCalls = 0;
   const ctx = {
@@ -59,6 +64,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     isProjectTrusted: () => scenario.trusted !== false,
     executeTool: (name: string, args: unknown, options?: {signal?: AbortSignal}) => gh.execute(name, args, options),
     ui: {confirm: async () => { confirmCalls++; const c = scenario.confirm ?? true; return typeof c === 'function' ? c() : c; }},
+    tools: (scenario.tools ?? []).map(name => ({name})),
     sessionManager: {getSessionId: () => 'session-harness', getLeafId: () => 'leaf-harness', getEntries: () => scenario.sessionEntries ?? []},
     modelRegistry: {getAvailable: () => (scenario.availableModels ?? []).map(m => ({provider: m.split('/')[0], id: m.split('/').slice(1).join('/')}))},
     model: scenario.model === null ? undefined : (scenario.model ?? {provider: 'example-provider', id: 'planner-1'}),
