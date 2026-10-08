@@ -5,11 +5,12 @@ import {createTool as labelsEnsure} from './tools/labels-ensure.ts';
 import {createTool as epicDraft} from './tools/epic-draft.ts';
 import {createTool as handoffSpecification} from './tools/handoff-specification.ts';
 import {createTool as specificationUpdate} from './tools/specification-update.ts';
+import {createTool as researchBegin} from './tools/research-begin.ts';
 
 export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinition;
 
 /** Accepted tools only (#3〜#16 are added after acceptance). */
-export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate];
+export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate, researchBegin];
 
 export function registerTools(pi: ExtensionAPI, runtime: ScaffoldRuntime): string[] {
   const names: string[] = [];
