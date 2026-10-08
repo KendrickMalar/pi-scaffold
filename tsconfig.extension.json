@@ -4,5 +4,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["extensions/**/*.ts"]
+  "include": [
+    "extensions/**/*.ts",
+    "test/fixtures/**/*.ts"
+  ]
 }

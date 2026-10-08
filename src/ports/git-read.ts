@@ -1,0 +1,40 @@
+// Local, read-only git access with fixed argv (no shell). fetch/merge/push are never run.
+import {execFile} from 'node:child_process';
+import {LIMITS} from '../core/contracts.js';
+
+const ALLOWED = new Set(['rev-parse', 'cat-file', 'merge-base', 'ls-remote']);
+export interface RepoIdentity { repoRoot: string; gitCommonDir: string; origin: string }
+export interface GitReader {
+  run(args: readonly string[], cwd: string): Promise<{code: number; stdout: string}>;
+  repoIdentity(cwd: string): Promise<RepoIdentity>;
+}
+
+export function createGitReader(options: {timeoutMs?: number; gitBin?: string} = {}): GitReader {
+  const run: GitReader['run'] = (args, cwd) => {
+    const allowed = ALLOWED.has(args[0] ?? '') || (args[0] === 'remote' && args[1] === 'get-url' && args.length === 3);
+    if (!allowed) return Promise.reject(new Error(`git ${args[0] ?? ''} is not allowed.`));
+    const env = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0'};
+    return new Promise(resolve => {
+      execFile(options.gitBin ?? 'git', [...args], {cwd, env, timeout: options.timeoutMs ?? LIMITS.callTimeoutMs, maxBuffer: 1024 * 1024, shell: false}, (error, stdout) => {
+        const code = error ? (typeof (error as {code?: unknown}).code === 'number' ? (error as {code: number}).code : 1) : 0;
+        resolve({code, stdout: String(stdout)});
+      });
+    });
+  };
+  return {
+    run,
+    async repoIdentity(cwd) {
+      const top = await run(['rev-parse', '--show-toplevel'], cwd);
+      const common = await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
+      if (top.code || common.code) throw new Error('Not inside a git worktree.');
+      const origin = await run(['remote', 'get-url', 'origin'], cwd);
+      return {repoRoot: top.stdout.trim(), gitCommonDir: common.stdout.trim(), origin: origin.code ? '' : origin.stdout.trim()};
+    },
+  };
+}
+
+/** OWNER/REPO for github.com remotes in https, scp-like or ssh form; undefined for anything else. */
+export function parseGithubRemote(url: string): string | undefined {
+  const m = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/.exec(url.trim());
+  return m?.[1];
+}
