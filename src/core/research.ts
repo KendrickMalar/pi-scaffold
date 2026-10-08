@@ -18,7 +18,11 @@ export interface ResearchBrief {
   researchId: string; question: string; requiredEvidence: string; doneCondition: string; stopConditions: string[];
   purpose: string; background: string | null; epic: string; specBaseDigest: Sha256;
 }
-export interface ResearchOwner { operationId: UUID; sessionId: string }
+export interface ResearchOwner {
+  operationId: UUID; sessionId: string;
+  /** Adopt an in-progress claim with this operationId. Only for a claim this journal is known to have written. */
+  adoptOwnClaims?: boolean;
+}
 export interface ResearchBeginPlan { nextDoc: EpicDocV1; claims: ResearchClaim[]; skipped: string[]; changed: boolean }
 
 /** True when the item is in progress under exactly this claim, on the current baseline. */
@@ -45,8 +49,8 @@ export function planResearchBegin(doc: EpicDocV1, researchIds: readonly string[]
     if (item.state === 'resolved') return skipped.push(id);
     if (item.state === 'in_progress') {
       const c = item.claim!;
-      if (c.operationId !== owner.operationId) return problems.push(problem('CLAIMED_BY_OTHER', path, `${id} is in progress under operation ${c.operationId}; it is not taken over. Release it through scaffold_research_resolve (needs-more-work) with that operation.`));
       if (c.specBaseDigest !== baseline) return problems.push(problem('STALE_CLAIM', path, `${id} was claimed on another specification baseline.`));
+      if (c.operationId !== owner.operationId || !owner.adoptOwnClaims) return problems.push(problem('CLAIMED_BY_OTHER', path, `${id} is in progress under operation ${c.operationId}; it is not taken over. Release it through scaffold_research_resolve (needs-more-work) with that operation.`));
       return claims.push(c);
     }
     const claim: ResearchClaim = {researchId: id, operationId: owner.operationId, sessionId: owner.sessionId, specBaseDigest: baseline};

@@ -166,7 +166,7 @@ test('after an AC change the old claim is rejected; resolving another item keeps
   const other = structuredClone(doc);
   other.research[3] = {...other.research[3]!, state: 'resolved', claim: null, conclusion: 'UTF-8', evidenceRefs: ['https://example.com/hearing'], limitations: []};
   assert.equal(specBaseDigest(other), specBaseDigest(doc));
-  const still = planResearchBegin(other, ['R002'], {operationId: OP, sessionId: 's1'});
+  const still = planResearchBegin(other, ['R002'], {operationId: OP, sessionId: 's1', adoptOwnClaims: true});
   assert.ok(still.ok && still.value.claims[0]!.specBaseDigest === specBaseDigest(doc));
   // An AC change (through #6) resets the claim; the old claim cannot be used any more.
   const changed = reduceSpecification(doc, {facts: [], requirements: [], criteria: [{...doc.criteria[0]!, expectedResult: '変更後の期待結果'}], decisions: []});
@@ -215,6 +215,7 @@ test('a visible/JSON mismatch, a stale body or revision writes nothing', async t
     const g = world();
     const out = await (await harness(t, g)).invoke(params(g, extra));
     assert.equal(out.r.status, 'blocked'); assert.equal(g.writes, 0);
+    assert.ok(out.r.problems.some(x => x.code === ('expectedRevision' in extra ? 'STALE_REVISION' : 'STALE_BODY')), JSON.stringify(out.r.problems));
   }
 });
 
@@ -223,6 +224,72 @@ for (const stage of ['setup', 'basic-design', 'implementation'] as const) {
     const gh = world(specDoc(d => { d.stage = stage; }));
     const out = await (await harness(t, gh)).invoke();
     assert.equal(out.r.status, 'blocked');
+    assert.ok(out.r.problems.some(p => p.code === 'STAGE_MISMATCH'), JSON.stringify(out.r.problems));
     assert.equal(gh.writes, 0);
   });
 }
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a claim copied from the Issue (our operationId, but not sent by this journal) is not adopted', async t => {
+  const gh = world(specDoc(d => { d.research[1] = {...d.research[1]!, state: 'in_progress', claim: claimOf(d, 'R002', OP)}; }));
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'CLAIMED_BY_OTHER'), JSON.stringify(out.r.problems));
+  assert.equal((out.r.data as Partial<Data> | undefined)?.briefs, undefined);
+});
+
+test('a failed read-back after a successful claim write is resumable (partial + resumeToken), and the resume hands out the brief', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  let edited = false;
+  gh.onCall = name => { if (name === 'gh_issue_edit_if_current') edited = true; };
+  gh.overrides.set('gh_issue_get', () => edited ? (gh.overrides.delete('gh_issue_get'), FakePiGh.err('unknown', 'GITHUB_READ')) : undefined);
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial', JSON.stringify(first.r));
+  assert.equal(first.r.resumeToken, OP);
+  assert.equal((first.r.data as Partial<Data> | undefined)?.briefs, undefined);
+  const again = await h.invoke();
+  assert.equal(again.r.status, 'noop', JSON.stringify(again.r));
+  assert.equal((again.r.data as Data).briefs.length, 1);
+  assert.equal(edits(gh), 1);
+});
+
+test('re-running a completed operation re-checks stage and open state before handing out briefs', async t => {
+  for (const change of [(d: EpicDocV1) => { d.stage = 'basic-design'; }, null] as const) {
+    const gh = world();
+    const h = await harness(t, gh);
+    assert.equal((await h.invoke()).r.status, 'applied');
+    if (change) { const d = docOf(gh); change(d); gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d) + AFTER; }
+    else gh.issues.get(10)!.state = 'closed';
+    const again = await h.invoke();
+    assert.equal(again.r.status, 'blocked', JSON.stringify(again.r));
+    assert.ok(again.r.problems.some(p => p.code === (change ? 'STAGE_MISMATCH' : 'ISSUE_CLOSED')), JSON.stringify(again.r.problems));
+    assert.equal((again.r.data as Partial<Data> | undefined)?.briefs, undefined);
+  }
+});
+
+test('a write that failed before reaching GitHub is retried only after all checks pass again', async t => {
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'blocked');
+  gh.issues.get(10)!.body += '\n手で足したメモ';
+  const stale = await h.invoke();
+  assert.equal(stale.r.status, 'blocked');
+  assert.ok(stale.r.problems.some(x => x.code === 'STALE_BODY'), JSON.stringify(stale.r.problems));
+  assert.equal(edits(gh), 1);
+});
+
+test('an uncertain write that did not land is resent once after reconciling', async t => {
+  const gh = world();
+  let lose = true;
+  gh.overrides.set('gh_issue_edit_if_current', () => lose ? (lose = false, {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}) : undefined);
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(edits(gh), 2);
+  assert.equal((resumed.r.data as Data).briefs.length, 1);
+});

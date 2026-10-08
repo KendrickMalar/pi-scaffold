@@ -59,6 +59,7 @@ export async function beginResearch(input: ResearchBeginInput, call: ToolCall): 
       const current = step ? await reread(run.stop) : snap.value;
       const problems = preflight(current, input);
       if (problems.length) run.stop(problems);
+      // Never adopt an existing claim here: this journal has not sent one (an operationId copied from the Issue is not ownership).
       const plan = planResearchBegin(current.doc as EpicDocV1, input.researchIds, {operationId: input.operationId, sessionId: call.scope.sessionId});
       if (!plan.ok) return run.stop(plan.problems);
       run.note('plan', {claims: plan.value.claims, skipped: plan.value.skipped} satisfies Stored);
@@ -76,11 +77,19 @@ export async function beginResearch(input: ResearchBeginInput, call: ToolCall): 
   });
   if (result.status !== 'applied' && result.status !== 'noop') return result as ScaffoldResult<ResearchBeginData>;
   // Briefs only from a fresh read that still shows every claim (also for a re-run of a completed operation).
+  // Right after our own write a failed read-back is resumable with the same operationId; nothing is handed out meanwhile.
   const stored = result.data as Stored;
+  const notNow = (problems: Problem[]): ScaffoldResult<ResearchBeginData> => result.status === 'applied'
+    ? {status: 'partial', operation, problems, resumeToken: input.operationId} : blocked(problems);
   const after = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
-  if (!after.ok) return blocked(after.problems);
+  if (!after.ok) return notNow(after.problems);
   const doc = after.value.doc as EpicDocV1;
+  const state = [
+    ...(after.value.state !== 'open' ? [problem('ISSUE_CLOSED', 'epicIssue', 'The Epic is closed; no brief is issued.')] : []),
+    ...(doc.stage !== 'specification' ? [problem('STAGE_MISMATCH', 'stage', `The Epic is in ${doc.stage}; no brief is issued.`)] : []),
+  ];
+  if (state.length) return blocked(state);
   const lost = stored.claims.filter(c => !holdsClaim(doc, c));
-  if (lost.length) return blocked(lost.map(c => problem('CLAIM_LOST', c.researchId, `${c.researchId} is no longer in progress under this claim (the specification changed or it was released); no brief is issued.`)));
+  if (lost.length) return notNow(lost.map(c => problem('CLAIM_LOST', c.researchId, `${c.researchId} is no longer in progress under this claim (the specification changed or it was released); no brief is issued.`)));
   return {...result, data: {...stored, briefs: stored.claims.map(c => researchBrief(doc, c.researchId, `${input.repo}#${input.epicIssue}`))}};
 }
