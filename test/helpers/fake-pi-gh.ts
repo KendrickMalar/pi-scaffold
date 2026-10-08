@@ -80,6 +80,9 @@ export class FakePiGh {
     const c = JSON.parse(readFileSync(args.changePath, 'utf8')) as {repo: string; operation: string; issue: number; body?: string; add?: string[]; remove?: string[]; expectedBodySha256?: string; expectedLabelsSha256?: string};
     const i = this.issues.get(c.issue);
     if (!i || c.repo !== this.repo || c.operation !== name.replace(/^gh_/, '').replace(/_/g, '-')) return FakePiGh.err('rejected', 'ARGUMENT');
+    // Like pi-gh 0.5.0, a change file with any key outside its contract is rejected (UNKNOWN_KEY).
+    const allowed = {'issue-edit-if-current': ['body', 'expectedBodySha256'], 'issue-labels-if-current': ['add', 'remove', 'expectedLabelsSha256'], 'issue-close-if-current': ['expectedBodySha256', 'reason']}[c.operation] ?? [];
+    if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'issue', ...allowed].includes(k))) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
     if (c.operation === 'issue-edit-if-current') {
       if (i.body === c.body) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
       if (sha(i.body) !== c.expectedBodySha256) return FakePiGh.err('rejected', 'PRECONDITION_FAILED');
