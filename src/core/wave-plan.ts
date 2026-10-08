@@ -76,12 +76,15 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
   return {passed: problems.length === 0, checks, problems};
 }
 
+/** Any label meant as a Wave label (canonical or not); unrelated words such as "Waveform" are not. */
+export const isWaveLike = (label: string): boolean => /^\s*waves?(\b|[0-9:_\-\s])/i.test(label);
+
 /** Labels must show exactly one canonical "Wave: N" per Feature, equal to its assignment. */
 export function checkWaveLabels(plan: WavePlan, features: readonly WaveFeature[]): Problem[] {
   const problems: Problem[] = [];
   const wave = new Map(plan.assignments.map(a => [a.issue, a.wave]));
   for (const f of features) {
-    const waveLike = f.labels.filter(l => /^\s*waves?(\b|[0-9:_\-\s])/i.test(l));
+    const waveLike = f.labels.filter(isWaveLike);
     const at = `features[#${f.issue}].labels`;
     if (!waveLike.length) { problems.push(problem('WAVE_LABEL_MISSING', at, `#${f.issue} has no Wave label.`)); continue; }
     if (waveLike.length > 1) { problems.push(problem('WAVE_LABEL_MULTIPLE', at, `#${f.issue} has several Wave labels (${waveLike.join(', ')}).`)); continue; }

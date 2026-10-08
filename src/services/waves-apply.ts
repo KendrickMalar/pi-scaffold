@@ -13,7 +13,7 @@ import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {labelDefinitions} from '../core/label-definitions.js';
 import {prepareLabelEdit, waveLabelName} from '../core/label-policy.js';
-import {canonicalWavePlan, normalizeScope, validateWavePlan, type WaveEdge} from '../core/wave-plan.js';
+import {canonicalWavePlan, checkWaveLabels, isWaveLike, normalizeScope, validateWavePlan, type WaveEdge} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
@@ -93,6 +93,9 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
     if ([...e.value.add, ...e.value.remove].some(l => !isWave(l))) { labelProblems.push(problem('UNEXPECTED_LABEL_CHANGE', `features[#${f.number}].labels`, `#${f.number} would need non-Wave label changes (${[...e.value.add, ...e.value.remove].join(', ')}); they are not made here.`)); continue; }
     if (e.value.add.length || e.value.remove.length) edits.set(f.number, {feature: f, add: e.value.add, remove: e.value.remove});
   }
+  // Same Wave-label rules as #13: several Wave-like labels, or one that is not canonical, stop here (never cleaned up).
+  labelProblems.push(...checkWaveLabels(plan, features.map(f => ({issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope, labels: f.labels})))
+    .filter(p => p.code === 'WAVE_LABEL_MULTIPLE' || p.code === 'WAVE_LABEL_NONCANONICAL'));
   if (labelProblems.length) return blocked(labelProblems);
 
   const dir = join(context.value.workflowStateRoot, 'waves', input.operationId);
@@ -101,7 +104,7 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
     operation, repo: input.repo, workflowId: epic.workflowId, operationId: input.operationId,
     payloadDigest: taggedDigest('waves-apply', {...payload, plan}), journal, scope: call.scope,
   }, async run => {
-    const seen = (run.done('preflight') as {plan: WavePlan | null} | undefined) ?? (run.note('preflight', {plan: epic.wavePlan}), {plan: epic.wavePlan});
+    const seen = (run.done('preflight') as {plan: WavePlan | null; bodySha256: string} | undefined) ?? (run.note('preflight', {plan: epic.wavePlan, bodySha256: epicSnap.value.bodySha256}), {plan: epic.wavePlan, bodySha256: epicSnap.value.bodySha256});
     // 1. Wave label definitions the plan uses (create missing ones inside the managed range only).
     const needed = [...new Set(plan.assignments.map(a => waveLabelName(a.wave)))];
     if (edits.size || run.record.steps.some(s => s.name.startsWith('create:') || s.name.startsWith('update:'))) {
@@ -115,13 +118,14 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
       if (run.done(step) !== undefined) continue;
       const edit = edits.get(f.number);
       const prev = run.record.steps.find(s => s.name === step);
-      if (!edit && !prev) continue;
+      // Nothing to change now (already as planned, or a failed earlier attempt that is no longer needed): no write.
+      if (!edit && (!prev || prev.phase === 'failed')) continue;
       if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')]);
       const want = waveLabelName(waveOf.get(f.number)!);
       const changePath = join(dir, `labels-${f.number}.json`);
       if (edit) await writeOwnedFile(changePath, JSON.stringify({version: 1, repo: input.repo, operation: 'issue-labels-if-current', issue: f.number, add: edit.add, remove: edit.remove, expectedLabelsSha256: edit.feature.labelsSha256}), {root: call.namespaceRoot});
       await run.write(step, () => call.bridge.call('gh_issue_labels_if_current', {changePath}, () => true as const, call.scope), {
-        reconcile: async () => { const s = await readIssue(input.repo, f.number, call.bridge, call.scope); if (!s.ok) return 'unknown'; const w = s.value.labels.filter(l => /^\s*waves?/i.test(l)); return w.length === 1 && w[0] === want ? 'applied' : edit && s.value.labelsSha256 === edit.feature.labelsSha256 ? 'not-applied' : 'unknown'; },
+        reconcile: async () => { const s = await readIssue(input.repo, f.number, call.bridge, call.scope); if (!s.ok) return 'unknown'; const w = s.value.labels.filter(isWaveLike); return w.length === 1 && w[0] === want ? 'applied' : edit && s.value.labelsSha256 === edit.feature.labelsSha256 ? 'not-applied' : 'unknown'; },
       });
     }
     // 3. Read back every Feature's Wave label.
@@ -129,8 +133,7 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
     for (const f of features) {
       const s = await readIssue(input.repo, f.number, call.bridge, call.scope);
       if (!s.ok) return run.stop(s.problems);
-      const w = s.value.labels.filter(l => /^\s*waves?/i.test(l));
-      if (w.length !== 1 || w[0] !== waveLabelName(waveOf.get(f.number)!)) pending.push(f.number);
+      if (checkWaveLabels(plan, [{issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope, labels: s.value.labels}]).length) pending.push(f.number);
     }
     if (pending.length) return run.stop([problem('LABELS_NOT_SYNCED', 'labels', `#${pending.join(', #')} do not show their planned Wave.`)], {appliedIssues: [], unchangedIssues: [], pendingIssues: pending, wavePlanDigest: ''});
     // 4. Save the plan to the Epic (only over the plan this operation saw, and only while the Epic is where it was).
@@ -139,7 +142,8 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
       if (!fresh.ok) return run.stop(fresh.problems);
       const doc = fresh.value.doc as EpicDocV1;
       const moved: Problem[] = [];
-      if (fresh.value.state !== 'open' || doc.stage !== 'basic-design' || fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_MOVED', 'epicIssue', 'The Epic changed state meanwhile (closed, stage or Blocked); the plan is not saved.'));
+      if (fresh.value.bodySha256 !== seen.bodySha256) moved.push(problem('EPIC_MOVED', 'epicIssue', 'The Epic body was changed by someone else meanwhile; the plan is not written over it.'));
+      else if (fresh.value.state !== 'open' || doc.stage !== 'basic-design' || fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_MOVED', 'epicIssue', 'The Epic changed state meanwhile (closed, stage or Blocked); the plan is not saved.'));
       if (canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) !== canonicalJson(seen.plan === null ? null : canonicalWavePlan(seen.plan)) && canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) !== canonicalJson(plan)) moved.push(problem('PLAN_CHANGED', 'wavePlan', 'Another Wave plan was saved meanwhile; it is not overwritten.'));
       if (canonicalJson(doc.dependencyPlan) !== canonicalJson(epic.dependencyPlan)) moved.push(problem('DEPENDENCIES_CHANGED', 'dependencyPlan', 'The dependency plan changed meanwhile.'));
       if (moved.length) return run.stop(moved);

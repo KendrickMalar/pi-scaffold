@@ -250,3 +250,32 @@ test('another Wave plan saved meanwhile is not overwritten', async t => {
   assert.ok(out.r.problems.some(p => p.code === 'PLAN_CHANGED'), JSON.stringify(out.r.problems));
   assert.deepEqual(epicDoc(gh).wavePlan, other);
 });
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+for (const bad of ['Wave 1', 'Waves-2', 'WAVE:1']) {
+  test(`a malformed Wave label "${bad}" is blocked before any change`, async t => {
+    const gh = world({extraLabels: {12: [bad]}}); const before = gh.issues.get(10)!.body;
+    const out = await (await harness(t, gh)).invoke();
+    assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
+    noChange(gh, before);
+  });
+}
+
+test('an unrelated label that merely starts with "Wave" (Waveform) is left alone and does not block', async t => {
+  const gh = world({extraLabels: {12: ['Waveform']}});
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.ok(gh.issues.get(12)!.labels.includes('Waveform'));
+  assert.ok(gh.issues.get(12)!.labels.includes('Wave: 2'));
+});
+
+test('a concurrent Epic body edit (even outside the managed block) stops the save', async t => {
+  const gh = world();
+  let done = false;
+  gh.onCall = name => { if (name === 'gh_issue_labels_if_current' && !done) { done = true; gh.issues.get(10)!.body += '\n別セッションの追記'; } };
+  const out = await (await harness(t, gh)).invoke();
+  assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'EPIC_MOVED'), JSON.stringify(out.r.problems));
+  assert.equal(epicDoc(gh).wavePlan, null);
+});
