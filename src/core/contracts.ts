@@ -400,6 +400,7 @@ export const readQuestionFact = question;
 export const readRequirement = requirement;
 export const readCriterion = criterion;
 export const readDecision = decision;
+export const readWavePlan = wavePlan;
 export const readDesignRef = designRef;
 export const readDependencyPlan = dependencyPlan;
 export function readResearchSeed(r: Reader, v: unknown, p: string): ResearchItemSeed {
