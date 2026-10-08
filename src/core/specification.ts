@@ -9,7 +9,8 @@ import {canonicalJson, specBaseDigest, specificationDigest} from './digests.js';
 export interface SpecificationPatch {
   originalRequest?: OriginalRequest; background?: string | null;
   facts: QuestionFact[]; requirements: Requirement[]; criteria: Criterion[];
-  constraints: string[] | null; outOfScope: string[] | null; decisions: Decision[];
+  /** Omitted = unchanged; null = not set; [] = confirmed none. */
+  constraints?: string[] | null; outOfScope?: string[] | null; decisions: Decision[];
 }
 export interface ReducedSpecification { nextDoc: EpicDocV1; missingFields: string[]; changedIds: string[]; specDigest: Sha256; baseChanged: boolean }
 
@@ -56,7 +57,8 @@ export function reduceSpecification(doc: EpicDocV1, patch: SpecificationPatch): 
     ...doc, questions, requirements, criteria, decisions,
     originalRequest: patch.originalRequest ?? doc.originalRequest,
     background: patch.background !== undefined ? patch.background : doc.background,
-    constraints: patch.constraints, outOfScope: patch.outOfScope,
+    constraints: patch.constraints !== undefined ? patch.constraints : doc.constraints,
+    outOfScope: patch.outOfScope !== undefined ? patch.outOfScope : doc.outOfScope,
   };
   for (const key of ['originalRequest', 'background', 'constraints', 'outOfScope'] as const) {
     if (canonicalJson(next[key]) !== canonicalJson(doc[key])) changedIds.push(key);

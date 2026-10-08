@@ -25,8 +25,8 @@ export function decodeSpecificationUpdateInput(value: unknown): Decoded<Specific
     facts: {decode: (r, v, p) => r.array(v, p, (x, q) => readQuestionFact(r, x, q), LIMITS.questions)},
     requirements: {decode: (r, v, p) => r.array(v, p, (x, q) => readRequirement(r, x, q), LIMITS.requirements)},
     criteria: {decode: (r, v, p) => r.array(v, p, (x, q) => readCriterion(r, x, q), LIMITS.criteria)},
-    constraints: {decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
-    outOfScope: {decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
+    constraints: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
+    outOfScope: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
     decisions: {decode: (r, v, p) => r.array(v, p, (x, q) => readDecision(r, x, q), LIMITS.decisions)},
   });
 }

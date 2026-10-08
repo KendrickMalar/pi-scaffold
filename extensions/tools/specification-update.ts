@@ -12,7 +12,7 @@ export function createTool(runtime: ScaffoldRuntime) {
     label: 'Scaffold: 仕様の更新',
     description: 'Reflect only what the user actually said in the hearing into a specification-stage Epic. facts/requirements/criteria/decisions are '
       + 'stable-ID patches: given IDs are added or changed, others are kept; nothing is deleted or renumbered, and nothing is filled in. '
-      + 'Unanswered questions stay answer=null. constraints/outOfScope replace the whole list (null = not set, [] = confirmed none). '
+      + 'Unanswered questions stay answer=null. constraints/outOfScope replace the whole list only when given (omitted = unchanged, null = not set, [] = confirmed none). '
       + 'Returns missingFields; it never declares the specification complete. A stale body, a visible/JSON mismatch or a later stage writes nothing '
       + '(later stages return NEEDS_REVISION). Changing the baseline resets research progress (old results kept locally) and old approvals no longer match.',
     parameters: Type.Object({
@@ -27,8 +27,8 @@ export function createTool(runtime: ScaffoldRuntime) {
       criteria: Type.Array(Type.Object({
         id: Type.String({pattern: '^AC[0-9]{3,}$'}), requirementIds: Type.Array(reqId, {minItems: 1}), verification: text, expectedResult: text,
       }, {additionalProperties: false}), {maxItems: 100}),
-      constraints: Type.Union([Type.Array(text), Type.Null()]),
-      outOfScope: Type.Union([Type.Array(text), Type.Null()]),
+      constraints: Type.Optional(Type.Union([Type.Array(text), Type.Null()])),
+      outOfScope: Type.Optional(Type.Union([Type.Array(text), Type.Null()])),
       decisions: Type.Array(Type.Object({
         id: Type.String({pattern: '^D[0-9]{3,}$'}), topic: text, decision: text, reason: text, sourceRefs: Type.Array(ref),
       }, {additionalProperties: false}), {maxItems: 100}),

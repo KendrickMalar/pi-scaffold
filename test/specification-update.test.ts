@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile, readdir} from 'node:fs/promises';
+import {mkdtemp, readFile, readdir, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
@@ -9,8 +10,10 @@ import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, specBaseDigest, specificationDigest} from '../src/core/digests.js';
 import {labelDefinitions} from '../src/core/label-definitions.js';
 import {reduceSpecification, specificationMissingFields} from '../src/core/specification.js';
-import type {EpicDocV1} from '../src/core/contracts.js';
-import {OPERATION_ID, populatedDoc} from './helpers/docs.js';
+import {ApprovalStore} from '../src/core/approvals.js';
+import type {EpicDocV1, RepoContext} from '../src/core/contracts.js';
+import {makeScope} from './helpers/scope.js';
+import {OPERATION_ID, SHA_A, SHA_B, populatedDoc} from './helpers/docs.js';
 
 const BEFORE = 'メモ（管理外・先頭）\r\n\r\n', AFTER = '\n\n末尾のメモ 🙂\n';
 /** A specification-stage Epic: two REQ/AC, one D, resolved R001 and a claimed R003. */
@@ -239,6 +242,55 @@ test('originalRequest and background change only when given; constraints [] is s
   assert.equal(doc.background, '月次で集計に使う');
   assert.deepEqual(doc.constraints, []);
   assert.deepEqual(doc.originalRequest, specDoc().originalRequest);
+});
+
+test('omitting constraints/outOfScope keeps them; nothing is erased implicitly', async t => {
+  const gh = world(specDoc(d => { d.constraints = ['社内のみ']; d.outOfScope = ['PDF出力']; }));
+  const p: Record<string, unknown> = params(gh, {requirements: [req('REQ003', 'x')]});
+  delete p.constraints; delete p.outOfScope;
+  const out = await (await harness(t, gh)).invoke(p);
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual([docOf(gh).constraints, docOf(gh).outOfScope], [['社内のみ'], ['PDF出力']]);
+});
+
+test('constraints null given explicitly is reflected (null = not set)', async t => {
+  const gh = world(specDoc(d => { d.constraints = ['社内のみ']; }));
+  const out = await (await harness(t, gh)).invoke(params(gh, {constraints: null}));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(docOf(gh).constraints, null);
+  assert.ok((out.r.data as Data).missingFields.includes('constraints'));
+});
+
+test('an approval recorded for the old specification is not found after a change', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-spec-approval-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const root = join(dir, 'pi-scaffold'), start = specDoc();
+  const context: RepoContext = {repo: 'example/demo', repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', workflowStateRoot: join(root, 'state', 'r', start.workflowId), accountBinding: SHA_A, profileId: 'developer', profileInstructionsDigest: SHA_B};
+  const store = new ApprovalStore(root);
+  const old = await store.confirmContent('specification', start.workflowId, {contentDigest: specificationDigest(start), text: '仕様（架空）'}, context, {interactive: true, confirm: async () => true}, makeScope());
+  assert.equal(old.status, 'validated');
+  for (const patch of [{decisions: [{id: 'D002', topic: 't', decision: 'd', reason: 'r', sourceRefs: []}]}, {requirements: [req('REQ001', '変更後')]}]) {
+    const r = reduceSpecification(start, {facts: [], requirements: [], criteria: [], decisions: [], ...patch});
+    assert.ok(r.ok);
+    const {approvalViewDigest} = await import('../src/core/approvals.js');
+    const lookup = await store.requireContentApproval('specification', start.workflowId, approvalViewDigest('specification', {contentDigest: r.value.specDigest, text: '仕様（架空）'}), context);
+    assert.equal(lookup.ok, false);
+    assert.ok(!lookup.ok && lookup.problems.some(p => p.code === 'APPROVAL_MISSING'));
+  }
+});
+
+test('a write that failed before reaching GitHub is retried only after all checks pass again', async t => {
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  const h = await harness(t, gh);
+  const p = params(gh, {requirements: [req('REQ003', 'x')]});
+  assert.equal((await h.invoke(p)).r.status, 'blocked');
+  gh.issues.get(10)!.body += '\n手で足したメモ';
+  const stale = await h.invoke(p);
+  assert.equal(stale.r.status, 'blocked');
+  assert.ok(stale.r.problems.some(x => x.code === 'STALE_BODY'), JSON.stringify(stale.r.problems));
+  assert.equal(edits(gh), 1, 'the stale retry never sent a second edit');
 });
 
 // ---- idempotency and resume -------------------------------------------------------------------
