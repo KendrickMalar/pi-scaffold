@@ -10,6 +10,13 @@ const args = process.argv.slice(2);
 const method = args[args.indexOf('--method') + 1];
 const endpoint = args.find(a => /^repos\//.test(a)) ?? '';
 appendFileSync(join(state, 'calls.jsonl'), JSON.stringify({method, endpoint, input}) + '\n');
+// Hold one matching call in flight until the test removes the sentinel; records whether the process lived to see the release.
+const hold = process.env.FAKE_GH_HOLD;
+if (hold && `${method} ${endpoint.split('?')[0]}` === process.env.FAKE_GH_HOLD_MATCH && existsSync(hold)) {
+  appendFileSync(hold + '.entered', `${process.pid}\n`);
+  while (existsSync(hold)) await new Promise(r => setTimeout(r, 50));
+  appendFileSync(hold + '.released', `${process.pid}\n`);
+}
 const out = value => { process.stdout.write(JSON.stringify(value)); process.exit(0); };
 const fail = message => { process.stderr.write(message + '\n'); process.exit(1); };
 if (args[0] !== 'api') fail('unsupported fake command');

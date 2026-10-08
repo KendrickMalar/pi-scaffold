@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Native Pi acceptance for the pi-scaffold foundation (#2).
 
-Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh (0.4.0+: gh_labels_list, issue-list-labels) checkout or package.
+Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh 0.5.0+ package.
+Also covers /tree and /fork while a nested pi-gh call is held in flight, and /reload being refused mid-call.
 Never touches the user's agent directory, credentials or GitHub.
 
   python3 scripts/test-native-pi.py --pi-gh /path/to/pi-gh [--pi node_modules/.bin/pi] [--case NAME]
@@ -352,6 +353,114 @@ class Acceptance(unittest.TestCase):
         c.send('\r'); self.wait_result(c, 2)
         self.assertEqual(self.last_result()['status'], 'applied'); self.assertEqual(len(self.writes()), 1)
 
+
+    # --- reload/tree/fork cancellation while a nested pi-gh call is in flight ------------------
+
+    def session_tool_result(self, call_id):
+        for f in (self.agent / 'sessions').rglob('*.jsonl'):
+            for line in f.read_text().splitlines():
+                e = json.loads(line); m = e.get('message') or {}
+                if e.get('type') == 'message' and m.get('role') == 'toolResult' and m.get('toolCallId') == call_id:
+                    text = ''.join(part.get('text', '') for part in m.get('content', []) if isinstance(part, dict))
+                    return text, m.get('isError')
+        return None, None
+
+    def session_file_of(self, call_id):
+        for f in (self.agent / 'sessions').rglob('*.jsonl'):
+            if f'"toolCallId":"{call_id}"' in f.read_text().replace(' ', ''): return f
+        return None
+
+    def branch_ids(self, f, call_id):
+        """Entry ids on the path from the root to the tool result of call_id."""
+        entries = [json.loads(l) for l in f.read_text().splitlines()]
+        by_id = {e.get('id'): e for e in entries}
+        leaf = next(e for e in entries if (e.get('message') or {}).get('toolCallId') == call_id)
+        ids = []
+        while leaf: ids.append(leaf['id']); leaf = by_id.get(leaf.get('parentId'))
+        return ids
+
+    def gh_calls(self):
+        f = self.state / 'calls.jsonl'
+        return [json.loads(l) for l in f.read_text().splitlines()] if f.exists() else []
+
+    def held_navigation(self, match, navigate):
+        """Start the probe, hold the matching gh call in flight, navigate away, and require the hold to be cut short."""
+        self.grant()
+        hold = self.state / 'hold'; hold.touch()
+        self.env.update({'FAKE_GH_HOLD': str(hold), 'FAKE_GH_HOLD_MATCH': match})
+        c = self.tui()
+        c.send('OWNED_TOOL_REQUEST\r')
+        c.wait(lambda: (self.state / 'hold.entered').exists(), 30)
+        navigate(c)
+        # The navigation must finish while the gh call is still held: Pi aborts the turn and the nested call is killed.
+        c.wait(lambda: self.session_tool_result('owned-call-1')[0] is not None, 20)
+        hold.unlink(); time.sleep(.5)
+        self.assertFalse((self.state / 'hold.released').exists(), 'the held gh process was not terminated by the abort')
+        text, is_error = self.session_tool_result('owned-call-1')
+        self.assertTrue(is_error, text); self.assertNotIn('"status":"applied"', text.replace(' ', ''))
+        return c, text
+
+    def tree_back(self, c):
+        mark = len(c.data); c.send('/tree\r'); c.wait(lambda: 'OWNED_TOOL_REQUEST' in c.text(mark), 15)
+        c.send('\x1b[A'); time.sleep(.3); c.send('\r')
+        c.wait(lambda: 'Summarize branch?' in c.text(mark), 15); c.send('\r')
+        c.wait(lambda: 'Navigated to selected point' in c.text(mark), 20)
+
+    def fork_back(self, c):
+        mark = len(c.data); c.send('/fork\r'); c.wait(lambda: 'OWNED_TOOL_REQUEST' in c.text(mark), 15)
+        time.sleep(.3); c.send('\r'); c.wait(lambda: 'Forked to new session' in c.text(mark), 20)
+
+    def resubmit(self, c, n):
+        mark = len(c.data); c.send('\x15OWNED_TOOL_REQUEST\r'); self.wait_result(c, n)
+        return self.last_result()
+
+    def test_tui_tree_during_nested_read_cancels_without_writes(self):
+        c, text = self.held_navigation('GET repos/example/demo/issues/10', self.tree_back)
+        self.assertEqual(json.loads(text)['status'], 'cancelled', text)
+        self.assertEqual([x for x in self.gh_calls() if x['method'] == 'PATCH'], []); self.assertEqual(self.writes(), [])
+        r = self.resubmit(c, 2)
+        self.assertEqual(r['status'], 'applied', r); self.assertEqual(len(self.writes()), 1)
+        f = self.session_file_of('owned-call-2')
+        self.assertEqual(f, self.session_file_of('owned-call-1'), 'tree stays in the same session file')
+        first = self.branch_ids(f, 'owned-call-1')
+        self.assertNotIn(first[0], self.branch_ids(f, 'owned-call-2'), 'the retry runs on a new branch, not after the cancelled result')
+
+    def test_tui_fork_during_nested_read_cancels_without_writes(self):
+        c, text = self.held_navigation('GET repos/example/demo/issues/10', self.fork_back)
+        self.assertEqual(json.loads(text)['status'], 'cancelled', text)
+        self.assertEqual([x for x in self.gh_calls() if x['method'] == 'PATCH'], []); self.assertEqual(self.writes(), [])
+        r = self.resubmit(c, 2)
+        self.assertEqual(r['status'], 'applied', r); self.assertEqual(len(self.writes()), 1)
+        self.assertNotEqual(self.session_file_of('owned-call-2'), self.session_file_of('owned-call-1'), 'fork moved to a new session file')
+
+    def test_tui_fork_during_nested_write_is_never_resent(self):
+        c, text = self.held_navigation('PATCH repos/example/demo/issues/10', self.fork_back)
+        self.assertEqual(self.writes(), [], 'the killed PATCH never reached the fake API')
+        self.assertEqual(json.loads(text)['status'], 'unknown', text)
+        r = self.resubmit(c, 2)
+        self.assertEqual(r['status'], 'unknown', r)
+        self.assertIn('RECONCILE_REQUIRED', json.dumps(r), 'the forked session sees the same uncertain step')
+        self.assertEqual(len([x for x in self.gh_calls() if x['method'] == 'PATCH']), 1, 'the uncertain write is not resent')
+
+    def test_tui_reload_during_nested_read_is_refused_and_the_call_finishes_once(self):
+        self.grant()
+        hold = self.state / 'hold'; hold.touch()
+        self.env.update({'FAKE_GH_HOLD': str(hold), 'FAKE_GH_HOLD_MATCH': 'GET repos/example/demo/issues/10'})
+        c = self.tui()
+        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: (self.state / 'hold.entered').exists(), 30)
+        mark = len(c.data); c.send('/reload\r'); c.wait(lambda: 'before reloading' in c.text(mark), 15)
+        hold.unlink(); self.wait_result(c, 1)
+        self.assertTrue((self.state / 'hold.released').exists(), 'the held call was not interrupted by the refused reload')
+        self.assertEqual(self.last_result()['status'], 'applied', self.last_result()); self.assertEqual(len(self.writes()), 1)
+
+    def test_tui_tree_during_nested_write_is_never_resent(self):
+        c, text = self.held_navigation('PATCH repos/example/demo/issues/10', self.tree_back)
+        self.assertEqual(self.writes(), [], 'the killed PATCH never reached the fake API')
+        self.assertEqual(json.loads(text)['status'], 'unknown', 'an interrupted write is reported as unknown, not as cancelled')
+        r = self.resubmit(c, 2)
+        self.assertEqual(r['status'], 'unknown', r)
+        self.assertEqual(len([x for x in self.gh_calls() if x['method'] == 'PATCH']), 1, 'the uncertain write is not resent')
+        self.assertEqual(self.writes(), [])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
