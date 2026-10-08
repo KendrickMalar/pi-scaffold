@@ -66,7 +66,7 @@ test('untrusted projects, foreign origins and missing capabilities block before 
 test('stale body hash or revision blocks with zero writes', async t => {
   const h = await harness(t);
   assert.equal((await h.invoke({...params(), expectedBodySha256: 'f'.repeat(64)})).r.problems[0]!.code, 'STALE_BODY');
-  const out = await h.invoke({...params(), expectedRevision: 2});
+  const out = await h.invoke({...params(), operationId: '99999999-9999-4999-8999-999999999999', expectedRevision: 2});
   assert.equal(out.r.problems[0]!.code, 'STALE_REVISION');
   assert.equal(out.ghWrites, 0);
 });

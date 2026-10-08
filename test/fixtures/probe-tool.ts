@@ -23,12 +23,12 @@ export function createTool(runtime: ScaffoldRuntime) {
       if (!repoOnly.ok) return {status: 'blocked', operation, problems: repoOnly.problems};
       const snap = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
       if (!snap.ok) return {status: 'blocked', operation, problems: snap.problems};
-      if (snap.value.bodySha256 !== input.expectedBodySha256) return {status: 'blocked', operation, problems: [problem('STALE_BODY', 'expectedBodySha256', 'Issue body changed.')]};
-      if (snap.value.doc.revision !== input.expectedRevision) return {status: 'blocked', operation, problems: [problem('STALE_REVISION', 'expectedRevision', 'Revision changed.')]};
       const context = await call.repoContext(input.repo, snap.value.doc.workflowId);
       if (!context.ok) return {status: 'blocked', operation, problems: context.problems};
       const body = snap.value.body + '\n(probe)';
-      return withOperation({operation, repo: input.repo, workflowId: snap.value.doc.workflowId, operationId: input.operationId, payloadDigest: taggedDigest('probe', {input, body}), journal: call.journal(context.value), scope: call.scope}, async run => {
+      return withOperation({operation, repo: input.repo, workflowId: snap.value.doc.workflowId, operationId: input.operationId, payloadDigest: taggedDigest('probe', input), journal: call.journal(context.value), scope: call.scope}, async run => {
+        if (snap.value.bodySha256 !== input.expectedBodySha256) run.stop([problem('STALE_BODY', 'expectedBodySha256', 'Issue body changed.')]);
+        if (snap.value.doc.revision !== input.expectedRevision) run.stop([problem('STALE_REVISION', 'expectedRevision', 'Revision changed.')]);
         const changePath = join(context.value.workflowStateRoot, 'artifacts', `${input.operationId}.json`);
         await writeOwnedFile(changePath, JSON.stringify({version: 1, repo: input.repo, operation: 'issue-edit', issue: input.epicIssue, body}), {root: call.namespaceRoot});
         const data = await run.write('issue-edit', () => call.bridge.call('gh_issue_edit', {changePath}, d => d, call.scope));
