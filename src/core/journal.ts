@@ -6,7 +6,7 @@ import {isUuid, isSha256, type ScaffoldStatus, type Sha256, type UUID} from './c
 import {OwnedFileError, readOwnedJson, writeOwnedFile} from './files.js';
 
 export type StepPhase = 'requested' | 'done' | 'failed' | 'unknown';
-export interface JournalStep { name: string; phase: StepPhase; data?: unknown }
+export interface JournalStep { name: string; phase: StepPhase; data?: unknown; /** Read-only progress, not a remote change. */ note?: true }
 export interface OperationRecord {
   version: 1; operationId: UUID; repo: string; workflowId: string; operation: string; payloadDigest: Sha256;
   status: 'running' | ScaffoldStatus; steps: JournalStep[]; result?: unknown; startedAt: string; updatedAt: string;

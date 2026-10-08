@@ -2,7 +2,13 @@
 
 [Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが実行できる個別のTypeScriptツールとして提供する拡張です。
 
-現在は共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の実装段階です。AI用ツールはまだ1つも登録されていません。npm公開・Piへの導入はしていません。
+共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の上に、受け入れ済みのツールだけを登録しています。npm公開・Piへの導入はしていません。
+
+| ツール | 内容 |
+|---|---|
+| `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を照合し、不足分だけpi-gh経由で作成。色・説明・大小文字の違いは既定で停止（`onMismatch: "update"`で更新）。無関係ラベルの改名・削除、Issueへの付与はしない。1回の呼び出しは約60秒で区切り、`partial`なら同じoperationIdで続きを実行 |
+
+ラベル作成はpi-ghの承認を1件ずつ通ります。TUIで承認するか、所有者がpi-ghの許可ファイルに`gh_label_create`を明示した場合だけ自動で進みます。
 
 開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.2.0のcheckout、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。
 

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "fixed": [
+    {"name": "Type: Scaffold", "color": "7057ff", "description": "仕様策定から進めるScaffold開発"},
+    {"name": "Type: Jig", "color": "a2eeef", "description": "目的と影響範囲を限定した小規模変更"},
+    {"name": "Scope: Epic", "color": "5319e7", "description": "全体仕様と完了条件の親Issue"},
+    {"name": "Scope: Feature", "color": "1d76db", "description": "独立して完了できる成果単位"},
+    {"name": "Scope: Task", "color": "0e8a16", "description": "Feature配下の実装・検証単位"},
+    {"name": "Stage: Specification", "color": "c5def5", "description": "仕様策定"},
+    {"name": "Stage: BasicDesign", "color": "bfdadc", "description": "基本設計"},
+    {"name": "Stage: Implementation", "color": "0052cc", "description": "詳細設計・実装"},
+    {"name": "Stage: Verification", "color": "fbca04", "description": "最終検証"},
+    {"name": "Stage: Completed", "color": "0e8a16", "description": "工程完了"},
+    {"name": "Blocked", "color": "b60205", "description": "着手・進行条件が未解消"}
+  ],
+  "wave": {"color": "9e9e9e", "description": "実行Wave {n}"}
+}

@@ -174,3 +174,25 @@ test('resuming an existing operationId still respects another unresolved operati
   assert.ok(resumedB.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
   assert.deepEqual(log, []);
 });
+
+test('notes record read progress for resume; pause is a resumable partial even before any write', async t => {
+  const {journal} = await setup(t);
+  const first = await withOperation(spec(journal), async run => {
+    run.note('check:a', {state: 'match'});
+    return run.pause([{code: 'CALL_BUDGET_EXHAUSTED', path: '', message: 'continue later'}], {checked: 1});
+  });
+  assert.equal(first.status, 'partial');
+  assert.equal(first.resumeToken, OPERATION_ID);
+  assert.deepEqual(first.data, {checked: 1});
+  const seen: unknown[] = [];
+  const second = await withOperation(spec(journal), async run => { seen.push(run.done('check:a')); return {status: 'applied' as const, data: {}}; });
+  assert.equal(second.status, 'applied');
+  assert.deepEqual(seen, [{state: 'match'}]);
+});
+
+test('stop can carry result data', async t => {
+  const {journal} = await setup(t);
+  const r = await withOperation(spec(journal), async run => run.stop([{code: 'LABEL_MISMATCH', path: 'x', message: 'm'}], {blocked: ['x']}));
+  assert.equal(r.status, 'blocked');
+  assert.deepEqual(r.data, {blocked: ['x']});
+});

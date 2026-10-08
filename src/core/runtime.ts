@@ -3,7 +3,7 @@
 import {homedir} from 'node:os';
 import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
-import {failed, problem, type CallScope, type Decoded, type RepoContext} from './contracts.js';
+import {LIMITS, failed, problem, type CallScope, type Decoded, type RepoContext} from './contracts.js';
 import {RuntimeScope} from './lifecycle.js';
 import {OperationJournal} from './journal.js';
 import {ApprovalStore, type ApprovalUi} from './approvals.js';
@@ -22,7 +22,12 @@ export interface ToolEnv {
   availableModels(): string[];
   scopedModels(): string[];
 }
-export interface ScaffoldRuntime { scope: RuntimeScope; agentDir: string; git: GitReader; timeoutMs?: number }
+export interface ScaffoldRuntime {
+  scope: RuntimeScope; agentDir: string; git: GitReader; timeoutMs?: number;
+  /** Work budget of one tool call; long work pauses as `partial` and resumes with the same operationId. */
+  budgetMs?: number;
+  now?: () => number;
+}
 
 export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<string, string | undefined>; home?: string} = {}): ScaffoldRuntime {
   return {
@@ -30,6 +35,8 @@ export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<
     agentDir: options.agentDir ?? resolveAgentDir(options.env ?? process.env, options.home ?? homedir()),
     git: options.git ?? createGitReader(),
     ...(options.timeoutMs !== undefined ? {timeoutMs: options.timeoutMs} : {}),
+    ...(options.budgetMs !== undefined ? {budgetMs: options.budgetMs} : {}),
+    ...(options.now !== undefined ? {now: options.now} : {}),
   };
 }
 
@@ -38,11 +45,16 @@ export class ToolCall {
   readonly bridge: PiGhBridge;
   readonly namespaceRoot: string;
   readonly approvals: ApprovalStore;
+  /** Time after which a tool stops starting new steps (an in-flight approval is not cut). */
+  readonly deadline: number;
   constructor(readonly runtime: ScaffoldRuntime, readonly env: ToolEnv, readonly scope: CallScope) {
     this.bridge = new PiGhBridge(env.executeTool, {interactiveWrites: env.approvalUi.interactive, ...(runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {})});
     this.namespaceRoot = join(runtime.agentDir, 'pi-scaffold');
     this.approvals = new ApprovalStore(this.namespaceRoot);
+    this.deadline = this.now() + (runtime.budgetMs ?? LIMITS.callTimeoutMs);
   }
+  now(): number { return (this.runtime.now ?? Date.now)(); }
+  overBudget(): boolean { return this.now() >= this.deadline; }
   policy(): Promise<Decoded<OwnerPolicy | undefined>> { return loadOwnerPolicy(this.runtime.agentDir); }
   async repoContext(repo: string, workflowId: string | null): Promise<Decoded<RepoContext>> {
     const policy = await this.policy();

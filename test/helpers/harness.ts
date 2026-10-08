@@ -21,7 +21,7 @@ export interface FakeHerdr { calls: {command: string; args: unknown}[] }
 export interface Scenario {
   gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
-  defaultParams?: Record<string, unknown>; herdr?: FakeHerdr;
+  defaultParams?: Record<string, unknown>; herdr?: FakeHerdr; budgetMs?: number; now?: () => number;
 }
 export interface Invocation {
   r: ScaffoldResult; isError: boolean; inputSchemaValid: boolean; inputSchemaErrors: string[]; outputSchemaValid: boolean;
@@ -46,7 +46,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     run: async () => ({code: 1, stdout: ''}),
     repoIdentity: async () => ({repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', origin: scenario.origin ?? 'https://github.com/example/demo.git'}),
   };
-  const runtime = createRuntime({agentDir, git, timeoutMs: 2000});
+  const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});
   const tool = createTool(runtime);
   let confirmCalls = 0;
   const ctx = {
