@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_specification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -442,6 +442,44 @@ class Acceptance(unittest.TestCase):
         feature = json.loads((self.state / f'issue-{n}.json').read_text())
         self.assertEqual(sorted(l['name'] for l in feature['labels']), ['Scope: Feature', 'Stage: BasicDesign', 'Type: Scaffold'])
         self.assertIn('"kind": "feature"', feature['body']); self.assertIn('"parentEpic": 10', feature['body'])
+
+    def test_dependencies_apply_through_real_pi_gh(self):
+        self.seed_all_labels()
+        made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
+            "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';"
+            "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='basic-design';d.dependencyPlan=null;d.wavePlan=null;d.handoff=null;"
+            "const f=n=>renderFeatureBlock({version:1,kind:'feature',workflowId:d.workflowId,revision:1,createOperationId:'eeeeeeee-eeee-4eee-8eee-'+String(n).padStart(12,'0'),featureKey:'F00'+(n-10),parentEpic:10,stage:'basic-design',purpose:'架空',editScope:['src/f'+n+'/'],outOfScope:[],designRef:{path:'docs/d.md',sha256:'a'.repeat(64),gitRef:'c'.repeat(40)},criteria:[{id:'AC001',requirementIds:['REQ001'],verification:'v',expectedResult:'e'}],bindings:{'coding-manager':{model:'p/m',thinking:'low',reason:'r'},coder:{model:'p/m',thinking:'low',reason:'r'},tester:{model:'p/m',thinking:'low',reason:'r'}},evidenceRefs:[]});"
+            "process.stdout.write(JSON.stringify({epic:renderEpicBlock(d),revision:d.revision,features:{11:f(11),12:f(12),13:f(13)}}))"], cwd=ROOT, text=True))
+        labels = json.loads((self.state / 'labels.json').read_text())
+        pick = lambda names: [l for l in labels if l['name'] in names]
+        epic = json.loads((self.state / 'issue-10.json').read_text())
+        epic.update(body=made['epic'], labels=pick(('Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign')), sub_issues=[11, 12, 13])
+        (self.state / 'issue-10.json').write_text(json.dumps(epic))
+        for n in (11, 12, 13):
+            (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': made['features'][str(n)], 'state': 'open',
+                'labels': pick(('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign')), 'html_url': f'https://github.com/example/demo/issues/{n}'}))
+        (self.state / 'project-PVT_fixture1.json').write_text('[12]')
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_dependency_add', 'gh_issue_edit_if_current', 'gh_project_add_issue'], 'allowHeadless': True, 'allowChild': True, 'projectIds': ['PVT_fixture1']}]})); p.chmod(0o600)
+        self.tool = 'scaffold_dependencies_apply'
+        node = lambda n: {'featureKey': f'F00{n - 10}', 'issue': n, 'contracts': [], 'startConditions': [], 'editScope': [f'src/f{n}/']}
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': made['revision'], 'expectedBodySha256': hashlib.sha256(made['epic'].encode()).hexdigest(),
+                          'plan': {'version': 1, 'nodes': [node(11), node(12), node(13)], 'edges': [{'from': 11, 'to': 12, 'reason': '架空'}, {'from': 12, 'to': 13, 'reason': '架空'}]}, 'projectId': 'PVT_fixture1'}
+        results = []
+        for _ in range(2):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST', probe=False), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['applied', 'noop'], results)
+        self.assertEqual(results[0]['data']['addedEdges'], [{'from': 11, 'to': 12}, {'from': 12, 'to': 13}])
+        issue = lambda n: json.loads((self.state / f'issue-{n}.json').read_text())
+        self.assertEqual(issue(12).get('blocked_by'), [11]); self.assertEqual(issue(13).get('blocked_by'), [12]); self.assertIsNone(issue(11).get('blocked_by'))
+        self.assertEqual(sorted(json.loads((self.state / 'project-PVT_fixture1.json').read_text())), [11, 12, 13])
+        writes = self.writes()
+        self.assertEqual(len([w for w in writes if 'blockedBy' in w]), 2); self.assertEqual(len([w for w in writes if 'projectAdd' in w]), 2)
+        self.assertIn('```mermaid', issue(10)['body']); self.assertIn('"dependencyPlan": {', issue(10)['body'])
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

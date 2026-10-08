@@ -16,7 +16,7 @@ export const PI_GH_020_OPERATIONS = [
 export const PI_GH_WITH_LABELS_LIST = [...PI_GH_020_OPERATIONS, 'gh_labels_list'];
 export const READ_TOOLS = new Set(['gh_labels_list', 'gh_capabilities', 'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items', 'gh_issue_validate', 'gh_issue_preview', 'gh_labels_validate', 'gh_labels_preview', 'gh_issue_form']);
 
-export interface FakeIssue { number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed'; subIssues?: number[] }
+export interface FakeIssue { number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed'; subIssues?: number[]; blockedBy?: (number | string)[] }
 type Override = (args: unknown, call: number) => ToolOutcome | Promise<ToolOutcome> | undefined;
 
 export class FakePiGh {
@@ -33,6 +33,8 @@ export class FakePiGh {
   onCall?: (name: string) => void;
   readonly submitted: {draft: Record<string, unknown>; number: number}[] = [];
   readonly conditionalChanges: {operation: string; issue: number}[] = [];
+  /** Projects V2 by node id; items are Issue numbers of this repository. */
+  readonly projects = new Map<string, number[]>();
   constructor(readonly repo = 'example/demo') {}
 
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
@@ -69,6 +71,36 @@ export class FakePiGh {
       return FakePiGh.ok([...this.issues.values()].filter(i => !filter || filter.every(l => i.labels.includes(l))).sort((x, y) => x.number - y.number).map(i => this.github(i)));
     }
     if (name === 'gh_issue_validate' || name === 'gh_issue_preview' || name === 'gh_issue_submit') return this.issue(name, args as {draftPath: string; templatePath: string});
+    if (name === 'gh_dependencies_list') {
+      // blocked_by of the issue; a string entry stands for an Issue of another repository (html_url).
+      const i = this.issues.get(a.issue);
+      if (!i) return FakePiGh.err('rejected');
+      return FakePiGh.ok((i.blockedBy ?? []).map(b => typeof b === 'string' ? {number: 1, html_url: b} : this.github(this.issues.get(b)!)));
+    }
+    if (name === 'gh_dependency_add' || name === 'gh_project_add_issue') {
+      const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;
+      const allowed = name === 'gh_dependency_add' ? ['version', 'repo', 'operation', 'issue', 'relatedIssue'] : ['version', 'repo', 'operation', 'issue', 'projectId'];
+      if (Object.keys(c).some(k => !allowed.includes(k)) || c.repo !== this.repo) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
+      const target = this.issues.get(c.issue as number);
+      if (!target) return FakePiGh.err('rejected', 'ARGUMENT');
+      if (name === 'gh_dependency_add') {
+        // pi-gh: `issue` is blocked by `relatedIssue`.
+        if (c.operation !== 'dependency-add' || !this.issues.has(c.relatedIssue as number) || c.relatedIssue === c.issue) return FakePiGh.err('rejected', 'ARGUMENT');
+        if ((target.blockedBy ?? []).includes(c.relatedIssue as number)) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+        target.blockedBy = [...(target.blockedBy ?? []), c.relatedIssue as number];
+        return FakePiGh.ok({issue: target.number}, 'applied');
+      }
+      const items = this.projects.get(c.projectId as string);
+      if (c.operation !== 'project-add-issue' || !items) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      if (items.includes(target.number)) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      items.push(target.number);
+      return FakePiGh.ok({projectId: c.projectId, itemId: `PVTI_${target.number}`}, 'applied');
+    }
+    if (name === 'gh_project_items') {
+      const items = this.projects.get((args as {projectId: string}).projectId);
+      if (!items) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', items: items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: `I_${n}`, number: n, repository: {nameWithOwner: this.repo}}}))});
+    }
     if (name === 'gh_subissue_add') {
       // pi-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
       const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;

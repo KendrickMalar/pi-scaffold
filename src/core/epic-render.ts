@@ -1,5 +1,6 @@
 // Deterministic projection of an Epic document into the visible Issue body (#4 v1 layout).
 // User-provided text is escaped so it can never form markers, fences, details tags, headings or tables.
+import {renderDependencyMermaid} from './dependency-graph.js';
 import {decodeScaffoldDoc, type EpicDocV1, type FeatureDocV1, type FeatureRole, type ResearchItem, type ScaffoldDocV1} from './contracts.js';
 
 export const MANAGED_START = '<!-- pi-scaffold:v1:start -->';
@@ -61,8 +62,8 @@ export function renderEpicVisible(doc: EpicDocV1): string {
     d.id, cell(d.topic), cell(d.decision), cell(d.reason) + (d.sourceRefs.length ? '<br>根拠：' + refs(d.sourceRefs) : ''),
   ])), NONE_YET));
   const design = doc.design === null ? UNSET : list([`パス：${cell(doc.design.path)}`, `SHA-256：${doc.design.sha256}`, `Git ref：${doc.design.gitRef}`]);
-  const deps = doc.dependencyPlan === null ? UNSET : doc.dependencyPlan.edges.length
-    ? list(doc.dependencyPlan.edges.map(e => `#${e.from} → #${e.to}：${cell(e.reason)}`)) : '依存なし';
+  const deps = doc.dependencyPlan === null ? UNSET : '```mermaid\n' + renderDependencyMermaid(doc.dependencyPlan) + '```\n\n' + (doc.dependencyPlan.edges.length
+    ? list(doc.dependencyPlan.edges.map(e => `#${e.from} → #${e.to}：${cell(e.reason)}`)) : '依存なし');
   let waves = UNSET;
   if (doc.wavePlan !== null) {
     const byWave = new Map<number, number[]>();

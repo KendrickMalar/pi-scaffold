@@ -20,6 +20,22 @@ if (hold && `${method} ${endpoint.split('?')[0]}` === process.env.FAKE_GH_HOLD_M
 const out = value => { process.stdout.write(JSON.stringify(value)); process.exit(0); };
 const fail = message => { process.stderr.write(message + '\n'); process.exit(1); };
 if (args[0] !== 'api') fail('unsupported fake command');
+// Minimal Projects V2 GraphQL (fixture projects in project-<id>.json hold Issue numbers of example/demo).
+if (args.includes('graphql')) {
+  const {query, variables} = JSON.parse(input);
+  const pfile = join(state, `project-${variables.projectId}.json`);
+  if (!existsSync(pfile)) out({data: {node: null}});
+  const items = JSON.parse(readFileSync(pfile, 'utf8'));
+  const issueBy = n => JSON.parse(readFileSync(join(state, `issue-${n}.json`), 'utf8'));
+  if (query.includes('addProjectV2ItemById')) {
+    const n = Number(String(variables.contentId).replace('I_example', ''));
+    if (!items.includes(n)) { items.push(n); writeFileSync(pfile, JSON.stringify(items)); appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint: 'graphql', projectAdd: n}) + '\n'); }
+    out({data: {addProjectV2ItemById: {item: {id: `PVTI_${n}`}}}});
+  }
+  const kind = query.includes('items(first') ? 'items' : 'fields';
+  const nodes = kind === 'fields' ? [] : items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: issueBy(n).node_id, number: n, repository: {nameWithOwner: 'example/demo'}}, fieldValues: {nodes: [], pageInfo: {hasNextPage: false, endCursor: null}}}));
+  out({data: {node: {__typename: 'ProjectV2', id: variables.projectId, title: 'Fixture', [kind]: {nodes, pageInfo: {hasNextPage: false, endCursor: null}}}}});
+}
 const [path, query = ''] = endpoint.split('?');
 const params = new URLSearchParams(query);
 const labelsFile = join(state, 'labels.json');
@@ -48,11 +64,23 @@ if (path === 'repos/example/demo/issues' && method === 'POST') {
   appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint, created: number, title: body.title}) + '\n');
   out(issue);
 }
-const m = /^repos\/example\/demo\/issues\/(\d+)(?:\/(sub_issues))?$/.exec(path);
+const m = /^repos\/example\/demo\/issues\/(\d+)(?:\/(sub_issues|dependencies\/blocked_by))?$/.exec(path);
 if (!m) fail('unsupported fake endpoint ' + endpoint);
 const file = join(state, `issue-${m[1]}.json`);
 if (!existsSync(file)) fail('not found');
 const issue = JSON.parse(readFileSync(file, 'utf8'));
+if (m[2] === 'dependencies/blocked_by') {
+  // `issue` is blocked by the posted issue_id (GitHub REST id).
+  if (method === 'POST') {
+    const blocker = issueFiles().find(i => i.id === JSON.parse(input).issue_id);
+    if (!blocker) fail('blocking issue not found');
+    issue.blocked_by = [...new Set([...(issue.blocked_by ?? []), blocker.number])];
+    writeFileSync(file, JSON.stringify(issue));
+    appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint, blockedBy: blocker.number}) + '\n');
+    out(blocker);
+  }
+  out(page((issue.blocked_by ?? []).map(n => JSON.parse(readFileSync(join(state, `issue-${n}.json`), 'utf8')))));
+}
 if (m[2] === 'sub_issues') {
   // Native sub-issues: stored as numbers on the parent; POST takes the child's REST id like GitHub.
   if (method === 'POST') {
