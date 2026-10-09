@@ -88,6 +88,8 @@ export type ScaffoldDocV1 = EpicDocV1 | FeatureDocV1 | TaskDocV1;
 export interface IssueSnapshot {
   repo: RepoRef; number: number; title: string; body: string; bodySha256: Sha256;
   labels: string[]; labelsSha256: Sha256; state: 'open' | 'closed'; doc: ScaffoldDocV1; projectionChecked: boolean;
+  /** GitHub's state_reason when known (completed / not_planned / reopened). */
+  stateReason?: string | null;
 }
 export type FeatureSnapshot = IssueSnapshot & {doc: FeatureDocV1};
 

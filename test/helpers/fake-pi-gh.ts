@@ -16,7 +16,7 @@ export const PI_GH_020_OPERATIONS = [
 export const PI_GH_WITH_LABELS_LIST = [...PI_GH_020_OPERATIONS, 'gh_labels_list'];
 export const READ_TOOLS = new Set(['gh_labels_list', 'gh_capabilities', 'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items', 'gh_issue_validate', 'gh_issue_preview', 'gh_labels_validate', 'gh_labels_preview', 'gh_issue_form']);
 
-export interface FakeIssue { number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed'; subIssues?: number[]; blockedBy?: (number | string)[] }
+export interface FakeIssue { number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed'; stateReason?: 'completed' | 'not_planned' | null; subIssues?: number[]; blockedBy?: (number | string)[] }
 type Override = (args: unknown, call: number) => ToolOutcome | Promise<ToolOutcome> | undefined;
 
 export class FakePiGh {
@@ -157,7 +157,7 @@ export class FakePiGh {
     } else {
       if (i.state === 'closed') return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
       if (sha(i.body) !== c.expectedBodySha256) return FakePiGh.err('rejected', 'PRECONDITION_FAILED');
-      i.state = 'closed';
+      i.state = 'closed'; i.stateReason = 'completed';
     }
     this.conditionalChanges.push({operation: c.operation, issue: c.issue});
     return FakePiGh.ok({repo: this.repo, operation: name}, 'applied');
@@ -215,7 +215,7 @@ export class FakePiGh {
 
   github(i: FakeIssue) {
     return {
-      id: 1000 + i.number, node_id: `I_example${i.number}`, number: i.number, title: i.title, body: i.body, state: i.state,
+      id: 1000 + i.number, node_id: `I_example${i.number}`, number: i.number, title: i.title, body: i.body, state: i.state, state_reason: i.state === 'closed' ? (i.stateReason ?? 'completed') : null,
       labels: i.labels.map((name, k) => ({id: k + 1, name, color: '000000'})),
       html_url: `https://github.com/${this.repo}/issues/${i.number}`,
     };

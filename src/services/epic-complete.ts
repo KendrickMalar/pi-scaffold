@@ -61,7 +61,8 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
   if (!context.ok) return blocked(context.problems);
   const journal = call.journal(context.value);
   const record = await journal.load(input.operationId);
-  const closedByUs = !!record && record.steps.some(s => s.name === 'close' && (s.phase === 'done' || s.phase === 'requested' || s.phase === 'unknown'));
+  // Only a confirmed close of this operation skips the checks; an uncertain close goes through the full gate again.
+  const closedByUs = !!record && record.steps.some(s => s.name === 'close' && s.phase === 'done');
   const started = !!record && record.steps.some(s => !s.note && s.phase !== 'failed');
 
   const readProject = async () => {
@@ -77,6 +78,13 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     const pre: Problem[] = [];
     const allowedStage = started ? ['verification', 'completed'] : ['verification'];
     if (!allowedStage.includes(epic.stage)) pre.push(problem('STAGE_MISMATCH', 'stage', `Epic is in ${epic.stage}, not verification.`));
+    // Checked on every call, not only as part of a stage transition.
+    if (snap.value.labels.includes('Blocked')) pre.push(problem('BLOCKED', 'labels', 'The Epic is Blocked.'));
+    const stageLabels = snap.value.labels.filter(l => l.startsWith('Stage: '));
+    const labelsDone = !!record?.steps.some(s => s.name === 'epic-labels' && s.phase === 'done');
+    const okLabels = labelsDone ? [['Stage: Completed'], ['Stage: Verification']] : [['Stage: Verification']];
+    if (!okLabels.some(o => JSON.stringify(o) === JSON.stringify(stageLabels))) pre.push(problem('STAGE_LABEL_MISMATCH', 'labels', `Stage labels [${stageLabels.join(', ')}] do not match a verification Epic.`));
+    if (snap.value.state === 'closed' && snap.value.stateReason !== undefined && snap.value.stateReason !== 'completed' && !closedByUs) pre.push(problem('CLOSED_NOT_COMPLETED', 'epicIssue', `The Epic was closed as ${snap.value.stateReason ?? 'unknown'}; it is not marked completed here (reopen it yourself first if that was a mistake).`));
     if (!started) {
       // An Epic closed by hand is not completed by that alone: it goes through the same checks and acceptance (closing is then a no-op).
       if (snap.value.bodySha256 !== input.expectedBodySha256) pre.push(problem('STALE_BODY', 'expectedBodySha256', 'Epic body changed; read it again.'));
@@ -99,7 +107,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       else if (!itemIsEpic || !field || field.dataType !== 'SINGLE_SELECT' || !field.options?.some(o => o.id === input.project!.doneOptionId)) problems.push(problem('PROJECT_TARGET_INVALID', 'project', 'The Project item is not this Epic, or the field is not a single-select holding the Done option.'));
     }
     if (problems.length) return blocked(problems);
-    const view = completionApprovalView(epic, set.value.featureSetDigest, input.finalEvidenceRefs, gate);
+    const view = completionApprovalView(epic, set.value.featureSetDigest, input.finalEvidenceRefs, gate, set.value.features, input.project);
     const existing = await call.approvals.requireContentApproval('epic-completion', epic.workflowId, approvalViewDigest('epic-completion', view), context.value);
     if (!existing.ok) {
       if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
@@ -142,16 +150,21 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       current = await reread(run.stop);
     }
     // 3. Close (B3) and read back.
-    if (current.state !== 'closed' || run.record.steps.some(s => s.name === 'close' && s.phase !== 'done')) {
+    const closeStep = run.record.steps.find(s => s.name === 'close');
+    if (current.state !== 'closed' || (closeStep && closeStep.phase !== 'done')) {
       const path = join(dir, 'close.json');
-      const expectedBody = current.bodySha256;
-      await writeOwnedFile(path, JSON.stringify({version: 1, repo: input.repo, operation: 'issue-close-if-current', issue: input.epicIssue, reason: 'completed', expectedBodySha256: expectedBody}), {root: call.namespaceRoot});
+      // The precondition is the body this operation checked; it is recorded once and reused on resume.
+      if (!closeStep || closeStep.phase === 'failed') {
+        run.note('close-expected', {bodySha256: current.bodySha256});
+        await writeOwnedFile(path, JSON.stringify({version: 1, repo: input.repo, operation: 'issue-close-if-current', issue: input.epicIssue, reason: 'completed', expectedBodySha256: current.bodySha256}), {root: call.namespaceRoot});
+      }
+      const expectedBody = (run.done('close-expected') as {bodySha256: string}).bodySha256;
       await run.write('close', () => call.bridge.call('gh_issue_close_if_current', {changePath: path}, () => true as const, call.scope), {
         reconcile: async () => { const s = await reread(run.stop); return s.state === 'closed' ? 'applied' : s.bodySha256 === expectedBody ? 'not-applied' : 'unknown'; },
       });
     }
     current = await reread(run.stop);
-    if (current.state !== 'closed' || (current.doc as EpicDocV1).stage !== 'completed' || !current.labels.includes('Stage: Completed')) return run.stop([problem('NOT_COMPLETED', 'epicIssue', 'The Epic does not show as completed and closed.')]);
+    if (current.state !== 'closed' || (current.stateReason !== undefined && current.stateReason !== 'completed') || (current.doc as EpicDocV1).stage !== 'completed' || !current.labels.includes('Stage: Completed')) return run.stop([problem('NOT_COMPLETED', 'epicIssue', 'The Epic does not show as completed and closed.')]);
     // 4. Optional Project: set Status to Done and read it back.
     let projectUpdated = false;
     if (input.project) {
@@ -168,11 +181,17 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     }
     return {status: 'applied', data: {issueClosed: true, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: refs.remoteMainRef, pendingStep: null}};
   });
-  if (result.status === 'partial' || result.status === 'unknown' || result.status === 'blocked') {
+  if ((result.status === 'partial' || result.status === 'unknown' || result.status === 'blocked') && (await journal.load(input.operationId))) {
+    // Report from what GitHub shows now, not from the journal alone.
     const rec = await journal.load(input.operationId);
-    const closed = !!rec?.steps.some(s => s.name === 'close' && s.phase === 'done');
+    const now = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
     const remote = (rec?.steps.find(s => s.name === 'refs')?.data as {remoteMainRef?: string} | undefined)?.remoteMainRef ?? gate?.remoteMainRef ?? '';
-    if (closed) return {...result, data: {issueClosed: true, projectUpdated: false, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep: 'project'}} as ScaffoldResult<EpicCompleteData>;
+    if (now.ok) {
+      const d = now.value.doc as EpicDocV1;
+      const issueClosed = now.value.state === 'closed';
+      const pendingStep = d.stage !== 'completed' ? 'epic-body' : !now.value.labels.includes('Stage: Completed') ? 'epic-labels' : !issueClosed ? 'close' : input.project ? 'project' : null;
+      return {...result, data: {issueClosed, projectUpdated: false, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep}} as ScaffoldResult<EpicCompleteData>;
+    }
   }
   return result as ScaffoldResult<EpicCompleteData>;
 }

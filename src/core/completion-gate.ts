@@ -1,7 +1,7 @@
 // #16 completion gate: the specification is complete, every requirement is covered by Feature criteria whose final
 // evidence passed, and the verified commit is contained in origin's default branch. Git access is read-only
 // (rev-parse/cat-file/merge-base and ls-remote to the matching origin); nothing is fetched, merged or pushed.
-import {problem, type EpicDocV1, type EvidenceReportV1, type FeatureSnapshot, type GateResult, type GitObjectId, type Problem, type Sha256} from './contracts.js';
+import {problem, type EpicDocV1, type EvidenceReportV1, type FeatureDocV1, type FeatureSnapshot, type GateResult, type GitObjectId, type Problem, type Sha256} from './contracts.js';
 import {checkSpecificationReady} from './specification-gate.js';
 import {checkFeatureIntegration} from './evidence.js';
 import {designDigest, specificationDigest, taggedDigest} from './digests.js';
@@ -40,18 +40,24 @@ export async function checkCompletion(input: {epic: EpicDocV1; features: readonl
 }
 
 /** The parent's final acceptance: this specification/design/Feature set/evidence at these exact refs. */
-export function completionApprovalView(epic: EpicDocV1, featureSetDigest: Sha256, evidence: readonly {relativePath: string; sha256: Sha256}[], result: CompletionResult): ApprovalView {
+export interface CompletionProjectTarget { projectId: string; itemId: string; statusFieldId: string; doneOptionId: string }
+export function completionApprovalView(epic: EpicDocV1, featureSetDigest: Sha256, evidence: readonly {relativePath: string; sha256: Sha256}[], result: CompletionResult,
+  features: readonly {number: number; doc: FeatureDocV1}[], project?: CompletionProjectTarget): ApprovalView {
+  const sortedEvidence = [...evidence].sort((a, b) => a.relativePath < b.relativePath ? -1 : 1);
+  const sortedFeatures = [...features].sort((a, b) => a.number - b.number);
   const contentDigest = taggedDigest('epic-completion', {
     specification: specificationDigest(epic), design: designDigest(epic), featureSet: featureSetDigest,
-    evidence: [...evidence].sort((a, b) => a.relativePath < b.relativePath ? -1 : 1), verifiedRef: result.verifiedRef, remoteMainRef: result.remoteMainRef, defaultBranch: result.defaultBranch,
+    evidence: sortedEvidence, verifiedRef: result.verifiedRef, remoteMainRef: result.remoteMainRef, defaultBranch: result.defaultBranch, project: project ?? null,
   });
   const text = [
     'Epic の最終受け入れ',
     `検証済みコミット: ${result.verifiedRef}`,
     `origin/${result.defaultBranch}: ${result.remoteMainRef}（検証済みコミットを含む）`,
     `要件: ${epic.requirements.map(r => r.id).join(', ')}`,
-    `証拠: ${evidence.length} 件（参照とハッシュのみ確認。内容の真正性は保証しません）`,
-    '受け入れると、Epic の本文と Stage を完了にし、Issue を閉じます（指定があれば Project を Done にします）。',
+    'Feature:', ...sortedFeatures.map(f => `- #${f.number} ${f.doc.featureKey}: ${f.doc.criteria.map(c => `${c.id}(${c.requirementIds.join('+')})`).join(', ')}`),
+    '証拠（参照とハッシュのみ確認。内容の真正性は保証しません）:', ...sortedEvidence.map(e => `- ${e.relativePath} sha256 ${e.sha256}`),
+    `Project: ${project ? `${project.projectId} の item ${project.itemId} の ${project.statusFieldId} を ${project.doneOptionId} にする` : '変更しない'}`,
+    '受け入れると、Epic の本文と Stage を完了にし、Issue を閉じます。',
   ].join('\n');
   return {contentDigest, text};
 }

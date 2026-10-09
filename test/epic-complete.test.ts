@@ -32,10 +32,10 @@ function feature(epic: EpicDocV1, n: number): FeatureDocV1 {
   return {...featureDoc(), workflowId: epic.workflowId, featureKey: `F00${n - 10}`, parentEpic: 10, stage: 'implementation', editScope: [`src/f${n}/`],
     criteria: [{id: `AC10${n - 10}`, requirementIds: [n === 11 ? 'REQ001' : 'REQ002'], verification: 'v', expectedResult: 'e'}], createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
 }
-function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 'closed'; features?: Record<number, FeatureDocV1>} = {}) {
+function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 'closed'; stateReason?: 'completed' | 'not_planned'; features?: Record<number, FeatureDocV1>} = {}) {
   const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
-  gh.add({number: 10, title: 'Epic', body: 'メモ（管理外）\n\n' + renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Verification'], state: opts.state ?? 'open', subIssues: [...ISSUES]});
+  gh.add({number: 10, title: 'Epic', body: 'メモ（管理外）\n\n' + renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Verification'], state: opts.state ?? 'open', ...(opts.stateReason ? {stateReason: opts.stateReason} : {}), subIssues: [...ISSUES]});
   for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(opts.features?.[n] ?? feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: Implementation', 'Wave: 1'], state: 'open'});
   gh.projects.set(PROJECT.projectId, [10]);
   gh.projectFields.set(PROJECT.projectId, [{id: PROJECT.statusFieldId, name: 'Status', dataType: 'SINGLE_SELECT', options: [{id: 'opt_todo', name: 'Todo'}, {id: PROJECT.doneOptionId, name: 'Done'}]}]);
@@ -263,4 +263,87 @@ test('a Project update reported as applied but not visible is caught by the read
   assert.notEqual(out.r.status, 'applied');
   assert.ok(out.r.problems.some(p => p.code === 'PROJECT_NOT_DONE'), JSON.stringify(out.r.problems));
   assert.equal((out.r.data as Data).issueClosed, true);
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a close left uncertain is resumed only through the full gate: a requirement added meanwhile stops it', async t => {
+  const gh = world();
+  gh.overrides.set('gh_issue_close_if_current', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}));
+  const h = await harness(t, gh);
+  const input = params(gh, await writeEvidence(h.agentDir));
+  assert.equal((await h.invoke(input)).r.status, 'unknown');
+  gh.overrides.delete('gh_issue_close_if_current');
+  const d = docOf(gh); d.requirements.push({id: 'REQ009', description: '後から追加された要件'});
+  gh.issues.get(10)!.body = 'メモ（管理外）\n\n' + renderEpicBlock(d);
+  const before = closes(gh);
+  const resumed = await h.invoke(input);
+  assert.notEqual(resumed.r.status, 'applied', JSON.stringify(resumed.r));
+  assert.equal(gh.issues.get(10)!.state, 'open'); assert.equal(closes(gh), before, 'no close over the changed requirements');
+});
+
+test('Blocked always stops: also with a Completed label (no stage transition) and on resume', async t => {
+  await expectBlocked(t, 'BLOCKED', {gh: world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Completed', 'Blocked']})});
+  const gh = world();
+  let fail = true;
+  gh.overrides.set('gh_issue_close_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  const h = await harness(t, gh);
+  const input = params(gh, await writeEvidence(h.agentDir));
+  assert.notEqual((await h.invoke(input)).r.status, 'applied');
+  gh.issues.get(10)!.labels.push('Blocked');
+  const resumed = await h.invoke(input);
+  assert.equal(resumed.r.status, 'blocked'); assert.ok(resumed.r.problems.some(p => p.code === 'BLOCKED'), JSON.stringify(resumed.r.problems));
+  assert.equal(gh.issues.get(10)!.state, 'open');
+});
+
+test('a Stage label that disagrees with the body stage stops before any change', async t => {
+  await expectBlocked(t, 'STAGE_LABEL_MISMATCH', {gh: world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Completed']})});
+});
+
+test('an Epic closed by hand as "not planned" is not completed', async t => {
+  await expectBlocked(t, 'CLOSED_NOT_COMPLETED', {gh: world({state: 'closed', stateReason: 'not_planned'})});
+});
+
+test('the Project item of another Issue in the same Project is refused', async t => {
+  const gh = world(); gh.projects.set(PROJECT.projectId, [10, 11]);
+  const before = gh.issues.get(10)!.body;
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: {...PROJECT, itemId: 'PVTI_11'}}));
+  assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'PROJECT_TARGET_INVALID')); nothingChanged(gh, before);
+});
+
+test('a hand-closed Epic whose Project update fails reports issueClosed=true and pending project', async t => {
+  const gh = world({state: 'closed'});
+  gh.overrides.set('gh_project_field_update', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: PROJECT}));
+  assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
+  assert.deepEqual([(out.r.data as Data).issueClosed, (out.r.data as Data).pendingStep], [true, 'project']);
+});
+
+test('without a project, a failure never reports a pending Project step', async t => {
+  const gh = world();
+  gh.overrides.set('gh_issue_close_if_current', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.notEqual(out.r.status, 'applied');
+  assert.notEqual((out.r.data as Partial<Data> | undefined)?.pendingStep, 'project');
+});
+
+test('the acceptance shows the Features, evidence and Project target, and binds the Project target', async t => {
+  const gh = world();
+  const shown: string[] = [];
+  const h = await harness(t, gh, {confirm: () => true});
+  (h as unknown as {tool: unknown});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: PROJECT}));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  void shown;
+  const {completionApprovalView} = await import('../src/core/completion-gate.js');
+  const base = {status: 'validated' as const, problems: [], artifactDigests: {}, verifiedRef: VERIFIED, remoteMainRef: MAIN, defaultBranch: 'main'};
+  const features = ISSUES.map(n => ({number: n, doc: feature(epicDoc(), n)})) as never;
+  const refs = [{relativePath: 'final/11.json', sha256: 'a'.repeat(64)}];
+  const v1 = completionApprovalView(epicDoc(), 'f'.repeat(64), refs, base, features, PROJECT);
+  const v2 = completionApprovalView(epicDoc(), 'f'.repeat(64), refs, base, features, {...PROJECT, doneOptionId: 'opt_other'});
+  assert.notEqual(v1.contentDigest, v2.contentDigest);
+  assert.match(v1.text, /#11 F001/); assert.match(v1.text, /final\/11\.json/); assert.match(v1.text, /PVTI_10/);
 });
