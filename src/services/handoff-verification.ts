@@ -17,7 +17,9 @@ export function decodeVerificationHandoffInput(value: unknown): Decoded<Verifica
   return decodeMutationInput<{integrationRef: GitObjectId; evidenceRefs: OwnedEvidenceRef[]}>(value, {
     integrationRef: {decode: (r, v, p) => r.pattern(v, p, isGitObjectId, 'a 40/64 hex commit id (not a branch or HEAD)')},
     evidenceRefs: {decode: (r, v, p) => {
-      const list = r.array(v, p, (x, q) => { const o = r.object(x, q, ['relativePath', 'sha256']) ?? {}; return {relativePath: r.text(o.relativePath, `${q}.relativePath`), sha256: r.pattern(o.sha256, `${q}.sha256`, isSha256, 'sha256')}; }, 50);
+      // Normalized relative paths without "@" so the pinned `evidence:<path>@sha256:<hex>` entry is unambiguous.
+      const normalized = (x: unknown) => typeof x === 'string' && !x.includes('@') && !x.startsWith('/') && x.split('/').every(s => s !== '' && s !== '.' && s !== '..');
+      const list = r.array(v, p, (x, q) => { const o = r.object(x, q, ['relativePath', 'sha256']) ?? {}; return {relativePath: r.pattern(o.relativePath, `${q}.relativePath`, normalized, 'a normalized path inside evidence/ without "@"'), sha256: r.pattern(o.sha256, `${q}.sha256`, isSha256, 'sha256')}; }, 50);
       if (Array.isArray(v) && !v.length) r.add('EMPTY', p, 'Give one report per Feature.');
       return list;
     }},
@@ -69,5 +71,8 @@ export async function handoffVerification(input: VerificationHandoffInput, call:
   const resourceRefs = [`integration:${input.integrationRef}`, ...input.evidenceRefs.map(r => `evidence:${r.relativePath}@sha256:${r.sha256}`)];
   const result = await handoffStage(handoff, gate, call, operation, {resourceRefs});
   if (result.status !== 'applied' && result.status !== 'noop') return result as ScaffoldResult<VerificationHandoffData>;
+  // A resumed handoff skips the checks above; the answer comes from the pinned evidence either way.
+  const pinned = await readEvidence(input.evidenceRefs, evidenceRoot, call.namespaceRoot);
+  tested = !pinned.problems.length && pinned.reports.length > 0 && pinned.reports.every(r => r.productRef === input.integrationRef);
   return {...result, data: {...result.data!, testedOnIntegration: tested, evidenceChecked: 'refs-and-hashes-only'}};
 }

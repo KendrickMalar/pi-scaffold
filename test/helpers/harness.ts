@@ -63,6 +63,11 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
       // Synthetic commit graph: `cat-file -e <ref>^{commit}` and `merge-base --is-ancestor <a> <b>`.
       const commits = scenario.commits ?? {exists: [], ancestors: []};
       if (args[0] === 'cat-file' && args[1] === '-e') return {code: commits.exists.includes(String(args[2]).replace(/\^\{commit\}$/, '')) ? 0 : 1, stdout: ''};
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        // Like git: an unambiguous prefix resolves to the full id.
+        const ref = String(args.at(-1)).replace(/\^\{commit\}$/, ''), hits = commits.exists.filter(c => c.startsWith(ref));
+        return hits.length === 1 ? {code: 0, stdout: hits[0]! + '\n'} : {code: 128, stdout: ''};
+      }
       if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return {code: args[2] === args[3] || commits.ancestors.some(([a, b]) => a === args[2] && b === args[3]) ? 0 : 1, stdout: ''};
       return {code: 1, stdout: ''};
     },

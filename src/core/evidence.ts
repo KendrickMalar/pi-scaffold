@@ -63,9 +63,19 @@ export async function readEvidence(refs: readonly OwnedEvidenceRef[], evidenceRo
 export async function checkFeatureIntegration(input: {epic: EpicDocV1; features: readonly FeatureSnapshot[]; reports: readonly EvidenceReportV1[]; integrationRef: GitObjectId; git: GitReader; repoRoot: string}): Promise<GateResult & {testedOnIntegration: boolean}> {
   const {epic, features, reports, integrationRef, git, repoRoot} = input;
   const problems: Problem[] = [];
-  const exists = async (ref: string) => (await git.run(['cat-file', '-e', `${ref}^{commit}`], repoRoot)).code === 0;
+  // A full commit id only: git must resolve the ref to exactly itself (a SHA-256 repo would accept a 40-hex prefix otherwise).
+  const resolveFull = async (ref: string): Promise<'ok' | 'missing' | 'abbreviated'> => {
+    const r = await git.run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], repoRoot);
+    if (r.code !== 0) return 'missing';
+    return r.stdout.trim() === ref ? 'ok' : 'abbreviated';
+  };
+  const refProblem = async (ref: string, path: string): Promise<Problem | undefined> => {
+    const s = await resolveFull(ref);
+    return s === 'ok' ? undefined : s === 'missing' ? problem('REF_NOT_FOUND', path, `${ref} is not a commit in the local repository.`) : problem('REF_NOT_FULL', path, `${ref} is only a prefix of a commit id here; give the full id.`);
+  };
   const integrated = async (ref: string) => ref === integrationRef || (await git.run(['merge-base', '--is-ancestor', ref, integrationRef], repoRoot)).code === 0;
-  if (!(await exists(integrationRef))) problems.push(problem('REF_NOT_FOUND', 'integrationRef', `${integrationRef} is not a commit in the local repository.`));
+  const integrationProblem = await refProblem(integrationRef, 'integrationRef');
+  if (integrationProblem) return {status: 'blocked', problems: [integrationProblem], artifactDigests: {}, testedOnIntegration: false};
   const byIssue = new Map<number, EvidenceReportV1>();
   for (const [i, r] of reports.entries()) {
     const at = `reports[#${r.featureIssue}]`;
@@ -73,7 +83,8 @@ export async function checkFeatureIntegration(input: {epic: EpicDocV1; features:
     if (byIssue.has(r.featureIssue)) { problems.push(problem('DUPLICATE_REPORT', `evidenceRefs[${i}]`, `#${r.featureIssue} has more than one report.`)); continue; }
     byIssue.set(r.featureIssue, r);
     for (const [k, ref] of [['productRef', r.productRef], ['suiteRef', r.suiteRef]] as const) {
-      if (!(await exists(ref))) problems.push(problem('REF_NOT_FOUND', `${at}.${k}`, `${ref} is not a commit in the local repository.`));
+      const missing = await refProblem(ref, `${at}.${k}`);
+      if (missing) problems.push(missing);
       else if (!(await integrated(ref))) problems.push(problem('REF_NOT_INTEGRATED', `${at}.${k}`, `${ref} is not part of ${integrationRef}.`));
     }
   }

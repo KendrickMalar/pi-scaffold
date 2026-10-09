@@ -103,7 +103,8 @@ test('an integrationRef that does not exist is blocked', async t => { await expe
 test('a mutable ref like HEAD is rejected', async t => {
   const gh = world(); const {h, herdr} = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {integrationRef: 'HEAD'}));
-  assert.equal(out.r.status, 'blocked'); noLaunch(herdr, gh);
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.path === 'integrationRef'), JSON.stringify(out.r.problems)); noLaunch(herdr, gh);
 });
 test('a missing log is blocked', async t => { await expectBlocked(t, () => {}, 'EVIDENCE_NOT_FOUND', {skipLogs: ['logs/11-AC101.log']}); });
 test('a log hash mismatch is blocked', async t => { await expectBlocked(t, r => { r[0]!.criteria[0]!.logSha256 = 'f'.repeat(64); }, 'LOG_HASH_MISMATCH'); });
@@ -163,4 +164,46 @@ test('input with close/accept flags is rejected', async t => {
     assert.equal(out.inputSchemaValid, false); assert.equal(out.r.status, 'blocked');
   }
   noLaunch(herdr, gh);
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+test('a 40-hex prefix of a SHA-256 commit is not accepted as a full commit id', async t => {
+  const full = 'ab'.repeat(32);
+  const gh = world();
+  const {h, herdr} = await harness(t, gh, {commits: {exists: [full, SUITE], ancestors: [[SUITE, full]]}});
+  const refs = await writeEvidence(h.agentDir, r => { for (const x of r) { x.productRef = full; } });
+  const out = await h.invoke(params(gh, refs, {integrationRef: full.slice(0, 40)}));
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'REF_NOT_FULL' && p.path === 'integrationRef'), JSON.stringify(out.r.problems));
+  noLaunch(herdr, gh);
+});
+
+test('evidence paths must be normalized and free of "@" (the pinned packet entry stays unambiguous)', async t => {
+  for (const bad of ['reports/./11.json', 'reports//11.json', 'reports/11@sha256:x.json']) {
+    const gh = world(); const {h, herdr} = await harness(t, gh);
+    const refs = await writeEvidence(h.agentDir);
+    const out = await h.invoke(params(gh, [{...refs[0]!, relativePath: bad}, refs[1]]));
+    assert.equal(out.r.status, 'blocked', bad);
+    assert.ok(out.r.problems.some(p => p.path === 'evidenceRefs[0].relativePath'), `${bad}: ${JSON.stringify(out.r.problems)}`);
+    noLaunch(herdr, gh);
+  }
+});
+
+test('a resumed handoff still reports testedOnIntegration from the evidence', async t => {
+  const gh = world();
+  const {h, herdr} = await harness(t, gh);
+  const prompt = herdr.onPrompt!;
+  let first = true;
+  herdr.onPrompt = async (p, text) => { if (first) { first = false; return; } await prompt(p, text); };
+  const refs = await writeEvidence(h.agentDir);
+  const input = params(gh, refs);
+  const paused = await h.invoke(input);
+  assert.notEqual(paused.r.status, 'applied', JSON.stringify(paused.r));
+  herdr.onPrompt = prompt;
+  // The started receipt arrives for the prompt that was already sent.
+  await prompt('w9:p2', herdr.calls.filter(c => c.command === 'agentPrompt').map(c => (c.args as {text: string}).text).at(-1)!);
+  const resumed = await h.invoke(input);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r));
+  assert.equal((resumed.r.data as Record<string, unknown>).testedOnIntegration, true);
 });
