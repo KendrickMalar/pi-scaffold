@@ -1,55 +1,82 @@
 # pi-scaffold
 
-[Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが実行できる個別のTypeScriptツールとして提供する拡張です。
+[Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが呼び出せる14個の個別ツールとして提供する拡張です。GitHubの操作はすべて[pi-gh](https://github.com/KendrickMalar/pi-gh)の公開ツール経由で行います。
 
-共通基盤（[#2](https://github.com/KendrickMalar/pi-scaffold/issues/2)）の上に、受け入れ済みのツールだけを登録しています。npm公開・Piへの導入はしていません。
+npm名は`@papillon6814/pi-scaffold`（MIT）。**まだnpmに公開しておらず、Piへの導入もしていません。**
 
-| ツール | 内容 |
-|---|---|
-| `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を一覧1回で照合し、不足分だけpi-gh経由で作成。最後に全件を読み戻してから成功を返す。色・説明・大小文字の違いは既定で停止（`onMismatch: "update"`で更新）。無関係ラベルの改名・削除、Issueへの付与はしない。1回の呼び出しは約60秒で区切り、`partial`なら同じoperationIdで続きを実行 |
-| `scaffold_epic_draft_create` | タイトル・目的・元の依頼から#4 v1のEpic下書きを作る（要件などは補完しない）。`mode: "prepare"`はローカルの下書きだけ、既定の`publish`はpi-gh（template kind parent）で未完成のEpicを1件作成し、`Type: Scaffold`/`Scope: Epic`だけを付ける（Stageなし）。同じoperationIdの再実行は同じIssueを返し、成否不明の投稿は再投稿しない。セッションのモデルはplannerとして記録するだけで呼び出さない。先に`scaffold_labels_ensure`が必要 |
-| `scaffold_handoff_specification` | setupのEpicを、新しいHerdrタブで起動した別のPiセッション（Development Profile）へ仕様策定として引き継ぐ。下書きの形式だけを検査（未回答・未着手は可）。受け取り側がpacketを確認してから、pi-ghの前提条件つき更新で`Stage: Specification`と本文のstageを反映し、固定のプロンプトを送る。新しいセッションがターンを開始したことを確認できたときだけ完了。途中は`partial`で、同じoperationIdで再開（タブは作り直さない） |
+## 工程とツール
 
-pi-ghの`gh_labels_list`（[KendrickMalar/pi-gh#5](https://github.com/KendrickMalar/pi-gh/issues/5)）が必要です。ない版では`CAPABILITY_MISSING`で止まります。ラベル作成はpi-ghの承認を1件ずつ通ります。`onMismatch: "update"`の更新はpi-ghのlabel-editを使うため、pi-gh側で影響範囲としてIssue一覧を読みます。Issueが非常に多いリポジトリでは更新が`GITHUB_LIMIT`で止まることがあります（作成だけなら影響しません）。TUIで承認するか、所有者がpi-ghの許可ファイルに`gh_label_create`を明示した場合だけ自動で進みます。
+Epicは `setup → specification → basic-design → implementation → verification → completed` と進みます。工程が変わるたびに、Herdrの新しいタブで別のPiセッションを起動して引き継ぎます。同じ会話の中でモードを切り替えることはしません。
 
-Epic本文はpi-ghが組み立てるため、管理ブロックの前に`## Scaffold Epic（自動管理）`、後ろに`## 担当モデル`（planner）が付きます。管理ブロックの外側は読み戻し時もそのまま保持します。
+| 工程 | ツール | 内容 |
+|---|---|---|
+| setup | `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を照合し、足りないものだけを作成する。色や説明が違えば既定では止まる |
+| setup | `scaffold_epic_draft_create` | タイトル・目的・元の依頼からEpicを1件作る（要件は補わない）。`mode: "prepare"`はローカルの下書きだけ |
+| setup→specification | `scaffold_handoff_specification` | 仕様策定セッションへ引き継ぐ |
+| specification | `scaffold_specification_update` | ヒアリングで確定した事実・要件・合格基準・決定を、安定IDのpatchとして反映する（削除・再採番はしない）。足りない項目は`missingFields`で返す |
+| specification | `scaffold_research_begin` | 調査項目の担当（claim）を取り、調査指示（brief）を返す。調査の実行やモデル呼び出しはしない |
+| specification | `scaffold_research_resolve` | 根拠（https URL、またはハッシュ付きの手元ファイル）のある結果を反映する。結果をREQ/AC/Dへ自動で昇格しない |
+| specification→basic-design | `scaffold_handoff_basic_design` | 仕様がそろっていることを確認し、**親TUIで仕様の内容承認**を得てから引き継ぐ |
+| basic-design | `scaffold_feature_create` | Featureを1件作る。pi-ghのtaskテンプレートで作成し、Epicのnative sub-issueとして接続する |
+| basic-design | `scaffold_dependencies_apply` | Feature間の依存を検査し（循環・未知・自己辺）、足りない依存だけを追加する。計画と固定IDのMermaid図をEpicに保存する。`design`（設計書のpath/sha256/コミット。手元のgitで確認）を渡すと、Epicの基本設計の参照も同じ更新で保存する（実装工程への引き継ぎに必要） |
+| basic-design | `scaffold_waves_verify` | （読み取りのみ）Wave・依存順・同じWave内の編集競合・ラベルを検証する |
+| basic-design | `scaffold_waves_apply` | 検証を通ったWave計画をFeatureのラベルへ反映し、計画をEpicに保存する |
+| basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**親TUIで実装開始の指示**を得てから引き継ぐ |
+| implementation→verification | `scaffold_handoff_verification` | 統合コミットと、FeatureごとのAC別の証拠（レポート・ログのハッシュ）を固定して引き継ぐ。Epicは閉じない |
+| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**親TUIで最終受け入れ**を得てから、本文・Stage・closeを反映する。指定があればProjectをDoneにする |
 
-引き継ぎにはHerdr 0.9.1（protocol 22）、pi-profileの`developer` Profile、owner policyの`authMode: "file-backed"`、pi-gh 0.5.0以上が必要です。新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。タブを閉じたり、相手を止めたりはしません。
+完了条件は次のとおりです。
+- 要件がすべて合格基準でカバーされ、証拠が合格している
+- `verifiedRef`がoriginの既定ブランチに含まれている
 
-開発: `npm install --ignore-scripts`、`npm run typecheck`、`npm test`。実Piでの検証は `python3 scripts/test-native-pi.py --pi-gh /absolute/path/to/pi-gh`（pi-gh 0.5.0以上のcheckoutまたはインストール済みパッケージ、合成HOME・偽gh・loopbackモデルを使い、実GitHubには触れません）。Herdr実機の引き継ぎは `python3 scripts/test-native-handoff.py --pi-gh <pi-gh> --pi-profile <pi-profile>`（専用のherdr session `pst`と合成HOMEで実行し、終了後に停止・削除します）。
+## 共通の約束
+
+- **承認は親TUIでのみ記録します。** 対象は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、確認画面で見せた内容のdigestに結び付けます。内容が変われば失効し、headlessや子セッションでは新しく作れません。Issue本文の`approved: true`や決定ログは承認として扱いません。
+- **operationId**：書き込みのあるツールは、手順ごとにjournalへ記録します。同じoperationIdでの再実行は、続きから再開するか`noop`を返します。別の内容で同じoperationIdを使うと止まります。結果が分からない書き込みは、GitHubを読み直して照合してから進め、むやみに再送しません。
+- **結果のstatus**：`validated` `prepared` `applied` `noop` `blocked` `partial` `unknown` `cancelled` の8種類です。
+  - `partial`と`unknown`は`resumeToken`（＝operationId）付きで返します。同じoperationIdで再開してください。
+  - `blocked`・`partial`・`unknown`・`cancelled`はエラー（`isError: true`）として返します。
+- **書き込み**はpi-ghの前提条件付き更新（`*_if_current`）を使います。本文やラベルが読んだ後に変わっていれば、上書きせずに止まります。管理ブロックの外にあるメモは、1バイトも変えません。
+- **取消**：reload / tree / forkで会話が変わると、実行中の呼び出しは`cancelled`になります（書き込みの途中なら`unknown`）。
+- pi-ghに必要な機能が無いときは`CAPABILITY_MISSING`で止まります。ghやAPIを直接呼んで回避することはしません。
+
+## 必要なもの
+
+- Pi 1.x、pi-gh 0.5.0以上（`gh_labels_list`、ラベル絞り込み、`*_if_current`）
+- 引き継ぎには次が必要です。
+  - Herdr 0.9.1（protocol 22）
+  - pi-profileの`developer` Profile
+  - owner policy（`$PI_CODING_AGENT_DIR/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）
+- GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
+
+新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。
+
+## 範囲外
+
+- 手動スラッシュコマンド
+- 実装者・テスト担当の自動起動、調査の自動実行、テストの代行
+- 仕様や設計の内容判断
+- fetch / merge / push、リリース、通知
+- 証拠の内容の真正性の保証（参照とハッシュは確認しますが、内容の真偽は人間が判断します）
 
 ## 役割の分担
 
-- **pi-scaffold**：工程ごとの個別ツール、専用テンプレート、工程条件、実行ウェーブ、セッション引き継ぎ。
-- **[pi-gh](https://github.com/KendrickMalar/pi-gh)**：汎用GitHub操作、入力検証、承認、変更結果の確認。
-- pi-ghの公開ツールを`ctx.executeTool()`で利用し、`gh_capabilities`の契約バージョンと必要機能を確認します。初期候補は`@papillon6814/pi-gh@0.2.0`・contractVersion 1です。
-- 手動用スラッシュコマンドではなく、AI用の個別ツールを中心にします。内部処理は共有しても、各操作の入口・入力・結果・完了条件は分けます。
+- **pi-scaffold**：工程ごとの個別ツール、専用テンプレート、工程の条件、実行ウェーブ、セッションの引き継ぎ。
+- **pi-gh**：汎用のGitHub操作、入力検証、承認、変更結果の確認。pi-scaffoldは`ctx.executeTool()`でpi-ghを呼び、`gh_capabilities`（contractVersion 1と必要な機能）を確認します。
 
-## 個別操作の予定
+## 開発と検証
 
-| 工程 | 操作 |
-|---|---|
-| 環境セットアップ | 管理ラベルの準備 |
-| 環境セットアップ | Epicの下書き作成 |
-| 環境セットアップ | 仕様策定セッションへの引き継ぎ |
-| 仕様策定 | ヒアリング内容の仕様への整理 |
-| 仕様策定 | 未解決の調査項目への着手 |
-| 仕様策定 | 調査結果のEpicへの反映 |
-| 仕様策定 | 基本設計セッションへの引き継ぎ |
-| 基本設計 | Feature Issueの作成 |
-| 基本設計 | Feature間の依存関係の登録・可視化 |
-| 基本設計 | 実行ウェーブの割り当て |
-| 基本設計 | 実行ウェーブの割り当て検証 |
-| 基本設計 | 詳細設計・実装セッションへの引き継ぎ |
-| 詳細設計・実装 | 検証セッションへの引き継ぎ |
-| 検証 | Epicの完了処理 |
+```sh
+npm install --ignore-scripts
+npm run typecheck
+npm test
+```
 
-## 開発前に決めること
+いずれのスクリプトも、合成したHOMEと偽の`gh`・ループバックのモデルで動きます。実際のGitHubには触れません。
 
-各Issueに目的・範囲・対象外・完了条件・未決事項を記録しています。ツール名や入力schema、Epic/Feature/Taskのテンプレート、必須ラベル、Herdrへの接続方法は実装前に確定します。
+- **実Piでの確認**：`python3 scripts/test-native-pi.py --pi-gh <pi-gh 0.5.0以上>`
+- **Herdr実機での引き継ぎ**：`python3 scripts/test-native-handoff.py --pi-gh <pi-gh> --pi-profile <pi-profile>`
+- **全工程を通す試験**：`python3 scripts/test-native-workflow.py --pi-gh <pi-gh> --pi-profile <pi-profile>`
+  - Herdrを使う2つは、専用のherdr session `pst`で実行します。終了後にセッションを停止し、一時ディレクトリを削除します。
 
-判断・ヒアリング・調査はAIが担当し、ツールは構造化、検証、状態反映、引き継ぎを担当します。自然言語の指示をそのまま任意API・shellとして実行しません。
-
-pi-ghに必要な汎用操作が不足している場合はpi-gh側へIssueを分け、内部実装の直接importや直接gh実行で安全境界を迂回しません。自動実行の権限設定をこの拡張が無断で有効化することはありません。
-
-進捗と完了条件の正本は、このリポジトリのGitHub Issuesです。
+起動中のPiは、pi-ghやpi-scaffoldを入れ替えたら再起動しないと新しい版を読み込みません。

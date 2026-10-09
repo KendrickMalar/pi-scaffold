@@ -29,7 +29,7 @@ export function decodeVerificationHandoffInput(value: unknown): Decoded<Verifica
 export async function handoffVerification(input: VerificationHandoffInput, call: ToolCall): Promise<ScaffoldResult<VerificationHandoffData>> {
   const operation = HANDOFF_VERIFICATION;
   const blocked = (problems: Problem[]): ScaffoldResult<VerificationHandoffData> => ({status: 'blocked', operation, problems});
-  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list'], call.scope);
+  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);
   if (!repoOnly.ok) return blocked(repoOnly.problems);

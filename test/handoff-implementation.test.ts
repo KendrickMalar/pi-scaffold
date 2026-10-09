@@ -255,3 +255,13 @@ test('one call reads the Feature set a bounded number of times', async t => {
   // pre-approval readiness (verify reads twice) + pre-commit readiness (twice); the driver's own pre-op gate reuses the first.
   assert.ok(gh.count('gh_subissues_list') <= 4, `subissue lists: ${gh.count('gh_subissues_list')}`);
 });
+
+test('a missing write capability the handoff needs later stops before the start approval is asked', async t => {
+  for (const op of ['gh_issue_edit_if_current', 'gh_issue_labels_if_current']) {
+    const gh = world(); gh.operations = gh.operations.filter(o => o !== op);
+    const {h, herdr} = await harness(t, gh);
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING'), op);
+    assert.equal(out.confirmCalls, 0, op); noLaunch(herdr, gh);
+  }
+});

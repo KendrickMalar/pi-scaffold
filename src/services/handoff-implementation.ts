@@ -36,7 +36,8 @@ async function readiness(call: ToolCall, repo: string, epicIssue: number, snapsh
 export async function handoffImplementation(input: MutationInput, call: ToolCall): Promise<ScaffoldResult<HandoffData>> {
   const operation = HANDOFF_IMPLEMENTATION;
   const blocked = (problems: Problem[]): ScaffoldResult<HandoffData> => ({status: 'blocked', operation, problems});
-  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list', 'gh_dependencies_list'], call.scope);
+  // Everything the handoff will need, including the driver's later writes, before anything is asked of the parent.
+  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list', 'gh_dependencies_list', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);
   if (!repoOnly.ok) return blocked(repoOnly.problems);

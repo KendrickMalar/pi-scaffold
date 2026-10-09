@@ -133,7 +133,8 @@ class Acceptance(unittest.TestCase):
         args.update(over); return args
 
     def args(self, *more, probe=True, trust=True):
-        ext = ['-e', str(self.pi_gh), '-e', str(ROOT)] + (['-e', str(ROOT / 'test/fixtures/probe-extension.ts')] if probe else [])
+        # --package loads pi-scaffold from an unpacked `npm pack` tarball instead of the checkout (the published artifact).
+        ext = ['-e', str(self.pi_gh), '-e', str(Path(OPTIONS.package).resolve() if OPTIONS.package else ROOT)] + (['-e', str(ROOT / 'test/fixtures/probe-extension.ts')] if probe else [])
         return [OPTIONS.pi, '--offline', '--no-extensions', '--no-skills', '--no-prompt-templates', '--approve' if trust else '--no-approve', *ext, '--model', 'owned-fixture/fixture', *more]
 
     def run_print(self, **kw):
@@ -766,6 +767,7 @@ if __name__ == '__main__':
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
     parser.add_argument('--pi-gh', default=os.environ.get('PI_SCAFFOLD_PI_GH'), required=os.environ.get('PI_SCAFFOLD_PI_GH') is None)
     parser.add_argument('--case')
+    parser.add_argument('--package', help='directory of an unpacked `npm pack` tarball to load instead of the checkout')
     OPTIONS = parser.parse_args()
     names = ['test_' + OPTIONS.case] if OPTIONS.case else [n for n in Acceptance.__dict__ if n.startswith('test_')]
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(n) for n in names))

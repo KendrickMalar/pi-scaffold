@@ -3,8 +3,8 @@
 // save the plan (with a fixed-ID Mermaid diagram) into the Epic. Each change is journaled and reconciled before any resend.
 import {join} from 'node:path';
 import {
-  decodeMutationInput, problem, readDependencyPlan,
-  type Decoded, type DependencyPlan, type EpicDocV1, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult,
+  decodeMutationInput, problem, readDependencyPlan, readDesignRef,
+  type Decoded, type DependencyPlan, type DesignRef, type EpicDocV1, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult,
 } from '../core/contracts.js';
 import {patchDoc} from '../core/body-codec.js';
 import {canonicalJson, taggedDigest} from '../core/digests.js';
@@ -14,15 +14,18 @@ import {renderDependencyMermaid, validateDependencyGraph, type Edge} from '../co
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
+import {verifyDesignRef} from './feature-create.js';
 
 export const DEPENDENCIES_APPLY = 'scaffold_dependencies_apply';
-export type DependenciesApplyInput = MutationInput & {plan: DependencyPlan; projectId?: string};
+/** `design` (optional) records the basic design document on the Epic in the same conditional update as the plan. */
+export type DependenciesApplyInput = MutationInput & {plan: DependencyPlan; projectId?: string; design?: DesignRef};
 export interface DependenciesApplyData { addedEdges: Edge[]; unchangedEdges: Edge[]; mermaid: string; projectItems: number[] }
 const PROJECT_RE = /^PVT_[A-Za-z0-9_-]{1,200}$/;
 
 export function decodeDependenciesApplyInput(value: unknown): Decoded<DependenciesApplyInput> {
-  return decodeMutationInput<{plan: DependencyPlan; projectId?: string}>(value, {
+  return decodeMutationInput<{plan: DependencyPlan; projectId?: string; design?: DesignRef}>(value, {
     plan: {decode: (r, v, p) => readDependencyPlan(r, v, p)},
+    design: {optional: true, decode: (r, v, p) => readDesignRef(r, v, p)},
     projectId: {optional: true, decode: (r, v, p) => r.pattern(v, p, x => typeof x === 'string' && PROJECT_RE.test(x), 'a Projects V2 node id (PVT_…)')},
   });
 }
@@ -102,6 +105,12 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
   // On resume our own added edges are now "current"; they are part of the plan, so the check still holds.
   const gate = validateDependencyGraph(current.edges, input.plan, features);
   if (gate.status !== 'validated') return blocked(gate.problems);
+  if (input.design) {
+    const designProblems = await verifyDesignRef(call, repoOnly.value.repoRoot, input.design, 'design');
+    if (designProblems.length) return blocked(designProblems);
+  }
+  const wantDesign = input.design ?? null;
+  const designDone = (d: EpicDocV1) => !wantDesign || canonicalJson(d.design) === canonicalJson(wantDesign);
   let projectBefore: number[] | undefined;
   if (input.projectId) {
     const items = await call.bridge.call('gh_project_items', {projectId: input.projectId}, decodeItems(input.repo), call.scope);
@@ -119,7 +128,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     payloadDigest: taggedDigest('dependencies-apply', payload), journal, scope: call.scope,
   }, async run => {
     // The Epic plan as this operation first saw it; the final save only replaces that (or an identical) plan.
-    const seen = (run.done('preflight') as {plan: DependencyPlan | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan}), {plan: epic.dependencyPlan});
+    const seen = (run.done('preflight') as {plan: DependencyPlan | null; design?: DesignRef | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan, design: epic.design}), {plan: epic.dependencyPlan, design: epic.design});
     const blockersOf = async (to: number): Promise<number[] | undefined> => {
       const r = await call.bridge.call('gh_dependencies_list', {repo: input.repo, issue: to}, decodeBlockers, call.scope);
       return r.status === 'ok' ? r.data!.map(b => b.number) : undefined;
@@ -173,24 +182,25 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
       if (doc.stage !== 'basic-design') moved.push(problem('STAGE_MISMATCH', 'stage', `The Epic moved to ${doc.stage} meanwhile; the plan is not saved.`));
       if (fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_BLOCKED', 'labels', 'The Epic became Blocked meanwhile.'));
       if (canonicalJson(doc.dependencyPlan) !== canonicalJson(seen.plan) && canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan)) moved.push(problem('PLAN_CHANGED', 'dependencyPlan', 'Another dependency plan was saved meanwhile; it is not overwritten.'));
+      if (wantDesign && seen.design !== undefined && canonicalJson(doc.design) !== canonicalJson(seen.design) && canonicalJson(doc.design) !== canonicalJson(wantDesign)) moved.push(problem('DESIGN_CHANGED', 'design', 'Another design reference was saved meanwhile; it is not overwritten.'));
       const now = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId});
       if (!now.ok) moved.push(...now.problems);
       else if (JSON.stringify(now.value.features.map(f => f.number).sort((a, b) => a - b)) !== JSON.stringify(input.plan.nodes.map(n => n.issue).sort((a, b) => a - b))) moved.push(problem('FEATURE_SET_CHANGED', 'plan.nodes', 'The Epic\'s Features changed meanwhile; the plan no longer covers exactly them.'));
       if (moved.length) return run.stop(moved);
       const changePath = join(dir, 'epic-body.json');
-      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan)) {
-        const edit = patchDoc(fresh.value, {...doc, dependencyPlan: input.plan});
+      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan) || !designDone(doc)) {
+        const edit = patchDoc(fresh.value, {...doc, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {})});
         if (!edit.ok) return run.stop(edit.problems);
         const expected = edit.value;
         await writeOwnedFile(changePath, JSON.stringify(expected), {root: call.namespaceRoot});
         await run.write('epic-body', () => call.bridge.call('gh_issue_edit_if_current', {changePath}, () => true as const, call.scope), {
-          reconcile: async () => { const s = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope); if (!s.ok) return 'unknown'; return canonicalJson((s.value.doc as EpicDocV1).dependencyPlan) === canonicalJson(input.plan) ? 'applied' : s.value.bodySha256 === expected.expectedBodySha256 ? 'not-applied' : 'unknown'; },
+          reconcile: async () => { const s = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope); if (!s.ok) return 'unknown'; return canonicalJson((s.value.doc as EpicDocV1).dependencyPlan) === canonicalJson(input.plan) && designDone(s.value.doc as EpicDocV1) ? 'applied' : s.value.bodySha256 === expected.expectedBodySha256 ? 'not-applied' : 'unknown'; },
         });
       }
     }
     const final = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
     if (!final.ok) return run.stop(final.problems);
-    if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
+    if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan) || !designDone(final.value.doc as EpicDocV1)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
     const wrote = run.record.steps.some(s => !s.note && s.phase === 'done');
     return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => !has(added, e)), mermaid, projectItems}};
   });

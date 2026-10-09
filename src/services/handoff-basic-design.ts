@@ -15,7 +15,8 @@ export function decodeBasicDesignHandoffInput(value: unknown): Decoded<MutationI
 export async function handoffBasicDesign(input: MutationInput, call: ToolCall): Promise<ScaffoldResult<HandoffData>> {
   const operation = HANDOFF_BASIC_DESIGN;
   const blocked = (problems: ReturnType<typeof problem>[]): ScaffoldResult<HandoffData> => ({status: 'blocked', operation, problems});
-  const caps = await call.bridge.requireCapabilities(['gh_issue_get'], call.scope);
+  // Everything the handoff will need, including the driver's later writes, before anything is asked of the parent.
+  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const snap = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
   if (!snap.ok) return blocked(snap.problems);

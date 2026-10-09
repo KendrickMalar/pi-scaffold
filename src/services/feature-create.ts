@@ -63,12 +63,13 @@ function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem
   return problems;
 }
 
-async function verifyDesignRef(call: ToolCall, repoRoot: string, ref: DesignRef): Promise<Problem[]> {
+/** The design document must exist at gitRef in the local repository with exactly this sha256 (read-only). */
+export async function verifyDesignRef(call: ToolCall, repoRoot: string, ref: DesignRef, path = 'designRef'): Promise<Problem[]> {
   let bytes: Buffer | undefined;
   try { bytes = await call.runtime.git.readBlob(ref.gitRef, ref.path, repoRoot); }
-  catch (e) { return [problem(/TOO_LARGE/.test((e as Error).message) ? 'DESIGN_TOO_LARGE' : 'DESIGN_UNREADABLE', 'designRef', (e as Error).message)]; }
-  if (!bytes) return [problem('DESIGN_NOT_FOUND', 'designRef', `${ref.path} does not exist at ${ref.gitRef} in the local repository.`)];
-  return sha256Bytes(bytes) === ref.sha256 ? [] : [problem('DESIGN_HASH_MISMATCH', 'designRef.sha256', `${ref.path} at ${ref.gitRef} has a different sha256.`)];
+  catch (e) { return [problem(/TOO_LARGE/.test((e as Error).message) ? 'DESIGN_TOO_LARGE' : 'DESIGN_UNREADABLE', path, (e as Error).message)]; }
+  if (!bytes) return [problem('DESIGN_NOT_FOUND', path, `${ref.path} does not exist at ${ref.gitRef} in the local repository.`)];
+  return sha256Bytes(bytes) === ref.sha256 ? [] : [problem('DESIGN_HASH_MISMATCH', `${path}.sha256`, `${ref.path} at ${ref.gitRef} has a different sha256.`)];
 }
 
 const decodeIssueList = (d: unknown) => Array.isArray(d) ? d.map(decodeGithubIssue) : undefined;
