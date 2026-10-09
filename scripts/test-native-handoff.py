@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real Herdr acceptance for the setup → specification handoff (#5) and specification → basic-design (#9).
+"""Real Herdr acceptance for the setup → specification (#5), specification → basic-design (#9) and basic-design → implementation (#14) handoffs.
 
 Runs ONLY in an isolated, named Herdr session (`pst`) under a synthetic HOME: its own Herdr config/socket,
 its own Pi agent dir/profiles, a stateful fake `gh`, and a loopback model. It never touches the user's
@@ -32,7 +32,29 @@ class Acceptance(unittest.TestCase):
         labels = [{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(defs)]
         (self.state / 'labels.json').write_text(json.dumps(labels))
         self.basic = self._testMethodName == 'test_basic_design_handoff_after_parent_tui_approval'
-        if self.basic:
+        self.impl = self._testMethodName == 'test_implementation_handoff_after_parent_tui_approval'
+        self.features = {}
+        if self.impl:
+            # A finished basic design: design document committed in the repo, two Features, dependencies and a verified Wave plan.
+            genv = dict(os.environ, GIT_AUTHOR_NAME='f', GIT_AUTHOR_EMAIL='f@example.com', GIT_COMMITTER_NAME='f', GIT_COMMITTER_EMAIL='f@example.com')
+            design = '# 基本設計（架空）\n構成\n'
+            (self.repo / 'docs').mkdir(); (self.repo / 'docs/design.md').write_text(design)
+            subprocess.run(['git', '-C', str(self.repo), 'add', '.'], check=True, env=genv); subprocess.run(['git', '-C', str(self.repo), 'commit', '-qm', 'design'], check=True, env=genv)
+            commit = subprocess.check_output(['git', '-C', str(self.repo), 'rev-parse', 'HEAD'], text=True).strip()
+            dsha = hashlib.sha256(design.encode()).hexdigest()
+            make = ("import {renderFeatureBlock} from './dist/src/core/epic-render.js';import {taggedDigest} from './dist/src/core/digests.js';"
+                    "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='basic-design';d.handoff=null;"
+                    "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答（架空）',sourceRef:q.sourceRef??'hearing-1'}));"
+                    "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論（架空）',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));"
+                    f"const ref={{path:'docs/design.md',sha256:'{dsha}',gitRef:'{commit}'}};d.design=ref;"
+                    "const key=n=>'F00'+(n-10);"
+                    "d.dependencyPlan={version:1,nodes:[11,12].map(n=>({featureKey:key(n),issue:n,contracts:[],startConditions:[],editScope:['src/f'+n+'/']})),edges:[{from:11,to:12,reason:'架空'}]};"
+                    "d.wavePlan={version:1,assignments:[{issue:11,wave:1},{issue:12,wave:2}],dependencyDigest:taggedDigest('dependency-plan',d.dependencyPlan),featureSetDigest:taggedDigest('feature-set',[11,12].map(n=>({issue:n,featureKey:key(n)})))};"
+                    "const b={model:'owned-fixture/fixture',thinking:'medium',reason:'架空'};"
+                    "const f=n=>renderFeatureBlock({version:1,kind:'feature',workflowId:d.workflowId,revision:1,createOperationId:'eeeeeeee-eeee-4eee-8eee-'+String(n).padStart(12,'0'),featureKey:key(n),parentEpic:10,stage:'basic-design',purpose:'架空',editScope:['src/f'+n+'/'],outOfScope:[],designRef:ref,criteria:[{id:'AC10'+(n-10),requirementIds:[n===11?'REQ001':'REQ002'],verification:'v',expectedResult:'e'}],bindings:{'coding-manager':b,coder:b,tester:b},evidenceRefs:[]});"
+                    "process.stderr.write(JSON.stringify({11:f(11),12:f(12)}));")
+            self.revision = json.loads((ROOT / 'test/fixtures/epic-v1.populated.json').read_text())['revision']
+        elif self.basic:
             # A complete specification (every REQ covered, questions answered, research resolved, [] = confirmed none).
             make = ("const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='specification';d.design=null;d.dependencyPlan=null;d.wavePlan=null;d.handoff=null;"
                     "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答（架空）',sourceRef:q.sourceRef??'hearing-1'}));"
@@ -42,8 +64,10 @@ class Acceptance(unittest.TestCase):
         else:
             make = "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'));"
             self.revision = 1
-        self.body = subprocess.check_output(['node', '--input-type=module', '-e', "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';" + make + "process.stdout.write(renderEpicBlock(d))"], cwd=ROOT, text=True)
-        epic_labels = [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Epic') + (('Stage: Specification',) if self.basic else ())]
+        rendered = subprocess.run(['node', '--input-type=module', '-e', "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';" + make + "process.stdout.write(renderEpicBlock(d))"], cwd=ROOT, text=True, capture_output=True, check=True)
+        self.body = rendered.stdout
+        if self.impl: self.features = json.loads(rendered.stderr)
+        epic_labels = [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Epic') + (('Stage: Specification',) if self.basic else ('Stage: BasicDesign',) if self.impl else ())]
         (self.state / 'issue-10.json').write_text(json.dumps({'id': 1010, 'node_id': 'I_example10', 'number': 10, 'title': '一覧をCSVで保存できるようにする', 'body': self.body, 'state': 'open', 'labels': epic_labels, 'html_url': 'https://github.com/example/demo/issues/10'}))
         shutil.copyfile(ROOT / 'test/native/fake-gh.mjs', self.bin / 'gh'); (self.bin / 'gh').chmod(0o755)
         for name in ['node', 'git', 'herdr']:
@@ -62,8 +86,8 @@ class Acceptance(unittest.TestCase):
                 self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
                 if 'OWNED_TOOL_REQUEST' in last and not tool_done:
                     args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': owner.revision, 'expectedBodySha256': hashlib.sha256(owner.body.encode()).hexdigest()}
-                    if not owner.basic: args.update(expectedStage='setup', nextStage='specification')
-                    name = 'scaffold_handoff_basic_design' if owner.basic else 'scaffold_handoff_specification'
+                    if not owner.basic and not owner.impl: args.update(expectedStage='setup', nextStage='specification')
+                    name = 'scaffold_handoff_implementation' if owner.impl else 'scaffold_handoff_basic_design' if owner.basic else 'scaffold_handoff_specification'
                     delta = {'role': 'assistant', 'tool_calls': [{'index': 0, 'id': f'call-{len(owner.requests)}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}; end = 'tool_calls'
                 else:
                     delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'pi-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
@@ -84,7 +108,13 @@ class Acceptance(unittest.TestCase):
         (dev / 'instructions.md').write_text('試験用の開発Profile（架空）\n')
         (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.pi_gh).resolve()), str(ROOT)]}))
         (self.agent / 'pi-scaffold').mkdir(mode=0o700)
-        pol = self.agent / 'pi-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': []}}})); pol.chmod(0o600)
+        models = [{'model': 'owned-fixture/fixture', 'thinking': 'medium', 'tier': 'basic', 'roles': ['coding-manager', 'coder', 'tester']}] if self.impl else []
+        pol = self.agent / 'pi-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': models}}})); pol.chmod(0o600)
+        if self.impl:
+            epic = json.loads((self.state / 'issue-10.json').read_text()); epic['sub_issues'] = [11, 12]; (self.state / 'issue-10.json').write_text(json.dumps(epic))
+            for n, w in ((11, 1), (12, 2)):
+                (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': self.features[str(n)], 'state': 'open',
+                    'labels': [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', f'Wave: {w}')], 'html_url': f'https://github.com/example/demo/issues/{n}', **({'blocked_by': [11]} if n == 12 else {})}))
         grant = self.agent / 'pi-gh-permissions.json'
         grant.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current', 'gh_issue_labels_if_current'], 'allowHeadless': True, 'allowChild': False}]})); grant.chmod(0o600)
         for cmd in (['pi-profile', 'packages', 'install', '--profile', 'developer'], ['herdr', 'integration', 'install', 'pi']):
@@ -159,7 +189,7 @@ class Acceptance(unittest.TestCase):
         self.assertTrue(any('pi-scaffold:' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the stage prompt reached the new session')
 
 
-    def approve_in_parent_tui(self):
+    def approve_in_parent_tui(self, dialog='仕様の内容承認'):
         """Real Pi TUI (not in a real Herdr pane, same synthetic HOME): the tool asks the parent approval, Yes is chosen, then it stops at HERDR_UNAVAILABLE."""
         master, slave = pty.openpty(); fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 140, 0, 0))
         # Herdr-looking variables with a socket that does not exist: the cheap checks pass, the dialog is shown, then the driver cannot reach Herdr.
@@ -183,7 +213,7 @@ class Acceptance(unittest.TestCase):
         try:
             self.assertTrue(pump_until(lambda: 'fixture' in text(), 30), 'TUI did not start:\n' + text()[-2000:])
             time.sleep(1); os.write(master, b'OWNED_TOOL_REQUEST\r')
-            self.assertTrue(pump_until(lambda: '仕様の内容承認' in text(), 60), 'no approval dialog:\n' + text()[-3000:])
+            self.assertTrue(pump_until(lambda: dialog in text(), 60), 'no approval dialog:\n' + text()[-3000:])
             time.sleep(.5); os.write(master, b'\r')
             done = lambda: any('HERDR_UNAVAILABLE' in json.dumps(m.get('content'), ensure_ascii=False) for r in self.requests for m in r.get('messages', []) if m.get('role') == 'tool')
             self.assertTrue(pump_until(done, 60), 'tool did not finish after approval:\n' + text()[-3000:])
@@ -192,7 +222,7 @@ class Acceptance(unittest.TestCase):
             try: tui.wait(timeout=5)
             except subprocess.TimeoutExpired: os.killpg(tui.pid, signal.SIGKILL)
             os.close(master)
-        approvals = list((self.agent / 'pi-scaffold/state').rglob('approvals/specification/*.json'))
+        approvals = list((self.agent / 'pi-scaffold/state').rglob('approvals/' + ('implementation-start' if self.impl else 'specification') + '/*.json'))
         self.assertEqual(len(approvals), 1, approvals)
         self.requests.clear()
 
@@ -215,6 +245,26 @@ class Acceptance(unittest.TestCase):
         self.assertIn('"stage": "basic-design"', issue['body'])
         self.assertTrue(any('基本設計（BasicDesign）' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the BasicDesign prompt reached the new session')
 
+    def test_implementation_handoff_after_parent_tui_approval(self):
+        self.approve_in_parent_tui('実装開始の指示')
+        self.start_session()
+        pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
+        out, done = self.home / 'sender.out', self.home / 'sender.done'
+        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+               f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
+        self.herdr('pane', 'run', pane, cmd)
+        end = time.monotonic() + 180
+        while not done.exists() and time.monotonic() < end: time.sleep(1)
+        self.assertTrue(done.exists(), 'sender did not finish; output:\n' + (out.read_text() if out.exists() else ''))
+        results = [m.get('content') for r in self.requests for m in r.get('messages', []) if m.get('role') == 'tool']
+        last = json.loads(results[-1][results[-1].find('{'):results[-1].rfind('}') + 1]) if results else {}
+        self.assertEqual(last.get('status'), 'applied', json.dumps(last, ensure_ascii=False)[:2000] + '\n' + out.read_text()[-2000:])
+        issue = json.loads((self.state / 'issue-10.json').read_text())
+        self.assertEqual(sorted(l['name'] for l in issue['labels']), ['Scope: Epic', 'Stage: Implementation', 'Type: Scaffold'])
+        self.assertIn('"stage": "implementation"', issue['body'])
+        for n in (11, 12): self.assertIn('Stage: BasicDesign', [l['name'] for l in json.loads((self.state / f'issue-{n}.json').read_text())['labels']], 'Features keep their stage')
+        self.assertTrue(any('詳細設計・実装' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the Implementation prompt reached the new session')
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
@@ -222,5 +272,5 @@ if __name__ == '__main__':
     parser.add_argument('--pi-profile', required=True)
     parser.add_argument('--case')
     OPTIONS = parser.parse_args()
-    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(n) for n in (['test_' + OPTIONS.case] if OPTIONS.case else ['test_handoff_starts_a_new_specification_session', 'test_basic_design_handoff_after_parent_tui_approval'])))
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(n) for n in (['test_' + OPTIONS.case] if OPTIONS.case else ['test_handoff_starts_a_new_specification_session', 'test_basic_design_handoff_after_parent_tui_approval', 'test_implementation_handoff_after_parent_tui_approval'])))
     raise SystemExit(0 if result.wasSuccessful() else 1)
