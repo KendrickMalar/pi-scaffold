@@ -57,7 +57,8 @@ async function herdrStep<T>(fn: () => Promise<T>): Promise<GhOutcome<T>> {
   }
 }
 
-export async function handoffStage(input: HandoffInput, gate: StageGate, call: ToolCall, operation: string): Promise<ScaffoldResult<HandoffData>> {
+/** `resourceRefs` pins extra artifacts (e.g. integration ref and evidence hashes) into the private packet and the operation payload. */
+export async function handoffStage(input: HandoffInput, gate: StageGate, call: ToolCall, operation: string, extras: {resourceRefs?: string[]} = {}): Promise<ScaffoldResult<HandoffData>> {
   const blocked = (problems: Problem[]): ScaffoldResult<HandoffData> => ({status: 'blocked', operation, problems});
   const env = call.environment();
   // ---- preconditions: any failure here has zero side effects -------------------------------------
@@ -112,7 +113,8 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const unsafe = unsafeLaunchValues({packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
   if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
-  const payloadDigest = taggedDigest('handoff', {input, requiredTools});
+  const resourceRefs = [...(extras.resourceRefs ?? [])];
+  const payloadDigest = taggedDigest('handoff', {input, requiredTools, ...(resourceRefs.length ? {resourceRefs} : {})});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     const budget = () => { if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Call budget used; progress is recorded. Call again with the same operationId.')]); };
     const checkBinding = async () => {
@@ -129,7 +131,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       const packet: HandoffPacketV1 = {
         version: 1, nonce, workflowId: doc.workflowId, repo: input.repo, epicIssue: input.epicIssue, sourceStage: input.expectedStage, targetStage: input.nextStage,
         artifactDigests: {epicBodySha256: snap.value.bodySha256, epicLabelsSha256: snap.value.labelsSha256}, cwd: ctx.repoRoot,
-        profileId: ctx.profileId!, profileInstructionsDigest: ctx.profileInstructionsDigest!, accountBinding: ctx.accountBinding!, requiredTools, resourceRefs: [],
+        profileId: ctx.profileId!, profileInstructionsDigest: ctx.profileInstructionsDigest!, accountBinding: ctx.accountBinding!, requiredTools, resourceRefs,
       };
       const written = await writePacket(dir, packet, call.namespaceRoot);
       prepared = {packetPath: written.path, packetSha256: written.sha256, nonceSha256: nonceSha256(nonce)};
