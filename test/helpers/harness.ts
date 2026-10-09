@@ -36,6 +36,8 @@ export interface Scenario {
   blobs?: Record<string, string>;
   /** Commits known to the read-only git port and ancestor pairs [ancestor, descendant]. */
   commits?: {exists: string[]; ancestors: [string, string][]};
+  /** origin's default branch as `git ls-remote --symref origin HEAD` reports it (network in reality; synthetic here). */
+  remote?: {branch: string; sha: string};
   /** Files under a repo path for `git ls-tree` (read-only). */
   tree?: Record<string, string[]>;
 }
@@ -67,6 +69,10 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
         // Like git: an unambiguous prefix resolves to the full id.
         const ref = String(args.at(-1)).replace(/\^\{commit\}$/, ''), hits = commits.exists.filter(c => c.startsWith(ref));
         return hits.length === 1 ? {code: 0, stdout: hits[0]! + '\n'} : {code: 128, stdout: ''};
+      }
+      if (args[0] === 'ls-remote' && args.includes('--symref')) {
+        const remote = scenario.remote;
+        return remote ? {code: 0, stdout: `ref: refs/heads/${remote.branch}\tHEAD\n${remote.sha}\tHEAD\n`} : {code: 2, stdout: ''};
       }
       if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return {code: args[2] === args[3] || commits.ancestors.some(([a, b]) => a === args[2] && b === args[3]) ? 0 : 1, stdout: ''};
       return {code: 1, stdout: ''};

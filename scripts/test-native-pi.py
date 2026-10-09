@@ -190,7 +190,7 @@ class Acceptance(unittest.TestCase):
         self.tool, self.tool_args = 'gh_capabilities', {}
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
-        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_implementation', 'scaffold_handoff_specification', 'scaffold_handoff_verification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update', 'scaffold_waves_apply', 'scaffold_waves_verify'], 'only accepted scaffold tools are registered')
+        self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_complete', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_handoff_basic_design', 'scaffold_handoff_implementation', 'scaffold_handoff_specification', 'scaffold_handoff_verification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_update', 'scaffold_waves_apply', 'scaffold_waves_verify'], 'only accepted scaffold tools are registered')
         self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 24, 'pi-gh 0.5.0 registers 24 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
@@ -553,6 +553,64 @@ class Acceptance(unittest.TestCase):
         self.assertIn('Wave: 2', [l['name'] for l in json.loads((self.state / 'labels.json').read_text())], 'the missing definition was created')
         self.assertIn('"wavePlan": {', json.loads((self.state / 'issue-10.json').read_text())['body'])
         self.assertEqual(len([w for w in self.writes() if 'patch' in w and 'labels' in w['patch']]), 3)
+
+    def test_epic_complete_through_real_pi_gh(self):
+        self.seed_all_labels()
+        genv = dict(self.env, GIT_AUTHOR_NAME='f', GIT_AUTHOR_EMAIL='f@example.com', GIT_COMMITTER_NAME='f', GIT_COMMITTER_EMAIL='f@example.com')
+        (self.cwd / 'app.txt').write_text('verified\n')
+        subprocess.run(['git', '-C', str(self.cwd), 'add', '.'], check=True, env=genv); subprocess.run(['git', '-C', str(self.cwd), 'commit', '-qm', 'verified'], check=True, env=genv)
+        verified = subprocess.check_output(['git', '-C', str(self.cwd), 'rev-parse', 'HEAD'], text=True).strip()
+        # origin is github.com/example/demo; only `git ls-remote` is answered locally (no network), as origin would.
+        real_git = os.readlink(self.bin / 'git'); (self.bin / 'git').unlink()
+        (self.bin / 'git').write_text(f'#!/bin/sh\nif [ "$1" = ls-remote ]; then printf "ref: refs/heads/main\\tHEAD\\n{verified}\\tHEAD\\n"; exit 0; fi\nexec "{real_git}" "$@"\n'); (self.bin / 'git').chmod(0o755)
+        instructions = '開発用（架空）'
+        self.env['OWNED_PROFILE_INSTRUCTIONS'] = instructions
+        (self.agent / 'pi-scaffold').mkdir(mode=0o700, exist_ok=True)
+        pol = self.agent / 'pi-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': []}}})); pol.chmod(0o600)
+        script = (
+            "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {readFileSync, mkdirSync, writeFileSync, chmodSync} from 'node:fs';import {realpath} from 'node:fs/promises';import {join, dirname} from 'node:path';"
+            "import {ApprovalStore} from './dist/src/core/approvals.js';import {completionApprovalView} from './dist/src/core/completion-gate.js';import {taggedDigest, sha256Text} from './dist/src/core/digests.js';import {repoHash} from './dist/src/core/repo-context.js';"
+            "const [agent, instr, verified] = process.argv.slice(1);"
+            "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='verification';d.handoff=null;"
+            "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答',sourceRef:q.sourceRef??'h'}));"
+            "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));"
+            "const b={model:'p/m',thinking:'low',reason:'r'};"
+            "const fdoc={version:1,kind:'feature',workflowId:d.workflowId,revision:1,createOperationId:'eeeeeeee-eeee-4eee-8eee-000000000011',featureKey:'F001',parentEpic:10,stage:'implementation',purpose:'架空',editScope:['src/'],outOfScope:[],designRef:{path:'docs/d.md',sha256:'a'.repeat(64),gitRef:'c'.repeat(40)},criteria:[{id:'AC101',requirementIds:['REQ001','REQ002'],verification:'v',expectedResult:'e'}],bindings:{'coding-manager':b,coder:b,tester:b},evidenceRefs:[]};"
+            "const root=join(agent,'pi-scaffold');const wf=join(root,'state',repoHash('example/demo'),d.workflowId);const ev=join(wf,'evidence');"
+            "for (const p of [join(root,'state'),join(root,'state',repoHash('example/demo')),wf,ev,join(ev,'final')]) { mkdirSync(p,{recursive:true,mode:0o700}); chmodSync(p,0o700); }"
+            "writeFileSync(join(ev,'final','11.log'),'final ok\\n',{mode:0o600});"
+            "const report=JSON.stringify({version:1,workflowId:d.workflowId,featureIssue:11,productRef:verified,suiteRef:verified,criteria:[{id:'AC101',status:'pass',command:'npm test',exitCode:0,logPath:'final/11.log',logSha256:sha256Text('final ok\\n')}]});"
+            "writeFileSync(join(ev,'final','11.json'),report,{mode:0o600});const refs=[{relativePath:'final/11.json',sha256:sha256Text(report)}];"
+            "const ctx={repo:'example/demo',repoRoot:'',gitCommonDir:'',workflowStateRoot:wf,accountBinding:taggedDigest('account-binding',{agentDir:await realpath(agent),authMode:'file-backed'}),profileId:'developer',profileInstructionsDigest:sha256Text(instr)};"
+            "const view=completionApprovalView(d,taggedDigest('feature-set',[{issue:11,featureKey:'F001'}]),refs,{status:'validated',problems:[],artifactDigests:{},verifiedRef:verified,remoteMainRef:verified,defaultBranch:'main'});"
+            "const r=await new ApprovalStore(root).confirmContent('epic-completion',d.workflowId,view,ctx,{interactive:true,confirm:async()=>true},{sessionId:'s',leafId:'l',generation:0,signal:new AbortController().signal,isCurrent:()=>true});"
+            "if(r.status!=='validated')throw new Error(JSON.stringify(r));process.stdout.write(JSON.stringify({epic:renderEpicBlock(d),revision:d.revision,feature:renderFeatureBlock(fdoc),refs}));")
+        made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', script, str(self.agent), instructions, verified], cwd=ROOT, text=True))
+        labels = json.loads((self.state / 'labels.json').read_text()); pick = lambda names: [l for l in labels if l['name'] in names]
+        epic = json.loads((self.state / 'issue-10.json').read_text()); epic.update(body=made['epic'], labels=pick(('Type: Scaffold', 'Scope: Epic', 'Stage: Verification')), sub_issues=[11])
+        (self.state / 'issue-10.json').write_text(json.dumps(epic))
+        (self.state / 'issue-11.json').write_text(json.dumps({'id': 1011, 'node_id': 'I_example11', 'number': 11, 'title': 'F', 'body': made['feature'], 'state': 'open', 'labels': pick(('Type: Scaffold', 'Scope: Feature', 'Stage: Implementation')), 'html_url': 'https://github.com/example/demo/issues/11'}))
+        (self.state / 'project-PVT_fixture1.json').write_text('[10]')
+        (self.state / 'project-PVT_fixture1-fields.json').write_text(json.dumps([{'__typename': 'ProjectV2SingleSelectField', 'id': 'PVTSSF_status', 'name': 'Status', 'dataType': 'SINGLE_SELECT', 'options': [{'id': 'opt_todo', 'name': 'Todo'}, {'id': 'opt_done', 'name': 'Done'}]}]))
+        d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
+        p = d / 'pi-gh-permissions.json'
+        p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current', 'gh_project_field_update'], 'allowHeadless': True, 'allowChild': True, 'projectIds': ['PVT_fixture1']}]})); p.chmod(0o600)
+        self.tool = 'scaffold_epic_complete'
+        self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': made['revision'], 'expectedBodySha256': hashlib.sha256(made['epic'].encode()).hexdigest(),
+                          'verifiedRef': verified, 'finalEvidenceRefs': made['refs'], 'project': {'projectId': 'PVT_fixture1', 'itemId': 'PVTI_10', 'statusFieldId': 'PVTSSF_status', 'doneOptionId': 'opt_done'}}
+        results = []
+        for _ in range(2):
+            self.requests.clear()
+            r = subprocess.run(self.args('--print', 'OWNED_TOOL_REQUEST'), env=self.env, cwd=self.cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=150)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            results.append(self.last_result())
+        self.assertEqual([x['status'] for x in results], ['applied', 'noop'], results)
+        self.assertEqual([results[0]['data'][k] for k in ('issueClosed', 'projectUpdated', 'verifiedRef', 'remoteMainRef')], [True, True, verified, verified])
+        epic = json.loads((self.state / 'issue-10.json').read_text())
+        self.assertEqual(epic['state'], 'closed'); self.assertIn('"stage": "completed"', epic['body'])
+        self.assertEqual(sorted(l['name'] for l in epic['labels']), ['Scope: Epic', 'Stage: Completed', 'Type: Scaffold'])
+        self.assertEqual(json.loads((self.state / 'project-PVT_fixture1-values.json').read_text())['PVTI_10']['PVTSSF_status'], 'opt_done')
+        self.assertEqual(json.loads((self.state / 'issue-11.json').read_text())['state'], 'open', 'the Feature is not closed')
 
     def tui(self):
         self.tool_args['expectedBodySha256'] = hashlib.sha256(self.body.encode()).hexdigest()

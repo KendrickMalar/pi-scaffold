@@ -35,6 +35,9 @@ export class FakePiGh {
   readonly conditionalChanges: {operation: string; issue: number}[] = [];
   /** Projects V2 by node id; items are Issue numbers of this repository. */
   readonly projects = new Map<string, number[]>();
+  /** Project fields (id → type/options) and single-select values by item id (PVTI_<issue>). */
+  readonly projectFields = new Map<string, {id: string; name: string; dataType: string; options?: {id: string; name: string}[]}[]>();
+  readonly itemValues = new Map<string, Record<string, string>>();
   constructor(readonly repo = 'example/demo') {}
 
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
@@ -96,10 +99,26 @@ export class FakePiGh {
       items.push(target.number);
       return FakePiGh.ok({projectId: c.projectId, itemId: `PVTI_${target.number}`}, 'applied');
     }
+    if (name === 'gh_project_get') {
+      const fields = this.projectFields.get((args as {projectId: string}).projectId);
+      if (!fields) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', fields});
+    }
+    if (name === 'gh_project_field_update') {
+      const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {repo: string; operation: string; projectId: string; itemId: string; fieldId: string; value: {singleSelectOptionId?: string}};
+      if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'projectId', 'itemId', 'fieldId', 'value'].includes(k))) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
+      const items = this.projects.get(c.projectId), field = this.projectFields.get(c.projectId)?.find(f => f.id === c.fieldId);
+      if (!items || !items.some(n => `PVTI_${n}` === c.itemId) || !field || !field.options?.some(o => o.id === c.value.singleSelectOptionId)) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      const values = this.itemValues.get(c.itemId) ?? {};
+      if (values[c.fieldId] === c.value.singleSelectOptionId) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      this.itemValues.set(c.itemId, {...values, [c.fieldId]: c.value.singleSelectOptionId!});
+      return FakePiGh.ok({projectId: c.projectId, itemId: c.itemId}, 'applied');
+    }
     if (name === 'gh_project_items') {
       const items = this.projects.get((args as {projectId: string}).projectId);
       if (!items) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
-      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', items: items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: `I_${n}`, number: n, repository: {nameWithOwner: this.repo}}}))});
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', items: items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: `I_${n}`, number: n, repository: {nameWithOwner: this.repo}},
+        fieldValues: {nodes: Object.entries(this.itemValues.get(`PVTI_${n}`) ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}}))}}))});
     }
     if (name === 'gh_subissue_add') {
       // pi-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
