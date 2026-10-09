@@ -128,7 +128,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     payloadDigest: taggedDigest('dependencies-apply', payload), journal, scope: call.scope,
   }, async run => {
     // The Epic plan as this operation first saw it; the final save only replaces that (or an identical) plan.
-    const seen = (run.done('preflight') as {plan: DependencyPlan | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan}), {plan: epic.dependencyPlan});
+    const seen = (run.done('preflight') as {plan: DependencyPlan | null; design?: DesignRef | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan, design: epic.design}), {plan: epic.dependencyPlan, design: epic.design});
     const blockersOf = async (to: number): Promise<number[] | undefined> => {
       const r = await call.bridge.call('gh_dependencies_list', {repo: input.repo, issue: to}, decodeBlockers, call.scope);
       return r.status === 'ok' ? r.data!.map(b => b.number) : undefined;
@@ -182,6 +182,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
       if (doc.stage !== 'basic-design') moved.push(problem('STAGE_MISMATCH', 'stage', `The Epic moved to ${doc.stage} meanwhile; the plan is not saved.`));
       if (fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_BLOCKED', 'labels', 'The Epic became Blocked meanwhile.'));
       if (canonicalJson(doc.dependencyPlan) !== canonicalJson(seen.plan) && canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan)) moved.push(problem('PLAN_CHANGED', 'dependencyPlan', 'Another dependency plan was saved meanwhile; it is not overwritten.'));
+      if (wantDesign && seen.design !== undefined && canonicalJson(doc.design) !== canonicalJson(seen.design) && canonicalJson(doc.design) !== canonicalJson(wantDesign)) moved.push(problem('DESIGN_CHANGED', 'design', 'Another design reference was saved meanwhile; it is not overwritten.'));
       const now = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId});
       if (!now.ok) moved.push(...now.problems);
       else if (JSON.stringify(now.value.features.map(f => f.number).sort((a, b) => a - b)) !== JSON.stringify(input.plan.nodes.map(n => n.issue).sort((a, b) => a - b))) moved.push(problem('FEATURE_SET_CHANGED', 'plan.nodes', 'The Epic\'s Features changed meanwhile; the plan no longer covers exactly them.'));

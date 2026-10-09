@@ -277,3 +277,13 @@ test('tool-level gate cases ask nothing and launch nothing (in-progress research
   assert.equal(g.status, 'blocked');
   assert.ok(g.problems.some(p => p.code === 'UNKNOWN_REFERENCE'), JSON.stringify(g.problems));
 });
+
+test('a missing write capability the handoff needs later stops before the approval is asked', async t => {
+  for (const op of ['gh_issue_edit_if_current', 'gh_issue_labels_if_current']) {
+    const gh = world(); gh.operations = gh.operations.filter(o => o !== op);
+    const {h, herdr} = await harness(t, gh);
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING'), op);
+    assert.equal(out.confirmCalls, 0, `${op}: nothing is asked`); noLaunch(herdr, gh);
+  }
+});

@@ -271,9 +271,19 @@ class Workflow(unittest.TestCase):
         self.assertTrue(res['data']['testedOnIntegration'])
         self.assertEqual(self.issue(1)['state'], 'open'); self.assertIn('Stage: Verification', self.labels(1))
 
-        # verification → completed: origin's default branch contains the verified commit
+        # verification → completed. Negative checks first (nothing may be closed by them):
+        final = evidence('final')
+        # origin's default branch does not contain the verified commit yet.
+        (self.home / 'remote-head').write_text(design_commit)
+        stop = self.headless('scaffold_epic_complete', {**self.mutation(U(15)), 'verifiedRef': integration, 'finalEvidenceRefs': final}, ('blocked',))
+        self.assertIn('NOT_IN_DEFAULT_BRANCH', json.dumps(stop))
+        # Everything is in place, but a headless session cannot give the final acceptance.
         (self.home / 'remote-head').write_text(integration)
-        done = self.tui('scaffold_epic_complete', {**self.mutation(U(14)), 'verifiedRef': integration, 'finalEvidenceRefs': evidence('final')}, 'Epicの最終受け入れ', fake_herdr=False)
+        stop = self.headless('scaffold_epic_complete', {**self.mutation(U(16)), 'verifiedRef': integration, 'finalEvidenceRefs': final}, ('blocked',))
+        self.assertIn('APPROVAL_UI_REQUIRED', json.dumps(stop))
+        self.assertEqual(self.issue(1)['state'], 'open'); self.assertIn('Stage: Verification', self.labels(1))
+        # The parent accepts in the TUI.
+        done = self.tui('scaffold_epic_complete', {**self.mutation(U(14)), 'verifiedRef': integration, 'finalEvidenceRefs': final}, 'Epicの最終受け入れ', fake_herdr=False)
         self.assertEqual(done['status'], 'applied', json.dumps(done, ensure_ascii=False)[:2000])
         self.assertEqual(self.issue(1)['state'], 'closed')
         self.assertEqual(self.labels(1), ['Scope: Epic', 'Stage: Completed', 'Type: Scaffold'])

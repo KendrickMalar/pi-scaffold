@@ -58,7 +58,13 @@ test('no circular runtime imports in src/ and extensions/', () => {
     const text = readFileSync(f, 'utf8');
     const deps: string[] = [];
     // Type-only imports are erased at runtime and cannot form a load cycle.
-    for (const m of text.matchAll(/^import\s+(?!type\b)[^'"]*?from\s+'(\.[^']+)'/gm)) {
+    // Runtime edges: import/export ... from, side-effect imports and dynamic import(); type-only forms are erased.
+    const specs = [
+      ...[...text.matchAll(/^(?:import|export)\s+(?!type\b)(?:[^'";]*?\sfrom\s+)?['"](\.[^'"]+)['"]/gm)].map(m => m[1]!),
+      ...[...text.matchAll(/\bimport\(\s*['"](\.[^'"]+)['"]\s*\)/g)].map(m => m[1]!),
+    ];
+    for (const spec of specs) {
+      const m = [spec, spec];
       let target = resolve(dirname(f), m[1]!).replace(/\/dist\/src\//, '/src/').replace(/\.js$/, '.ts');
       if (!target.endsWith('.ts')) target += '.ts';
       deps.push(target);

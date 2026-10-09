@@ -8,8 +8,9 @@ import {fileURLToPath} from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
+// Runs prepack (a fresh build), so stale files of deleted sources cannot hide in dist/.
 test('npm pack ships exactly the runtime: extensions, built core, resources — never tests, state, policy, credentials or Profiles', () => {
-  const out = execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {cwd: root, encoding: 'utf8', env: {...process.env, npm_config_loglevel: 'silent'}});
+  const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {cwd: root, encoding: 'utf8', env: {...process.env, npm_config_loglevel: 'silent'}});
   const files: string[] = JSON.parse(out)[0].files.map((f: {path: string}) => f.path);
   const has = (p: string) => files.includes(p);
   for (const required of ['package.json', 'README.md', 'LICENSE', 'extensions/index.ts', 'extensions/register-tools.ts', 'extensions/tool-kit.ts',

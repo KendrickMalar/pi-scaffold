@@ -207,3 +207,12 @@ test('a resumed handoff still reports testedOnIntegration from the evidence', as
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r));
   assert.equal((resumed.r.data as Record<string, unknown>).testedOnIntegration, true);
 });
+
+test('a missing write capability the handoff needs later stops before the evidence is even read', async t => {
+  for (const op of ['gh_issue_edit_if_current', 'gh_issue_labels_if_current']) {
+    const gh = world(); gh.operations = gh.operations.filter(o => o !== op);
+    const {h, herdr} = await harness(t, gh);
+    const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+    assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING'), op); noLaunch(herdr, gh);
+  }
+});

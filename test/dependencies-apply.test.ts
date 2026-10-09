@@ -302,3 +302,14 @@ test('without design, an existing design reference is kept as it is', async t =>
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.deepEqual(docOf(gh).design, existing);
 });
+
+test('a design saved by another operation meanwhile is not overwritten', async t => {
+  const other = {path: 'docs/other.md', sha256: 'e'.repeat(64), gitRef: '7'.repeat(40)};
+  const gh = world();
+  let done = false;
+  gh.onCall = name => { if (name === 'gh_dependency_add' && !done) { done = true; const d = docOf(gh); d.design = other; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); } };
+  const out = await (await harness(t, gh, {blobs: {[`${DESIGN_COMMIT}:docs/design.md`]: DESIGN_TEXT}})).invoke(params(gh, undefined, {design: designRef}));
+  assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'DESIGN_CHANGED'), JSON.stringify(out.r.problems));
+  assert.deepEqual(docOf(gh).design, other);
+});
