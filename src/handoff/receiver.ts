@@ -5,7 +5,7 @@ import {realpath} from 'node:fs/promises';
 import {failed, okValue, problem, type Decoded, type Problem} from '../core/contracts.js';
 import {taggedDigest} from '../core/digests.js';
 import {readProfileSnapshot} from '../core/repo-context.js';
-import type {OwnerPolicy} from '../core/model-bindings.js';
+import {repoPolicyFor, type OwnerPolicy} from '../core/model-bindings.js';
 import {nonceSha256, readPacket, readReceipt, writeReceipt, type HandoffPacketV1} from './packet.js';
 
 const real = async (p: string) => { try { return await realpath(p); } catch { return p; } };
@@ -24,7 +24,7 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
   const profile = readProfileSnapshot(input.sessionEntries);
   if (!profile.snapshot || profile.snapshot.id !== packet.profileId || profile.snapshot.instructionsDigest !== packet.profileInstructionsDigest)
     problems.push(problem('RECEIVER_PROFILE_MISMATCH', 'profile', 'This session does not run the same pi-profile Profile and instructions as the sender.'));
-  const authMode = input.policy?.repos[packet.repo]?.authMode;
+  const authMode = repoPolicyFor(input.policy, packet.repo)?.authMode;
   const binding = authMode === 'file-backed' ? taggedDigest('account-binding', {agentDir: await real(input.agentDir), authMode}) : null;
   if (binding !== packet.accountBinding) problems.push(problem('RECEIVER_ACCOUNT_MISMATCH', 'account', 'This session does not use the same file-backed authentication configuration.'));
   const missing = packet.requiredTools.filter(t => !input.toolNames.includes(t));

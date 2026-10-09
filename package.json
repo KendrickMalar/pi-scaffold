@@ -1,6 +1,6 @@
 {
   "name": "@papillon6814/pi-scaffold",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi-native Scaffold workflow tools built on pi-gh",
   "type": "module",
   "license": "MIT",

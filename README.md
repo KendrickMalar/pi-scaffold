@@ -6,8 +6,8 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 
 ## 導入
 
-- npm版：`pi install npm:@papillon6814/pi-scaffold@0.1.0`。
-- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.1.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.2.0`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.2.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
 - 同じProfileにpi-gh 0.5.0以上も必要です。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
@@ -54,7 +54,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - 引き継ぎには次が必要です。
   - Herdr 0.9.1（protocol 22）
   - pi-profileの`developer` Profile
-  - owner policy（`$PI_CODING_AGENT_DIR/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）
+  - owner policy（`$PI_CODING_AGENT_DIR/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
 新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。

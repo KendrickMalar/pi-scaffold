@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, writeFile, chmod, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, type OwnerPolicy} from '../src/core/model-bindings.js';
+import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, repoPolicyFor, type OwnerPolicy} from '../src/core/model-bindings.js';
 import {featureDoc} from './helpers/docs.js';
 
 const policy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [
@@ -64,4 +64,28 @@ test('policy file must be an owner-only regular file; absence is reported as mis
   await chmod(path, 0o644);
   const open = await loadOwnerPolicy(agentDir);
   assert.ok(!open.ok && open.problems[0]!.code === 'INSECURE_MODE');
+});
+
+const ownerWide: OwnerPolicy = {version: 1, repos: {'example/*': {authMode: 'file-backed', models: policy.repos['example/demo']!.models}}};
+
+test('an OWNER/* entry covers every repository of exactly that owner', () => {
+  assert.deepEqual(checkFeatureBindings({repo: 'example/new-repo', bindings: featureDoc().bindings, policy: ownerWide, availableModels: available, scopedModels: []}), []);
+  assert.ok(repoPolicyFor(ownerWide, 'Example/demo'));
+  assert.equal(repoPolicyFor(ownerWide, 'example-other/demo'), undefined);
+  assert.equal(repoPolicyFor(ownerWide, 'other/example'), undefined);
+  assert.ok(codes(checkFeatureBindings({repo: 'other/demo', bindings: featureDoc().bindings, policy: ownerWide, availableModels: available, scopedModels: []})).includes('POLICY_REPO'));
+});
+
+test('an exact OWNER/REPO entry takes precedence over OWNER/*', () => {
+  const both: OwnerPolicy = {version: 1, repos: {...ownerWide.repos, 'example/demo': {authMode: 'file-backed', models: []}}};
+  assert.deepEqual(repoPolicyFor(both, 'example/demo')!.models, []);
+  assert.equal(repoPolicyFor(both, 'example/other')!.models.length, 4);
+  assert.ok(codes(checkFeatureBindings({repo: 'example/demo', bindings: featureDoc().bindings, policy: both, availableModels: available, scopedModels: []})).includes('POLICY_MODEL'));
+});
+
+test('only a whole-repository * after an exact owner is accepted in policy keys', () => {
+  const entry = {authMode: 'file-backed', models: []};
+  assert.ok(decodeOwnerPolicy({version: 1, repos: {'example/*': entry}}).ok);
+  for (const key of ['*', '*/*', '*/demo', 'ex*/*', 'example/de*', 'example/**', 'example/*/x', '/*', 'example/'])
+    assert.ok(!decodeOwnerPolicy({version: 1, repos: {[key]: entry}}).ok, key);
 });

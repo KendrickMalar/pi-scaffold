@@ -88,3 +88,11 @@ test('workflowId must be a UUID before it becomes a state path', async () => {
   const r = await deriveRepoContext(base({workflowId: '../aaaa/11111111-1111-4111-8111-111111111111'}));
   assert.ok(!r.ok && r.problems[0]!.code === 'INVALID_FORMAT');
 });
+
+test('an OWNER/* policy entry binds the account for any repository of that owner', async () => {
+  const ownerWide: OwnerPolicy = {version: 1, repos: {'example/*': {authMode: 'file-backed', models: []}}};
+  const r = await deriveRepoContext(base({policy: ownerWide}));
+  assert.ok(r.ok && /^[0-9a-f]{64}$/.test(r.value.accountBinding!));
+  const other = await deriveRepoContext(base({policy: {version: 1, repos: {'other/*': {authMode: 'file-backed', models: []}}}}));
+  assert.ok(other.ok && other.value.accountBinding === null);
+});
