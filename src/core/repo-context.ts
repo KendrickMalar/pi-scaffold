@@ -3,7 +3,7 @@
 import {isAbsolute, join} from 'node:path';
 import {failed, okValue, problem, isUuid, type Decoded, type RepoContext, type Sha256} from './contracts.js';
 import {sha256Text, taggedDigest} from './digests.js';
-import type {OwnerPolicy} from './model-bindings.js';
+import {repoPolicyFor, type OwnerPolicy} from './model-bindings.js';
 import {parseGithubRemote, type GitReader} from '../ports/git-read.js';
 
 export function resolveAgentDir(env: Record<string, string | undefined>, home: string): string {
@@ -46,7 +46,7 @@ export async function deriveRepoContext(input: RepoContextInput): Promise<Decode
   if (!origin || origin.toLowerCase() !== input.repo.toLowerCase()) return failed([problem('ORIGIN_MISMATCH', 'repo', `origin (${origin ?? 'none'}) does not match ${input.repo}.`)]);
   const profile = readProfileSnapshot(input.sessionEntries);
   if (profile.invalid) return failed([problem('PROFILE_INVALID', 'profile', 'The session holds an invalid or conflicting pi-profile snapshot.')]);
-  const authMode = input.policy?.repos[input.repo]?.authMode;
+  const authMode = repoPolicyFor(input.policy, input.repo)?.authMode;
   return okValue({
     repo: input.repo, repoRoot: identity.repoRoot, gitCommonDir: identity.gitCommonDir,
     workflowStateRoot: join(input.agentDir, 'pi-scaffold', 'state', repoHash(input.repo), input.workflowId ?? '_repo'),

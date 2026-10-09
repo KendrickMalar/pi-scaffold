@@ -9,6 +9,17 @@ export interface PolicyModel { model: string; thinking: ThinkingLevel; tier: 'ba
 export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[] }
 export interface OwnerPolicy { version: 1; repos: Record<string, RepoPolicy> }
 
+/** A policy key is OWNER/REPO, or OWNER/* for every repository of exactly that owner. No other wildcard exists. */
+const isPolicyKey = (k: string) => k.endsWith('/*') ? isRepoRef(k.slice(0, -1) + 'x') : isRepoRef(k);
+/** The entry for a repository: an exact OWNER/REPO entry first, otherwise the owner's OWNER/* entry (owner compared case-insensitively). */
+export function repoPolicyFor(policy: OwnerPolicy | undefined, repo: string): RepoPolicy | undefined {
+  if (!policy) return undefined;
+  if (Object.hasOwn(policy.repos, repo)) return policy.repos[repo];
+  const owner = repo.split('/')[0]!.toLowerCase();
+  const key = Object.keys(policy.repos).find(k => k.endsWith('/*') && k.slice(0, -2).toLowerCase() === owner);
+  return key === undefined ? undefined : policy.repos[key];
+}
+
 export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   const r = new StrictReader();
   const o = r.object(value, '', ['version', 'repos']);
@@ -16,10 +27,10 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   r.literal(o.version, 'version', [1] as const, 'UNKNOWN_VERSION');
   const repos: Record<string, RepoPolicy> = {};
   const raw = o.repos;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) r.add('INVALID_TYPE', 'repos', 'Expected an object keyed by OWNER/REPO.');
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) r.add('INVALID_TYPE', 'repos', 'Expected an object keyed by OWNER/REPO or OWNER/*.');
   else for (const [repo, v] of Object.entries(raw)) {
     const p = `repos.${repo}`;
-    if (!isRepoRef(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO.');
+    if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
     const e = r.object(v, p, ['authMode', 'models']) ?? {};
     const authMode = r.literal(e.authMode, `${p}.authMode`, ['file-backed'] as const);
     const models = r.array(e.models, `${p}.models`, (m, q) => {
@@ -56,7 +67,7 @@ export interface BindingCheck {
 export function checkFeatureBindings(input: BindingCheck): Problem[] {
   const problems: Problem[] = [];
   if (!input.policy) return [problem('POLICY_MISSING', 'policy.json', 'No owner policy is configured; model bindings cannot be authorized.')];
-  const repo = input.policy.repos[input.repo];
+  const repo = repoPolicyFor(input.policy, input.repo);
   if (!repo) return [problem('POLICY_REPO', 'policy.json', `Owner policy has no entry for ${input.repo}.`)];
   for (const role of input.roles ?? FEATURE_ROLES) {
     const b = input.bindings[role], path = `bindings.${role}`;
