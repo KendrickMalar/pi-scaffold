@@ -27,6 +27,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "prepack": "npm run build",
     "build": "tsc -p tsconfig.core.json",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "npm run build && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.extension.json",

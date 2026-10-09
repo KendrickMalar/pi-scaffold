@@ -266,3 +266,39 @@ test('a Feature added to the Epic meanwhile stops the save (the plan no longer c
   assert.notEqual(out.r.status, 'applied');
   assert.equal(docOf(gh).dependencyPlan, null);
 });
+
+// ---- the basic design reference is recorded with the dependency plan (Epic #1 integration) ----------
+
+const DESIGN_COMMIT = '9'.repeat(40), DESIGN_TEXT = '# 基本設計（架空）\n';
+const designRef = {path: 'docs/design.md', sha256: sha256Text(DESIGN_TEXT), gitRef: DESIGN_COMMIT};
+
+test('a verified design reference is saved to the Epic together with the plan', async t => {
+  const gh = world();
+  const h = await harness(t, gh, {blobs: {[`${DESIGN_COMMIT}:docs/design.md`]: DESIGN_TEXT}});
+  const input = params(gh, undefined, {design: designRef});
+  const out = await h.invoke(input);
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual(docOf(gh).design, designRef);
+  assert.deepEqual(docOf(gh).dependencyPlan, plan([[11, 12], [12, 13]]));
+  const again = await h.invoke(input);
+  assert.equal(again.r.status, 'noop', JSON.stringify(again.r.problems)); assert.equal(again.ghWrites, 0);
+});
+
+test('a design reference that is missing or has another hash blocks before any change', async t => {
+  for (const [blobs, code] of [[{}, 'DESIGN_NOT_FOUND'], [{[`${DESIGN_COMMIT}:docs/design.md`]: DESIGN_TEXT + '改変'}, 'DESIGN_HASH_MISMATCH']] as const) {
+    const gh = world(); const before = gh.issues.get(10)!.body;
+    const h = await harness(t, gh, {blobs: blobs as Record<string, string>});
+    const out = await h.invoke(params(gh, undefined, {design: designRef}));
+    assert.equal(out.r.status, 'blocked');
+    assert.ok(out.r.problems.some(p => p.code === code), JSON.stringify(out.r.problems));
+    noChanges(gh, before);
+  }
+});
+
+test('without design, an existing design reference is kept as it is', async t => {
+  const existing = {path: 'docs/old.md', sha256: 'e'.repeat(64), gitRef: '8'.repeat(40)};
+  const gh = world({epic: epicDoc(d => { d.design = existing; })});
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual(docOf(gh).design, existing);
+});
