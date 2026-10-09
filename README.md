@@ -2,7 +2,15 @@
 
 [Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが呼び出せる14個の個別ツールとして提供する拡張です。GitHubの操作はすべて[pi-gh](https://github.com/KendrickMalar/pi-gh)の公開ツール経由で行います。
 
-npm名は`@papillon6814/pi-scaffold`（MIT）。**まだnpmに公開しておらず、Piへの導入もしていません。**
+npm名は`@papillon6814/pi-scaffold`（MIT）。
+
+## 導入
+
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.1.0`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.1.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- 同じProfileにpi-gh 0.5.0以上も必要です。
+- Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
+- ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
 
 ## 工程とツール
 
