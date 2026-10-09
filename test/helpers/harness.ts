@@ -59,7 +59,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
   const git: GitReader = {
     run: async () => ({code: 1, stdout: ''}),
     repoIdentity: async () => ({repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', origin: scenario.origin ?? 'https://github.com/example/demo.git'}),
-    readBlob: async (commit, path) => { const v = scenario.blobs?.[`${commit}:${path}`]; return v === undefined ? undefined : Buffer.from(v); },
+    readBlob: async (commit, path) => { const v = scenario.blobs?.[`${commit}:${path}`]; if (v === '__THROW__') throw new Error('TOO_LARGE: synthetic'); return v === undefined ? undefined : Buffer.from(v); },
     listTree: async (_ref, path) => scenario.tree?.[path] ?? [],
   };
   const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.environment ? {environment: () => scenario.environment!} : {}), ...(scenario.herdr && 'tabCreate' in scenario.herdr ? {herdr: () => scenario.herdr as HerdrPort} : {}), ...(scenario.waitMs !== undefined ? {waitMs: scenario.waitMs} : {}), ...(scenario.pollMs !== undefined ? {pollMs: scenario.pollMs} : {}), ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});

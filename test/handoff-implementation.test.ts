@@ -111,8 +111,8 @@ test('a Feature binding the owner policy no longer allows is blocked', async t =
 test('no saved Wave plan is blocked', async t => { await blockedNoLaunch(t, world({epic: epicDoc(d => { d.wavePlan = null; })}), 'PLAN_UNSET'); });
 test('a Wave check that does not pass (labels out of sync) is blocked', async t => { await blockedNoLaunch(t, world({waveLabels: {12: 'Wave: 1'}}), 'WAVE_LABEL_MISMATCH'); });
 test('Blocked, a duplicate Stage or a direct visible edit stop before anything', async t => {
-  await blockedNoLaunch(t, world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign', 'Blocked']}));
-  await blockedNoLaunch(t, world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign', 'Stage: Implementation']}));
+  await blockedNoLaunch(t, world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign', 'Blocked']}), 'BLOCKED');
+  await blockedNoLaunch(t, world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign', 'Stage: Implementation']}), 'DUPLICATE_MANAGED_LABEL');
   const gh = world(); gh.issues.get(10)!.body = gh.issues.get(10)!.body.replace('## 目的', '## 目的（手で編集）');
   const {h, herdr} = await harness(t, gh, new FakeHerdr(), {defaultParams: {repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: 9, expectedBodySha256: sha256Text(gh.issues.get(10)!.body)}});
   const out = await h.invoke();
@@ -211,6 +211,7 @@ test('a Feature added after the approval stops the stage commit', async t => {
   };
   const out = await h.invoke();
   assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => ['WAVE_LABEL_MISSING', 'UNASSIGNED_FEATURE', 'FEATURE_SET_CHANGED', 'APPROVAL_MISSING'].includes(p.code)), JSON.stringify(out.r.problems));
   assert.equal(docOf(gh).stage, 'basic-design');
 });
 
@@ -224,4 +225,33 @@ test('a stale Epic body or revision is refused before the start approval is aske
     assert.equal(out.confirmCalls, 0);
     noLaunch(herdr, gh);
   }
+});
+
+// ---- review follow-ups --------------------------------------------------------------------------
+
+for (const [label, change] of [
+  ['outOfScope', (f: FeatureDocV1) => { f.outOfScope = []; }],
+  ['the rest of the purpose', (f: FeatureDocV1) => { f.purpose = f.purpose + '\n追加の目的'; }],
+] as const) {
+  test(`a start approval does not survive a change to a Feature's ${label}`, async t => {
+    const gh = world({features: {11: feature(epicDoc(), 11, f => { f.outOfScope = ['PDF出力']; })}});
+    const {h: parent} = await harness(t, gh, new FakeHerdr(), {tools: ['gh_capabilities']});
+    assert.equal((await parent.invoke()).confirmCalls, 1);
+    gh.issues.get(11)!.body = renderFeatureBlock(feature(docOf(gh), 11, f => { f.outOfScope = ['PDF出力']; change(f); }));
+    const {h, herdr} = await harness(t, gh, new FakeHerdr(), {agentDir: parent.agentDir, interactive: false});
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(x => x.code === 'APPROVAL_UI_REQUIRED'), JSON.stringify(out.r.problems)); noLaunch(herdr, gh);
+  });
+}
+
+test('a design file that cannot be read is reported as unreadable, not as missing', async t => {
+  await blockedNoLaunch(t, world(), 'DESIGN_UNREADABLE', {blobs: {[`${COMMIT}:docs/design.md`]: '__THROW__'}});
+});
+
+test('one call reads the Feature set a bounded number of times', async t => {
+  const gh = world();
+  const {h} = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'applied');
+  // pre-approval readiness (verify reads twice) + pre-commit readiness (twice); the driver's own pre-op gate reuses the first.
+  assert.ok(gh.count('gh_subissues_list') <= 4, `subissue lists: ${gh.count('gh_subissues_list')}`);
 });

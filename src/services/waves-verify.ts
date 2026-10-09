@@ -1,7 +1,7 @@
 // #13 scaffold_waves_verify (read-only): check the native Feature set, the Wave plan (input or the Epic's), GitHub
 // dependencies and Wave labels. Everything is read twice; any change in between means "not passed, read again".
 // Never fixes anything, creates labels or touches Projects.
-import {StrictReader, isRepoRef, problem, type Decoded, type EpicDocV1, type Problem, type ScaffoldResult} from '../core/contracts.js';
+import {StrictReader, isRepoRef, problem, type Decoded, type EpicDocV1, type FeatureSnapshot, type Problem, type ScaffoldResult} from '../core/contracts.js';
 import {canonicalJson, taggedDigest, wavePlanDigest} from '../core/digests.js';
 import {canonicalWavePlan, checkWaveLabels, normalizeScope, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
@@ -27,7 +27,7 @@ interface Blocker { number: number; htmlUrl: string }
 const decodeBlockers = (d: unknown): Blocker[] | undefined => Array.isArray(d) && d.every(x => typeof x === 'object' && x !== null && typeof (x as Blocker).number === 'number' && typeof (x as {html_url?: unknown}).html_url === 'string')
   ? d.map(x => ({number: (x as Blocker).number, htmlUrl: (x as {html_url: string}).html_url})) : undefined;
 
-interface Reading { epic: EpicDocV1; epicBodySha: string; features: WaveFeature[]; featureSetDigest: string; edges: WaveEdge[]; problems: Problem[]; fingerprint: string }
+interface Reading { epic: EpicDocV1; epicBodySha: string; snapshots: FeatureSnapshot[]; features: WaveFeature[]; featureSetDigest: string; edges: WaveEdge[]; problems: Problem[]; fingerprint: string }
 
 async function readAll(input: WavesVerifyInput, call: ToolCall): Promise<Reading | Problem[]> {
   const snap = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
@@ -51,22 +51,33 @@ async function readAll(input: WavesVerifyInput, call: ToolCall): Promise<Reading
   }
   edges.sort((a, b) => a.from - b.from || a.to - b.to);
   const fingerprint = taggedDigest('waves-reading', {epic: snap.value.bodySha256, features: all.map(f => ({n: f.number, body: f.bodySha256, labels: f.labelsSha256, state: f.state})), edges});
-  return {epic, epicBodySha: snap.value.bodySha256, features, featureSetDigest: set.value.featureSetDigest, edges, problems, fingerprint};
+  return {epic, epicBodySha: snap.value.bodySha256, snapshots: all, features, featureSetDigest: set.value.featureSetDigest, edges, problems, fingerprint};
 }
 
 export async function verifyWaves(input: WavesVerifyInput, call: ToolCall): Promise<ScaffoldResult<WavesVerifyData>> {
+  return (await verifyWavesReading(input, call)).result;
+}
+
+/** verifyWaves plus the consistent reading it judged (for callers that must decide on exactly the same Features). */
+export async function verifyWavesReading(input: WavesVerifyInput, call: ToolCall): Promise<{result: ScaffoldResult<WavesVerifyData>; reading?: {epicBodySha: string; snapshots: FeatureSnapshot[]; featureSetDigest: string}}> {
+  const r = await verifyWavesInner(input, call);
+  return r;
+}
+
+async function verifyWavesInner(input: WavesVerifyInput, call: ToolCall): Promise<{result: ScaffoldResult<WavesVerifyData>; reading?: {epicBodySha: string; snapshots: FeatureSnapshot[]; featureSetDigest: string}}> {
+  const wrap = (result: ScaffoldResult<WavesVerifyData>, reading?: Reading) => ({result, ...(reading ? {reading: {epicBodySha: reading.epicBodySha, snapshots: reading.snapshots, featureSetDigest: reading.featureSetDigest}} : {})});
   const operation = WAVES_VERIFY;
   const notPassed = (problems: Problem[], extra: Partial<WavesVerifyData> = {}): ScaffoldResult<WavesVerifyData> =>
     ({status: 'blocked', operation, problems, data: {passed: false, checks: [], featureSetDigest: null, wavePlanDigest: null, matchesSavedPlan: false, ...extra}});
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_subissues_list', 'gh_dependencies_list'], call.scope);
-  if (!caps.ok) return notPassed(caps.problems);
+  if (!caps.ok) return wrap(notPassed(caps.problems));
   const repoOnly = await call.repoContext(input.repo, null);
-  if (!repoOnly.ok) return notPassed(repoOnly.problems);
+  if (!repoOnly.ok) return wrap(notPassed(repoOnly.problems));
   const first = await readAll(input, call);
-  if (Array.isArray(first)) return notPassed(first);
+  if (Array.isArray(first)) return wrap(notPassed(first));
   const second = await readAll(input, call);
-  if (Array.isArray(second)) return notPassed(second);
-  if (first.fingerprint !== second.fingerprint) return notPassed([problem('CHANGED_DURING_READ', '', 'The Epic, its Features, labels or dependencies changed while reading; read again.')]);
+  if (Array.isArray(second)) return wrap(notPassed(second));
+  if (first.fingerprint !== second.fingerprint) return wrap(notPassed([problem('CHANGED_DURING_READ', '', 'The Epic, its Features, labels or dependencies changed while reading; read again.')]));
   const {epic, features, edges} = second;
   const problems = [...second.problems];
   if (epic.dependencyPlan === null) problems.push(problem('DEPENDENCY_PLAN_UNSET', 'dependencyPlan', 'The Epic has no dependency plan yet (scaffold_dependencies_apply).'));
@@ -94,5 +105,5 @@ export async function verifyWaves(input: WavesVerifyInput, call: ToolCall): Prom
     problems.push(...checkWaveLabels(plan, features)); checks.push('labels');
   }
   const data = {passed: problems.length === 0, checks, featureSetDigest: second.featureSetDigest, wavePlanDigest: digest, matchesSavedPlan};
-  return problems.length ? {status: 'blocked', operation, problems, data} : {status: 'validated', operation, problems: [], data};
+  return wrap(problems.length ? {status: 'blocked', operation, problems, data} : {status: 'validated', operation, problems: [], data}, second);
 }

@@ -8,8 +8,7 @@ import {prepareLabelEdit} from '../core/label-policy.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
-import {readFeatureSet} from '../ports/feature-set.js';
-import {verifyWaves} from './waves-verify.js';
+import {verifyWavesReading} from './waves-verify.js';
 
 export const HANDOFF_IMPLEMENTATION = 'scaffold_handoff_implementation';
 export function decodeImplementationHandoffInput(value: unknown): Decoded<MutationInput> { return decodeMutationInput(value); }
@@ -17,21 +16,21 @@ export function decodeImplementationHandoffInput(value: unknown): Decoded<Mutati
 /** Complete readiness of an Epic snapshot: design gate + Wave verification. Returns the start-approval view when ready. */
 async function readiness(call: ToolCall, repo: string, epicIssue: number, snapshot: IssueSnapshot, repoRoot: string) {
   const epic = snapshot.doc as EpicDocV1;
-  const set = await readFeatureSet(repo, epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId});
-  if (!set.ok) return {problems: set.problems};
-  const features = set.value.features;
-  const blobs = new Map<string, Buffer | undefined>();
+  // One consistent reading (the Wave verifier reads everything twice and compares) feeds every decision below.
+  const waves = await verifyWavesReading({repo, epicIssue}, call);
+  if (!waves.reading || !waves.result.data?.passed) return {problems: waves.result.problems.length ? waves.result.problems : [problem('WAVES_NOT_VERIFIED', 'waves', 'The Wave check did not pass.')]};
+  if (waves.reading.epicBodySha !== snapshot.bodySha256) return {problems: [problem('EPIC_CHANGED', 'epicIssue', 'The Epic changed while checking; read it again.')]};
+  const features = waves.reading.snapshots;
+  const blobs = new Map<string, Buffer | Error | undefined>();
   for (const ref of [...(epic.design ? [epic.design] : []), ...features.map(f => f.doc.designRef)]) {
     if (blobs.has(blobKey(ref))) continue;
-    try { blobs.set(blobKey(ref), await call.runtime.git.readBlob(ref.gitRef, ref.path, repoRoot)); } catch { blobs.set(blobKey(ref), undefined); }
+    try { blobs.set(blobKey(ref), await call.runtime.git.readBlob(ref.gitRef, ref.path, repoRoot)); } catch (e) { blobs.set(blobKey(ref), e instanceof Error ? e : new Error(String(e))); }
   }
   const policy = await call.policy();
   if (!policy.ok) return {problems: policy.problems};
   const gate = checkDesignReady({repo, epic, features, blobs, policy: policy.value, availableModels: call.env.availableModels(), scopedModels: call.env.scopedModels()});
-  const waves = await verifyWaves({repo, epicIssue}, call);
-  const problems: Problem[] = [...gate.problems, ...(waves.data?.passed ? [] : waves.problems.length ? waves.problems : [problem('WAVES_NOT_VERIFIED', 'waves', 'The Wave check did not pass.')])];
-  if (problems.length) return {problems};
-  return {problems: [], view: startApprovalView(epic, features, set.value.featureSetDigest)};
+  if (gate.problems.length) return {problems: gate.problems};
+  return {problems: [] as Problem[], view: startApprovalView(epic, features, waves.reading.featureSetDigest)};
 }
 
 export async function handoffImplementation(input: MutationInput, call: ToolCall): Promise<ScaffoldResult<HandoffData>> {
@@ -49,6 +48,7 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
   if (!context.ok) return blocked(context.problems);
   const handoff = {...input, expectedStage: 'basic-design' as const, nextStage: 'implementation' as const};
   const repoRoot = repoOnly.value.repoRoot;
+  let justChecked: {bodySha256: string; ready: Awaited<ReturnType<typeof readiness>>} | undefined;
   if (!(await committedByUs(snap.value, handoff, call.journal(context.value)))) {
     // Cheap preconditions first: nothing is asked for a handoff that cannot proceed.
     const env = call.environment();
@@ -64,6 +64,7 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
     if (!labels.ok) return blocked(labels.problems);
     const ready = await readiness(call, input.repo, input.epicIssue, snap.value, repoRoot);
     if (!ready.view) return blocked(ready.problems);
+    justChecked = {bodySha256: snap.value.bodySha256, ready};
     const existing = await call.approvals.requireContentApproval('implementation-start', doc.workflowId, approvalViewDigest('implementation-start', ready.view), context.value);
     if (!existing.ok) {
       if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
@@ -73,7 +74,10 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
   }
   // Right before the stage commit: still ready, and the start approval matches the state as it is now.
   const gate: StageGate = async s => {
-    const ready = await readiness(call, input.repo, input.epicIssue, s, repoRoot);
+    // The driver's first gate call follows our own check immediately on the same Epic body; later calls read everything again.
+    const reuse = justChecked && justChecked.bodySha256 === s.bodySha256 ? justChecked.ready : undefined;
+    justChecked = undefined;
+    const ready = reuse ?? await readiness(call, input.repo, input.epicIssue, s, repoRoot);
     if (!ready.view) return {status: 'blocked', problems: ready.problems, artifactDigests: {}} as GateResult;
     const approved = await call.approvals.requireContentApproval('implementation-start', (s.doc as EpicDocV1).workflowId, approvalViewDigest('implementation-start', ready.view), context.value);
     return (approved.ok ? {status: 'validated', problems: [], artifactDigests: {startApproval: ready.view.contentDigest}} : {status: 'blocked', problems: approved.problems, artifactDigests: {}}) as GateResult;

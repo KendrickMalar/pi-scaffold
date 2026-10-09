@@ -10,13 +10,14 @@ import type {ApprovalView} from './approvals.js';
 export interface DesignGateInput {
   repo: string; epic: EpicDocV1; features: readonly FeatureSnapshot[];
   /** Bytes of `<gitRef>:<path>` from the local repository; undefined when it does not exist. */
-  blobs: ReadonlyMap<string, Buffer | undefined>;
+  blobs: ReadonlyMap<string, Buffer | Error | undefined>;
   policy: OwnerPolicy | undefined; availableModels: readonly string[]; scopedModels: readonly string[];
 }
 export const blobKey = (ref: DesignRef) => `${ref.gitRef}:${ref.path}`;
 
 function checkRef(ref: DesignRef, blobs: DesignGateInput['blobs'], path: string): Problem[] {
   const bytes = blobs.get(blobKey(ref));
+  if (bytes instanceof Error) return [problem('DESIGN_UNREADABLE', path, `${ref.path} at ${ref.gitRef} could not be read: ${bytes.message}`)];
   if (!bytes) return [problem('DESIGN_NOT_FOUND', path, `${ref.path} does not exist at ${ref.gitRef} in the local repository.`)];
   return sha256Bytes(bytes) === ref.sha256 ? [] : [problem('DESIGN_HASH_MISMATCH', path, `${ref.path} at ${ref.gitRef} has a different sha256.`)];
 }
@@ -50,7 +51,7 @@ export function startApprovalView(epic: EpicDocV1, features: readonly FeatureSna
   const wave = new Map((plan?.assignments ?? []).map(a => [a.issue, a.wave]));
   const contentDigest = taggedDigest('implementation-start', {
     specification: specificationDigest(epic), design: designDigest(epic), featureSet: featureSetDigest, wavePlan: wavePlanDigest({...epic, wavePlan: plan}),
-    features: sorted.map(f => ({issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope, designRef: f.doc.designRef, criteria: f.doc.criteria, bindings: f.doc.bindings})),
+    features: sorted.map(f => ({issue: f.number, state: f.state, featureKey: f.doc.featureKey, purpose: f.doc.purpose, editScope: f.doc.editScope, outOfScope: f.doc.outOfScope, designRef: f.doc.designRef, criteria: f.doc.criteria, bindings: f.doc.bindings})),
   });
   const text = [
     '実装を開始する内容',
