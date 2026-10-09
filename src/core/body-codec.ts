@@ -7,7 +7,7 @@ import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisib
 import {sha256Text, labelsSha256} from './digests.js';
 
 export interface ParsedBody { before: string; after: string; block: string; doc: ScaffoldDocV1; projectionChecked: boolean }
-export interface RawIssue { repo: string; number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed' }
+export interface RawIssue { repo: string; number: number; title: string; body: string; labels: string[]; state: 'open' | 'closed'; stateReason?: string | null }
 
 const MARKER_LIKE = /^<!--\s*pi-scaffold:([^:\s]+):(start|end)\s*-->\s*$/;
 const invalid = (message: string, path = 'body') => problem('INVALID_MANAGED_DOCUMENT', path, message);
@@ -133,7 +133,7 @@ export function buildSnapshot(raw: RawIssue): Decoded<IssueSnapshot> {
   const labels = [...raw.labels].sort();
   return okValue({
     repo: raw.repo, number: raw.number, title: raw.title, body: raw.body, bodySha256: sha256Text(raw.body),
-    labels, labelsSha256: labelsSha256(labels), state: raw.state, doc: parsed.value.doc, projectionChecked: parsed.value.projectionChecked,
+    labels, labelsSha256: labelsSha256(labels), state: raw.state, ...(raw.stateReason !== undefined ? {stateReason: raw.stateReason} : {}), doc: parsed.value.doc, projectionChecked: parsed.value.projectionChecked,
   });
 }
 

@@ -27,13 +27,24 @@ if (args.includes('graphql')) {
   if (!existsSync(pfile)) out({data: {node: null}});
   const items = JSON.parse(readFileSync(pfile, 'utf8'));
   const issueBy = n => JSON.parse(readFileSync(join(state, `issue-${n}.json`), 'utf8'));
+  const vfile = join(state, `project-${variables.projectId}-values.json`);
+  const values = existsSync(vfile) ? JSON.parse(readFileSync(vfile, 'utf8')) : {};
+  if (query.includes('updateProjectV2ItemFieldValue')) {
+    values[variables.itemId] = {...(values[variables.itemId] ?? {}), [variables.fieldId]: variables.value.singleSelectOptionId};
+    writeFileSync(vfile, JSON.stringify(values));
+    appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint: 'graphql', fieldUpdate: variables}) + '\n');
+    out({data: {updateProjectV2ItemFieldValue: {projectV2Item: {id: variables.itemId}}}});
+  }
   if (query.includes('addProjectV2ItemById')) {
     const n = Number(String(variables.contentId).replace('I_example', ''));
     if (!items.includes(n)) { items.push(n); writeFileSync(pfile, JSON.stringify(items)); appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint: 'graphql', projectAdd: n}) + '\n'); }
     out({data: {addProjectV2ItemById: {item: {id: `PVTI_${n}`}}}});
   }
   const kind = query.includes('items(first') ? 'items' : 'fields';
-  const nodes = kind === 'fields' ? [] : items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: issueBy(n).node_id, number: n, repository: {nameWithOwner: 'example/demo'}}, fieldValues: {nodes: [], pageInfo: {hasNextPage: false, endCursor: null}}}));
+  const ffile = join(state, `project-${variables.projectId}-fields.json`);
+  const fields = existsSync(ffile) ? JSON.parse(readFileSync(ffile, 'utf8')) : [];
+  const nodes = kind === 'fields' ? fields : items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: issueBy(n).node_id, number: n, repository: {nameWithOwner: 'example/demo'}},
+    fieldValues: {nodes: Object.entries(values[`PVTI_${n}`] ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}})), pageInfo: {hasNextPage: false, endCursor: null}}}));
   out({data: {node: {__typename: 'ProjectV2', id: variables.projectId, title: 'Fixture', [kind]: {nodes, pageInfo: {hasNextPage: false, endCursor: null}}}}});
 }
 const [path, query = ''] = endpoint.split('?');

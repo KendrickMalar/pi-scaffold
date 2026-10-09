@@ -80,12 +80,12 @@ export class PiGhBridge {
   }
 }
 
-interface GithubIssue { number: number; title: string; body: string | null; state: 'open' | 'closed'; labels: string[]; html_url: string; pull_request?: unknown }
+interface GithubIssue { number: number; title: string; body: string | null; state: 'open' | 'closed'; stateReason?: string | null; labels: string[]; html_url: string; pull_request?: unknown }
 function decodeGithubIssue(d: unknown): GithubIssue | undefined {
   if (!isRecord(d) || !Number.isSafeInteger(d.number) || typeof d.title !== 'string' || (d.body !== null && typeof d.body !== 'string') || (d.state !== 'open' && d.state !== 'closed') || !Array.isArray(d.labels) || typeof d.html_url !== 'string') return undefined;
   const labels = d.labels.map(l => isRecord(l) ? l.name : l);
   if (labels.some(l => typeof l !== 'string')) return undefined;
-  return {number: d.number as number, title: d.title, body: d.body as string | null, state: d.state, labels: labels as string[], html_url: d.html_url, ...(d.pull_request !== undefined ? {pull_request: d.pull_request} : {})};
+  return {number: d.number as number, title: d.title, body: d.body as string | null, state: d.state, ...(typeof d.state_reason === 'string' || d.state_reason === null ? {stateReason: d.state_reason as string | null} : {}), labels: labels as string[], html_url: d.html_url, ...(d.pull_request !== undefined ? {pull_request: d.pull_request} : {})};
 }
 
 /** Reads one Issue through pi-gh and returns a validated snapshot; any inconsistency blocks. */
@@ -96,6 +96,6 @@ export async function readIssue(repo: string, number: number, bridge: PiGhBridge
   if (issue.pull_request !== undefined || issue.number !== number || issue.html_url.toLowerCase() !== `https://github.com/${repo}/issues/${number}`.toLowerCase()) return failed([problem('GITHUB_IDENTITY', `issues/${number}`, 'Expected exactly this repository Issue (not a PR).')]);
   // pi-gh 0.2.0 redacts secret candidates in results without a flag; such text is not the real Issue content.
   if ((issue.body ?? '').includes(PI_GH_MASK) || issue.title.includes(PI_GH_MASK)) return failed([problem('BODY_MASKED', `issues/${number}`, 'pi-gh redacted part of this Issue as a secret candidate, so its exact content cannot be read. Remove the secret-like text from the Issue first.')]);
-  return buildSnapshot({repo, number, title: issue.title, body: issue.body ?? '', labels: issue.labels, state: issue.state});
+  return buildSnapshot({repo, number, title: issue.title, body: issue.body ?? '', labels: issue.labels, state: issue.state, ...(issue.stateReason !== undefined ? {stateReason: issue.stateReason} : {})});
 }
 export {decodeGithubIssue};
