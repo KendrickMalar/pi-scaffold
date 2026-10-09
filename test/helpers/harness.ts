@@ -34,6 +34,8 @@ export interface Scenario {
   model?: {provider: string; id: string} | null; thinkingLevel?: string | null;
   /** Repository files by `<commit>:<path>` for the read-only git port. */
   blobs?: Record<string, string>;
+  /** Commits known to the read-only git port and ancestor pairs [ancestor, descendant]. */
+  commits?: {exists: string[]; ancestors: [string, string][]};
   /** Files under a repo path for `git ls-tree` (read-only). */
   tree?: Record<string, string[]>;
 }
@@ -57,7 +59,18 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
   const gh = scenario.gh ?? new FakePiGh();
   const herdr = scenario.herdr ?? {calls: []};
   const git: GitReader = {
-    run: async () => ({code: 1, stdout: ''}),
+    run: async (args: readonly string[]) => {
+      // Synthetic commit graph: `cat-file -e <ref>^{commit}` and `merge-base --is-ancestor <a> <b>`.
+      const commits = scenario.commits ?? {exists: [], ancestors: []};
+      if (args[0] === 'cat-file' && args[1] === '-e') return {code: commits.exists.includes(String(args[2]).replace(/\^\{commit\}$/, '')) ? 0 : 1, stdout: ''};
+      if (args[0] === 'rev-parse' && args[1] === '--verify') {
+        // Like git: an unambiguous prefix resolves to the full id.
+        const ref = String(args.at(-1)).replace(/\^\{commit\}$/, ''), hits = commits.exists.filter(c => c.startsWith(ref));
+        return hits.length === 1 ? {code: 0, stdout: hits[0]! + '\n'} : {code: 128, stdout: ''};
+      }
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return {code: args[2] === args[3] || commits.ancestors.some(([a, b]) => a === args[2] && b === args[3]) ? 0 : 1, stdout: ''};
+      return {code: 1, stdout: ''};
+    },
     repoIdentity: async () => ({repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', origin: scenario.origin ?? 'https://github.com/example/demo.git'}),
     readBlob: async (commit, path) => { const v = scenario.blobs?.[`${commit}:${path}`]; if (v === '__THROW__') throw new Error('TOO_LARGE: synthetic'); return v === undefined ? undefined : Buffer.from(v); },
     listTree: async (_ref, path) => scenario.tree?.[path] ?? [],

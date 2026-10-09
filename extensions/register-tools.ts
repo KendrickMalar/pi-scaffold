@@ -13,11 +13,12 @@ import {createTool as dependenciesApply} from './tools/dependencies-apply.ts';
 import {createTool as wavesVerify} from './tools/waves-verify.ts';
 import {createTool as wavesApply} from './tools/waves-apply.ts';
 import {createTool as handoffImplementation} from './tools/handoff-implementation.ts';
+import {createTool as handoffVerification} from './tools/handoff-verification.ts';
 
 export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinition;
 
 /** Accepted tools only (#3〜#16 are added after acceptance). */
-export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate, researchBegin, researchResolve, handoffBasicDesign, featureCreate, dependenciesApply, wavesVerify, wavesApply, handoffImplementation];
+export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate, researchBegin, researchResolve, handoffBasicDesign, featureCreate, dependenciesApply, wavesVerify, wavesApply, handoffImplementation, handoffVerification];
 
 export function registerTools(pi: ExtensionAPI, runtime: ScaffoldRuntime): string[] {
   const names: string[] = [];
