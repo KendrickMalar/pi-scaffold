@@ -6,8 +6,8 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 
 ## 導入
 
-- npm版：`pi install npm:@papillon6814/pi-scaffold@0.2.0`。
-- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.2.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.3.0`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.3.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
 - 同じProfileにpi-gh 0.5.0以上も必要です。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
@@ -18,7 +18,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 | 工程 | ツール | 内容 |
 |---|---|---|
-| setup | `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を照合し、足りないものだけを作成する。色や説明が違えば既定では止まる |
+| setup | `scaffold_labels_ensure` | 管理ラベル211種類（固定11＋`Wave: 1`〜`Wave: 200`）を照合し、足りないものだけを作成する。色や説明が違えば既定では止まる。pi-gh 0.7.0以上では40件ずつまとめて作る（211件で数分）。それより古いpi-ghでは1件ずつ作る |
 | setup | `scaffold_epic_draft_create` | タイトル・目的・元の依頼からEpicを1件作る（要件は補わない）。`mode: "prepare"`はローカルの下書きだけ |
 | setup→specification | `scaffold_handoff_specification` | 仕様策定セッションへ引き継ぐ |
 | specification | `scaffold_specification_update` | ヒアリングで確定した事実・要件・合格基準・決定を、安定IDのpatchとして反映する（削除・再採番はしない）。足りない項目は`missingFields`で返す |

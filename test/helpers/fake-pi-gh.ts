@@ -27,6 +27,8 @@ export class FakePiGh {
   features: string[] = ['issue-list-labels'];
   loaded = true;
   readonly overrides = new Map<string, Override>();
+  /** Names sent in each label-create-many change (pi-gh 0.7.0 feature `labels-create-many`). */
+  readonly labelBatches: string[][] = [];
   /** Repository labels keyed by lower-case name, like GitHub. */
   readonly labels = new Map<string, FakeLabel & {id: number}>();
   readonly labelChanges: {operation: string; name?: string; issue?: number}[] = [];
@@ -199,6 +201,14 @@ export class FakePiGh {
       return FakePiGh.ok({repo: this.repo, operation: 'label-edit', before, after, affected: [], noop: JSON.stringify(before) === JSON.stringify(after), digest: 'f'.repeat(64), sensitive: false}, 'preview');
     }
     this.labelChanges.push({operation: change.operation, ...(change.name !== undefined ? {name: change.name} : {}), ...(change.issue !== undefined ? {issue: change.issue} : {})});
+    if (change.operation === 'label-create-many') {
+      if (!this.features.includes('labels-create-many')) return FakePiGh.err('rejected', 'LABEL_OPERATION');
+      const many = (change as unknown as {labels: {name: string; color: string; description?: string}[]}).labels;
+      this.labelBatches.push(many.map(l => l.name));
+      if (many.some(l => this.labels.has(l.name.toLowerCase()))) return FakePiGh.err('rejected', 'LABEL_EXISTS');
+      for (const l of many) this.labels.set(l.name.toLowerCase(), {name: l.name, color: l.color.toLowerCase(), description: l.description ?? '', id: this.labels.size + 1});
+      return {result: {content: [], structuredContent: {status: 'applied'}}, isError: false};
+    }
     if (change.operation === 'label-create') {
       if (before) return FakePiGh.err('rejected', 'LABEL_EXISTS');
       this.labels.set(key, {name: change.name!, color: change.color!.toLowerCase(), description: change.description ?? '', id: this.labels.size + 1});
