@@ -28,15 +28,23 @@ export default function (pi: ExtensionAPI) {
     watcher?.stop();
     watcher = undefined;
     if (process.env.PI_SUBAGENT_CHILD || process.env.HERDR_ENV !== '1') return;
-    watcher = new StageWatcher({
-      ownerSessionId: ctx.sessionManager.getSessionId(),
-      registry: new WatchRegistry(runtime.agentDir),
-      herdr: createHerdrCli({...(process.env.HERDR_BIN_PATH ? {bin: process.env.HERDR_BIN_PATH} : {}), ...(process.env.HERDR_SOCKET_PATH ? {socketPath: process.env.HERDR_SOCKET_PATH} : {})}),
-      readTail: tailReader(join(runtime.agentDir, 'sessions')),
-      notify: (text, level) => ctx.ui.notify(text, level),
-      now: Date.now,
-    });
-    void watcher.resume().catch(() => undefined);
+    // Runs before the handoff receiver below: a failure here must never skip packet acceptance.
+    try {
+      // One registry instance per watcher: runtime.watch.add goes through watcher.add, so its writes are serialized
+      // with the watcher's own updates.
+      watcher = new StageWatcher({
+        ownerSessionId: ctx.sessionManager.getSessionId(),
+        registry: new WatchRegistry(runtime.agentDir),
+        herdr: createHerdrCli({...(process.env.HERDR_BIN_PATH ? {bin: process.env.HERDR_BIN_PATH} : {}), ...(process.env.HERDR_SOCKET_PATH ? {socketPath: process.env.HERDR_SOCKET_PATH} : {})}),
+        readTail: tailReader(join(runtime.agentDir, 'sessions')),
+        notify: (text, level) => ctx.ui.notify(text, level),
+        now: Date.now,
+      });
+      void watcher.resume().catch(() => undefined);
+    } catch (e) {
+      watcher = undefined;
+      ctx.ui.notify(`pi-scaffold: 下位の監視を開始できませんでした（${(e as Error).message}）。`, 'warning');
+    }
   };
 
   pi.on('session_start', (_event, ctx) => {
@@ -70,5 +78,5 @@ export default function (pi: ExtensionAPI) {
   pi.on('session_before_switch', invalidate);
   pi.on('session_before_fork', invalidate);
   pi.on('session_before_tree', invalidate);
-  pi.on('session_shutdown', () => { stopRetry(); watcher?.stop(); invalidate(); });
+  pi.on('session_shutdown', () => { stopRetry(); watcher?.stop(); watcher = undefined; invalidate(); });
 }
