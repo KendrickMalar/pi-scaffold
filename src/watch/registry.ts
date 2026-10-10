@@ -1,6 +1,8 @@
 // The watch registry: which stage panes each Pi session handed off and how far their watch has got.
 // Shared by every session of this agent dir; each session only acts on records it owns (ownerSessionId).
-import {join} from 'node:path';
+// Not locked: writes are read-modify-write, so two sessions writing in the same instant can drop one record.
+import {rename} from 'node:fs/promises';
+import {basename, dirname, join} from 'node:path';
 import {OwnedFileError, readOwnedJson, writeOwnedFile} from '../core/files.js';
 import {INITIAL_PROGRESS, type WatchEntry, type WatchProgress} from './decide.js';
 
@@ -31,22 +33,31 @@ export class WatchRegistry {
     const records = raw.watches.filter(isRecord);
     return {records, corrupt: records.length !== raw.watches.length};
   }
+  /** Loads for a write. If the file is corrupt, moves it aside first so its bytes are not overwritten. */
+  private async loadForWrite(): Promise<WatchRecord[]> {
+    const {records, corrupt} = await this.load();
+    if (corrupt) {
+      try { await rename(this.path, join(dirname(this.path), `${basename(this.path)}.corrupt-${Date.now()}`)); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+    }
+    return records;
+  }
   private async save(records: WatchRecord[]): Promise<void> {
     await writeOwnedFile(this.path, `${JSON.stringify({version: 1, watches: records}, null, 2)}\n`, {root: this.root});
   }
   /** (Re)registers a handed-off pane with fresh progress. */
   async upsert(entry: WatchEntry): Promise<void> {
-    const {records} = await this.load();
+    const records = await this.loadForWrite();
     await this.save([...records.filter(r => !sameWatch(r.entry, entry)), {entry, progress: {...INITIAL_PROGRESS}}]);
   }
-  /** Re-reads before writing so records other sessions added meanwhile are kept. */
+  /** Re-reads right before writing to keep records other sessions added; not locked, so a write racing another session's write in the same instant can drop one of them (writes are rare: one per check per owner, one per handoff). */
   async update(record: WatchRecord): Promise<void> {
-    const {records} = await this.load();
+    const records = await this.loadForWrite();
     if (!records.some(r => sameWatch(r.entry, record.entry))) return;
     await this.save(records.map(r => sameWatch(r.entry, record.entry) ? record : r));
   }
   async remove(entry: WatchEntry): Promise<void> {
-    const {records} = await this.load();
+    const records = await this.loadForWrite();
     await this.save(records.filter(r => !sameWatch(r.entry, entry)));
   }
 }
