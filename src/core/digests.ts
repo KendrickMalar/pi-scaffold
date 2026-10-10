@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import type {EpicDocV1, Sha256} from './contracts.js';
+import type {DependencyPlan, EpicDocV1, Sha256} from './contracts.js';
 
 export function sha256Bytes(bytes: Uint8Array): Sha256 { return createHash('sha256').update(bytes).digest('hex'); }
 export function sha256Text(text: string): Sha256 { return createHash('sha256').update(text, 'utf8').digest('hex'); }
@@ -39,3 +39,5 @@ export function specificationDigest(doc: EpicDocV1): Sha256 {
 }
 export function designDigest(doc: EpicDocV1): Sha256 { return taggedDigest('design', {design: doc.design, dependencyPlan: doc.dependencyPlan}); }
 export function wavePlanDigest(doc: EpicDocV1): Sha256 { return taggedDigest('wave-plan', doc.wavePlan); }
+/** The dependencyDigest a Wave plan must carry: the digest of the Epic's saved dependency plan (null while none is saved). */
+export function dependencyPlanDigest(plan: DependencyPlan | null): Sha256 | null { return plan === null ? null : taggedDigest('dependency-plan', plan); }

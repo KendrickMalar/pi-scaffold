@@ -5,7 +5,7 @@ import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js
 import {FakePiGh} from './helpers/fake-pi-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
-import {sha256Text} from '../src/core/digests.js';
+import {sha256Text, taggedDigest} from '../src/core/digests.js';
 import {labelDefinitions} from '../src/core/label-definitions.js';
 import type {DependencyPlan, EpicDocV1, FeatureDocV1} from '../src/core/contracts.js';
 import {populatedDoc, featureDoc} from './helpers/docs.js';
@@ -312,4 +312,31 @@ test('a design saved by another operation meanwhile is not overwritten', async t
   assert.notEqual(out.r.status, 'applied');
   assert.ok(out.r.problems.some(p => p.code === 'DESIGN_CHANGED'), JSON.stringify(out.r.problems));
   assert.deepEqual(docOf(gh).design, other);
+});
+
+// ---- digests a Wave plan must carry (#34) -------------------------------------------------------
+
+test('applied and noop results return the dependencyDigest a Wave plan must carry', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const expected = taggedDigest('dependency-plan', plan([[11, 12], [12, 13]]));
+  assert.equal((out.r.data as Data & {dependencyDigest: string}).dependencyDigest, expected);
+  // It is the digest of the plan as saved on the Epic (what scaffold_waves_verify/apply compare against).
+  assert.equal(expected, taggedDigest('dependency-plan', docOf(gh).dependencyPlan));
+  const again = await h.invoke();
+  assert.equal(again.r.status, 'noop');
+  assert.equal((again.r.data as Data & {dependencyDigest: string}).dependencyDigest, expected);
+  // A new operation over the already-saved plan is a noop with the same digest.
+  const fresh = await (await harness(t, gh)).invoke(params(gh, [[11, 12], [12, 13]], {operationId: 'dddddddd-dddd-4ddd-8ddd-000000000002'}));
+  assert.equal(fresh.r.status, 'noop', JSON.stringify(fresh.r.problems));
+  assert.equal((fresh.r.data as Data & {dependencyDigest: string}).dependencyDigest, expected);
+});
+
+test('a blocked dependencies_apply returns no digest', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke(params(gh, [[11, 11]]));
+  assert.equal(out.r.status, 'blocked');
+  assert.equal((out.r.data as {dependencyDigest?: string} | undefined)?.dependencyDigest, undefined);
 });

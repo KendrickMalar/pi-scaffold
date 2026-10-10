@@ -7,7 +7,7 @@ import {
   type Decoded, type DependencyPlan, type DesignRef, type EpicDocV1, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult,
 } from '../core/contracts.js';
 import {patchDoc} from '../core/body-codec.js';
-import {canonicalJson, taggedDigest} from '../core/digests.js';
+import {canonicalJson, dependencyPlanDigest, taggedDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {renderDependencyMermaid, validateDependencyGraph, type Edge} from '../core/dependency-graph.js';
@@ -19,7 +19,8 @@ import {verifyDesignRef} from './feature-create.js';
 export const DEPENDENCIES_APPLY = 'scaffold_dependencies_apply';
 /** `design` (optional) records the basic design document on the Epic in the same conditional update as the plan. */
 export type DependenciesApplyInput = MutationInput & {plan: DependencyPlan; projectId?: string; design?: DesignRef};
-export interface DependenciesApplyData { addedEdges: Edge[]; unchangedEdges: Edge[]; mermaid: string; projectItems: number[] }
+/** dependencyDigest is the value a Wave plan must carry (scaffold_waves_verify / scaffold_waves_apply) for the saved plan. */
+export interface DependenciesApplyData { addedEdges: Edge[]; unchangedEdges: Edge[]; mermaid: string; projectItems: number[]; dependencyDigest: string }
 const PROJECT_RE = /^PVT_[A-Za-z0-9_-]{1,200}$/;
 
 export function decodeDependenciesApplyInput(value: unknown): Decoded<DependenciesApplyInput> {
@@ -202,7 +203,9 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     if (!final.ok) return run.stop(final.problems);
     if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan) || !designDone(final.value.doc as EpicDocV1)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
     const wrote = run.record.steps.some(s => !s.note && s.phase === 'done');
-    return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => !has(added, e)), mermaid, projectItems}};
+    return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => !has(added, e)), mermaid, projectItems, dependencyDigest: dependencyPlanDigest(input.plan)!}};
   });
+  // applied/noop means the Epic shows exactly input.plan; the digest is also filled in for results replayed from older journals.
+  if ((result.status === 'applied' || result.status === 'noop') && result.data) return {...result, data: {...result.data, dependencyDigest: dependencyPlanDigest(input.plan)!}} as ScaffoldResult<DependenciesApplyData>;
   return result as ScaffoldResult<DependenciesApplyData>;
 }

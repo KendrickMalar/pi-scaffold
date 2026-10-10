@@ -28,7 +28,7 @@ const kindOf = (p: string): 'manifest' | 'state' | undefined => MANIFEST.test(p.
 /** Files inside a scope as the repository has them (a file scope may return itself or nothing). */
 export type ScopeContents = (scope: string) => readonly string[];
 
-export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeature[], edges: readonly WaveEdge[], digests: {featureSetDigest: Sha256; dependencyDigest: Sha256}, contents: ScopeContents = () => []): WaveCheck {
+export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeature[], edges: readonly WaveEdge[], digests: {featureSetDigest: Sha256; dependencyDigest: Sha256 | null}, contents: ScopeContents = () => []): WaveCheck {
   const checks: string[] = [], problems: Problem[] = [];
   if (rawPlan === null || rawPlan === undefined) return {passed: false, checks, problems: [problem('PLAN_UNSET', 'wavePlan', 'No Wave plan is set yet (it is filled in during basic design).')]};
   const r = new StrictReader();
@@ -36,8 +36,9 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
   const decoded = r.result(plan);
   if (!decoded.ok) return {passed: false, checks, problems: decoded.problems};
   checks.push('plan-format');
-  if (plan.featureSetDigest !== digests.featureSetDigest) problems.push(problem('FEATURE_SET_CHANGED', 'plan.featureSetDigest', 'The plan was made for a different Feature set.'));
-  if (plan.dependencyDigest !== digests.dependencyDigest) problems.push(problem('DEPENDENCIES_CHANGED', 'plan.dependencyDigest', 'The plan was made for a different dependency plan.'));
+  if (plan.featureSetDigest !== digests.featureSetDigest) problems.push(problem('FEATURE_SET_CHANGED', 'plan.featureSetDigest', 'The plan was made for a different Feature set; use the featureSetDigest that scaffold_waves_verify returns.'));
+  // A null dependency digest means the Epic has no dependency plan; the caller reports that (DEPENDENCY_PLAN_UNSET).
+  if (digests.dependencyDigest !== null && plan.dependencyDigest !== digests.dependencyDigest) problems.push(problem('DEPENDENCIES_CHANGED', 'plan.dependencyDigest', 'The plan was made for a different dependency plan; use the dependencyDigest that scaffold_waves_verify returns.'));
   checks.push('digests');
   const wave = new Map<number, number>();
   const known = new Set(features.map(f => f.issue));

@@ -8,7 +8,8 @@ export function createTool(runtime: ScaffoldRuntime) {
     name: WAVES_APPLY,
     label: 'Scaffold: Waveの反映',
     description: 'Apply a basic-design Wave plan to the Features of an Epic. Everything is first checked like scaffold_waves_verify (every Feature '
-      + 'exactly one Wave 1–200, dependency order, no edit conflicts in a Wave, current Feature-set and dependency digests); then missing "Wave: N" '
+      + 'exactly one Wave 1–200, dependency order, no edit conflicts in a Wave, current Feature-set and dependency digests, which plan.dependencyDigest/plan.featureSetDigest must equal: get them from '
+      + 'scaffold_waves_verify first); then missing "Wave: N" '
       + 'label definitions are created, each Feature\'s old Wave label is replaced by a conditional change that touches no other label, labels are '
       + 'read back, the plan is saved to the Epic and the whole state is checked again. Duplicate or non-canonical Wave labels stop the call (never '
       + 'cleaned up automatically). Applied Wave labels do not by themselves authorize implementation.',
