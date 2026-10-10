@@ -11,7 +11,9 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'from→to has wave(from) < wave(to); Features sharing a Wave do not edit overlapping paths or shared manifests/lockfiles/state '
       + '(migrations, workflows, schema), and undecidable edit scopes never pass; labels show exactly one canonical "Wave: N" matching the plan; '
       + 'GitHub dependencies equal the saved dependency plan. Checks the given plan or the Epic\'s saved one. Changes during reading never pass. '
-      + 'Never fixes, labels or touches Projects.',
+      + 'Never fixes, labels or touches Projects. Call this first to get the digests a plan must carry: data.dependencyDigest (from the Epic\'s saved '
+      + 'dependency plan; null with DEPENDENCY_PLAN_UNSET while none is saved) and data.featureSetDigest are returned whenever the Epic and its '
+      + 'Features were read consistently, also when the plan does not pass or no plan is given.',
     parameters: Type.Object({
       repo: Type.String({pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'}),
       epicIssue: Type.Integer({minimum: 1}),

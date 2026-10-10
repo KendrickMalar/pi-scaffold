@@ -17,9 +17,9 @@ const dependencyDigest = taggedDigest('dependency-plan', dependencyPlan);
 const plan = (waves: Record<number, number>, over: Partial<WavePlan> = {}): WavePlan => ({version: 1, assignments: Object.entries(waves).map(([i, w]) => ({issue: Number(i), wave: w})), dependencyDigest, featureSetDigest, ...over});
 const WAVES = {11: 1, 12: 1, 13: 2};
 
-function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>; closed?: number[]; extraChild?: boolean} = {}) {
+function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>; closed?: number[]; extraChild?: boolean; noDependencyPlan?: boolean} = {}) {
   const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
-  const epic: EpicDocV1 = {...populatedDoc(), stage: 'basic-design', dependencyPlan, wavePlan: opts.saved === undefined ? plan(WAVES) : opts.saved, handoff: null};
+  const epic: EpicDocV1 = {...populatedDoc(), stage: 'basic-design', dependencyPlan: opts.noDependencyPlan ? null : dependencyPlan, wavePlan: opts.saved === undefined ? plan(WAVES) : opts.saved, handoff: null};
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [11, 12, 13]});
   for (const n of [11, 12, 13]) {
     const f: FeatureDocV1 = {...featureDoc(), workflowId: epic.workflowId, featureKey: KEYS[n]!, parentEpic: 10, editScope: SCOPES[n]!};
@@ -35,7 +35,7 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
   t.after(h.dispose);
   return h;
 }
-type Data = {passed: boolean; checks: string[]; featureSetDigest: string; wavePlanDigest: string | null};
+type Data = {passed: boolean; checks: string[]; featureSetDigest: string | null; dependencyDigest: string | null; wavePlanDigest: string | null};
 const writes = (gh: FakePiGh) => gh.writes;
 
 test('a consistent saved plan, labels and dependencies pass with zero writes', async t => {
@@ -199,4 +199,75 @@ test('the result says whether the checked plan is the saved one; the digest igno
   assert.equal((out.r.data as Data).wavePlanDigest, (saved.r.data as Data).wavePlanDigest);
   const other = await h.invoke({repo: 'example/demo', epicIssue: 10, plan: plan({11: 1, 12: 2, 13: 3})});
   assert.equal((other.r.data as Data & {matchesSavedPlan: boolean}).matchesSavedPlan, false);
+});
+
+// ---- digests a plan must carry (#34) ------------------------------------------------------------
+
+test('the digests a plan must carry come back for a passing plan', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke();
+  const d = out.r.data as Data;
+  assert.equal(d.passed, true, JSON.stringify(out.r.problems));
+  assert.equal(d.dependencyDigest, taggedDigest('dependency-plan', dependencyPlan));
+  assert.equal(d.featureSetDigest, featureSetDigest);
+});
+
+test('the digests come back for a plan that does not pass (and with no plan at all)', async t => {
+  const gh = world({saved: plan({11: 1, 12: 1, 13: 1}), labels: {13: ['Wave: 1']}});
+  const h = await harness(t, gh);
+  const out = await h.invoke();
+  const d = out.r.data as Data;
+  assert.equal(d.passed, false);
+  assert.ok(out.r.problems.some(p => p.code === 'DEPENDENCY_ORDER'), JSON.stringify(out.r.problems));
+  assert.equal(d.dependencyDigest, taggedDigest('dependency-plan', dependencyPlan));
+  assert.equal(d.featureSetDigest, featureSetDigest);
+  const none = await (await harness(t, world({saved: null}))).invoke();
+  assert.ok(none.r.problems.some(p => p.code === 'PLAN_UNSET'));
+  assert.equal((none.r.data as Data).dependencyDigest, taggedDigest('dependency-plan', dependencyPlan));
+  assert.equal((none.r.data as Data).featureSetDigest, featureSetDigest);
+});
+
+test('a plan with a wrong digest does not pass, and the result shows the right ones to use', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  const wrong = await h.invoke({repo: 'example/demo', epicIssue: 10, plan: plan(WAVES, {dependencyDigest: 'f'.repeat(64), featureSetDigest: 'e'.repeat(64)})});
+  const d = wrong.r.data as Data;
+  assert.equal(d.passed, false);
+  assert.ok(wrong.r.problems.some(p => p.code === 'DEPENDENCIES_CHANGED'), JSON.stringify(wrong.r.problems));
+  assert.ok(wrong.r.problems.some(p => p.code === 'FEATURE_SET_CHANGED'), JSON.stringify(wrong.r.problems));
+  assert.equal(d.dependencyDigest, taggedDigest('dependency-plan', dependencyPlan));
+  assert.equal(d.featureSetDigest, featureSetDigest);
+  // Copying the returned digests into the plan makes it pass.
+  const fixed = await h.invoke({repo: 'example/demo', epicIssue: 10, plan: plan(WAVES, {dependencyDigest: d.dependencyDigest!, featureSetDigest: d.featureSetDigest!})});
+  assert.equal((fixed.r.data as Data).passed, true, JSON.stringify(fixed.r.problems));
+});
+
+test('without a saved dependency plan the dependency digest is null with a clear problem; the Feature-set digest still comes back', async t => {
+  const gh = world({noDependencyPlan: true});
+  const out = await (await harness(t, gh)).invoke();
+  const d = out.r.data as Data;
+  assert.equal(d.passed, false);
+  assert.equal(d.dependencyDigest, null);
+  assert.equal(d.featureSetDigest, featureSetDigest);
+  const unset = out.r.problems.find(p => p.code === 'DEPENDENCY_PLAN_UNSET');
+  assert.ok(unset, JSON.stringify(out.r.problems));
+  assert.match(unset.message, /scaffold_dependencies_apply/);
+  assert.match(unset.message, /dependencyDigest/);
+  // The digest of "no plan" is never offered or compared as if it were a real one.
+  assert.ok(!out.r.problems.some(p => p.code === 'DEPENDENCIES_CHANGED'), JSON.stringify(out.r.problems));
+  assert.equal(writes(gh), 0);
+});
+
+test('when nothing could be read consistently, both digests are null', async t => {
+  const gh = world();
+  let reads = 0, changed = false;
+  gh.onCall = name => {
+    if (name !== 'gh_issue_get' || ++reads !== 5 || changed) return;
+    changed = true; gh.issues.get(10)!.subIssues = [11, 12];
+  };
+  const out = await (await harness(t, gh)).invoke();
+  const d = out.r.data as Data;
+  assert.equal(d.passed, false);
+  assert.ok(out.r.problems.some(p => p.code === 'CHANGED_DURING_READ'), JSON.stringify(out.r.problems));
+  assert.equal(d.dependencyDigest, null); assert.equal(d.featureSetDigest, null);
 });

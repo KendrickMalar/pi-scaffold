@@ -8,7 +8,7 @@ import {
   type Decoded, type EpicDocV1, type FeatureSnapshot, type MutationInput, type Problem, type ScaffoldResult, type WavePlan,
 } from '../core/contracts.js';
 import {patchDoc} from '../core/body-codec.js';
-import {canonicalJson, taggedDigest, wavePlanDigest} from '../core/digests.js';
+import {canonicalJson, dependencyPlanDigest, taggedDigest, wavePlanDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {labelDefinitions} from '../core/label-definitions.js';
@@ -80,7 +80,7 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
   const tree = new Map<string, readonly string[]>();
   for (const scope of new Set(features.flatMap(f => f.doc.editScope.map(normalizeScope).filter((x): x is string => !!x)))) tree.set(scope, (await call.runtime.git.listTree('HEAD', scope, repoOnly.value.repoRoot)) ?? []);
   const check = validateWavePlan(input.plan, features.map(f => ({issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope, labels: f.labels})), edges,
-    {featureSetDigest: set.value.featureSetDigest, dependencyDigest: taggedDigest('dependency-plan', epic.dependencyPlan)}, s => tree.get(s) ?? []);
+    {featureSetDigest: set.value.featureSetDigest, dependencyDigest: dependencyPlanDigest(epic.dependencyPlan)}, s => tree.get(s) ?? []);
   if (graph.status !== 'validated' || !check.passed) return blocked([...graph.problems, ...check.problems]);
   const plan = canonicalWavePlan(input.plan as WavePlan);
   const waveOf = new Map(plan.assignments.map(a => [a.issue, a.wave]));

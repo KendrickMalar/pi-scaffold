@@ -14,7 +14,8 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'Rejects self edges, duplicates, unknown nodes and cycles (existing edges included). Existing dependencies must be in the plan; nothing is ever '
       + 'removed, and dependencies outside the Feature set stop the call. Adds only missing edges, optionally adds the Features to an EXISTING Project '
       + '(projectId), then saves the plan and a fixed-ID Mermaid diagram in the Epic. Optional design {path, sha256, gitRef} records the basic design document on the Epic in '
-      + 'the same update (it must exist at gitRef in the local repository with that sha256); omitted, the Epic\'s design is kept.',
+      + 'the same update (it must exist at gitRef in the local repository with that sha256); omitted, the Epic\'s design is kept. '
+      + 'Applied/noop results return data.dependencyDigest, the value a Wave plan must carry as plan.dependencyDigest.',
     parameters: Type.Object({
       ...mutationInputFields,
       plan: Type.Object({

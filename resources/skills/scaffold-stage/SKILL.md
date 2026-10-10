@@ -31,7 +31,8 @@ description: Scaffold工程（setup→specification→basic-design→implementat
    - 設計書をコミットします。
    - `scaffold_feature_create` で、Featureを1件ずつ作ります。
    - `scaffold_dependencies_apply` で、全Featureの依存を登録します。このとき **`design`（設計書の path / sha256 / コミット）を必ず渡します**。Epicに設計書の参照が無いと、実装工程へは引き継げません（`DESIGN_UNSET`）。
-   - `scaffold_waves_verify` でWave計画を確かめ、`scaffold_waves_apply` で反映します。
+   - Wave計画（`plan`）には `dependencyDigest` と `featureSetDigest` が必要です。**先に `scaffold_waves_verify` を呼んで digest を得ます**（`plan` なしで呼べば、計画が未保存でも `data` に2つが返ります）。`scaffold_dependencies_apply` の結果の `dependencyDigest` も同じ値です。digest を自分で計算したり、パッケージの内部を読んだりしません。
+   - 返った digest を入れた計画を `scaffold_waves_verify` で確かめ、`scaffold_waves_apply` で反映します。`dependencyDigest` が null（`DEPENDENCY_PLAN_UNSET`）なら、先に依存を登録します。
    - `scaffold_handoff_implementation` を呼び、実装開始の指示を待ちます。
 4. **implementation**
    - 実装とテストは、承認された担当が別に行います。
