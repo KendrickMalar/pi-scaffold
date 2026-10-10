@@ -377,7 +377,7 @@ export type PaneState = {exists: false} | {exists: true; agent?: string; status?
   }
 ```
 
-（import 行は `import {HerdrError, type HerdrPort, type PaneState} from '../../src/handoff/herdr-client.js';` の形にする。既存の import の書き方に合わせる。）
+（既存の import 行 `import type {HerdrPort} from '../../src/handoff/herdr-client.js';` を `import type {HerdrPort, PaneState} from '../../src/handoff/herdr-client.js';` に変える。）
 
 - [ ] **Step 4: テストを実行し、通ることを確かめる**
 
