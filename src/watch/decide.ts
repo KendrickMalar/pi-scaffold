@@ -14,12 +14,13 @@ export interface WatchEntry {
   cwd: string; repo: string; epicIssue: number; targetStage: string; addedAt: string;
 }
 export interface WatchProgress {
-  retryCount: number; pendingRetryAt?: number; exhaustedErrorAt?: number; lastNoticeKey?: string; herdrFailures: number;
+  /** A pending schedule applies only to the error it was announced for: `pendingErrorAt` is that error's `at`. */
+  retryCount: number; pendingRetryAt?: number; pendingErrorAt?: number; exhaustedErrorAt?: number; lastNoticeKey?: string; herdrFailures: number;
 }
 export const INITIAL_PROGRESS: WatchProgress = Object.freeze({retryCount: 0, herdrFailures: 0});
 
 export type Observation =
-  | {kind: 'gone'} | {kind: 'exited'} | {kind: 'working'} | {kind: 'blocked'}
+  | {kind: 'gone'} | {kind: 'exited'} | {kind: 'replaced'} | {kind: 'working'} | {kind: 'blocked'}
   | {kind: 'idle'; tail: TailResult}
   | {kind: 'unclear'; reason: string};
 export type NoticeLevel = 'info' | 'warning' | 'error';
@@ -44,36 +45,41 @@ export function decide(entry: WatchEntry, progress: WatchProgress, obs: Observat
     return {actions, next: p};
   }
   p.herdrFailures = 0;
+  // Only a transient error keeps a schedule, and only for the error it was announced for (see below).
+  const clearSchedule = () => { delete p.pendingRetryAt; delete p.pendingErrorAt; };
 
   switch (obs.kind) {
-    case 'gone': notify('error', '下位の pane が消えました。監視を終えます。'); actions.push({type: 'stop'}); break;
-    case 'exited': notify('warning', '下位の pi が終了しました。監視を終えます。'); actions.push({type: 'stop'}); break;
-    case 'working': delete p.pendingRetryAt; delete p.lastNoticeKey; break; // the count stays: only a normal end resets it
-    case 'blocked': notifyOnce('blocked', 'warning', '下位が確認・入力を待っています。'); break;
+    case 'gone': clearSchedule(); notify('error', '下位の pane が消えました。監視を終えます。'); actions.push({type: 'stop'}); break;
+    case 'exited': clearSchedule(); notify('warning', '下位の pi が終了しました。監視を終えます。'); actions.push({type: 'stop'}); break;
+    case 'replaced': clearSchedule(); notify('warning', '下位の pane で別のセッションが動いています。監視を終えます。'); actions.push({type: 'stop'}); break;
+    case 'working': clearSchedule(); delete p.lastNoticeKey; break; // the count stays: only a normal end resets it
+    case 'blocked': clearSchedule(); notifyOnce('blocked', 'warning', '下位が確認・入力を待っています。'); break;
     case 'idle': {
       const tail = obs.tail;
-      if (tail.kind === 'unknown') { notifyOnce(`unknown:${tail.reason}`, 'warning', `下位は止まっていますが、理由を判定できません（${tail.reason}）。自動再開はしません。`); break; }
+      if (tail.kind === 'unknown') { clearSchedule(); notifyOnce(`unknown:${tail.reason}`, 'warning', `下位は止まっていますが、理由を判定できません（${tail.reason}）。自動再開はしません。`); break; }
       if (tail.kind === 'stopped') {
-        p.retryCount = 0; delete p.pendingRetryAt;
+        p.retryCount = 0; clearSchedule();
         if (tail.reason === 'aborted') notifyOnce(`aborted:${tail.at}`, 'info', '下位のターンは中断されています。');
         else notifyOnce(`stopped:${tail.at}`, 'info', '下位が返事待ちか、工程の作業を終えています。');
         break;
       }
-      if (!tail.transient) { notifyOnce(`error:${tail.at}`, 'error', `下位がエラーで止まっています: ${cut(tail.message)}`); break; }
-      if (p.exhaustedErrorAt === tail.at) break;
+      if (!tail.transient) { clearSchedule(); notifyOnce(`error:${tail.at}`, 'error', `下位がエラーで止まっています: ${cut(tail.message)}`); break; }
+      if (p.exhaustedErrorAt === tail.at) { clearSchedule(); break; }
       if (p.retryCount >= MAX_AUTO_CONTINUE) {
-        p.exhaustedErrorAt = tail.at; delete p.pendingRetryAt;
+        p.exhaustedErrorAt = tail.at; clearSchedule();
         notifyOnce(`exhausted:${tail.at}`, 'error', `自動再開を ${MAX_AUTO_CONTINUE} 回試しましたが止まっています: ${cut(tail.message)}`);
         break;
       }
-      if (p.pendingRetryAt === undefined) {
+      // No schedule, or one left over from another error: this is a fresh sighting. Announce the wait; never send now.
+      if (p.pendingRetryAt === undefined || p.pendingErrorAt !== tail.at) {
         const delay = RETRY_DELAYS_MS[p.retryCount]!;
-        p.pendingRetryAt = now + delay;
-        notifyOnce(`transient:${tail.at}:${p.retryCount}`, 'warning', `下位が一時的なエラーで止まっています。${minutes(delay)}後に自動で再開します: ${cut(tail.message)}`);
+        p.pendingRetryAt = now + delay; p.pendingErrorAt = tail.at;
+        p.lastNoticeKey = `transient:${tail.at}:${p.retryCount}`;
+        notify('warning', `下位が一時的なエラーで止まっています。${minutes(delay)}後に自動で再開します: ${cut(tail.message)}`);
         break;
       }
       if (now < p.pendingRetryAt) break;
-      p.retryCount += 1; delete p.pendingRetryAt;
+      p.retryCount += 1; clearSchedule();
       actions.push({type: 'prompt', text: CONTINUE_PROMPT, errorAt: tail.at});
       break;
     }

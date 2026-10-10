@@ -1,6 +1,7 @@
 // The watch registry: which stage panes each Pi session handed off and how far their watch has got.
 // Shared by every session of this agent dir; each session only acts on records it owns (ownerSessionId).
-// Not locked: writes are read-modify-write, so two sessions writing in the same instant can drop one record.
+// Not locked across processes: writes are read-modify-write, so two sessions writing in the same instant can drop
+// one record. Within one instance every write is serialized, so a check's update cannot drop a handoff's upsert.
 import {rename} from 'node:fs/promises';
 import {basename, dirname, join} from 'node:path';
 import {OwnedFileError, readOwnedJson, writeOwnedFile} from '../core/files.js';
@@ -12,17 +13,29 @@ export const sameWatch = (a: WatchEntry, b: WatchEntry) => a.paneId === b.paneId
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const STRING_FIELDS = ['ownerSessionId', 'paneId', 'tabId', 'workspaceId', 'targetSessionId', 'cwd', 'repo', 'targetStage', 'addedAt'] as const;
+const OPTIONAL_NUMBER_FIELDS = ['pendingRetryAt', 'pendingErrorAt', 'exhaustedErrorAt'] as const;
+const optional = (v: unknown, ok: (x: unknown) => boolean) => v === undefined || ok(v);
 function isRecord(v: unknown): v is WatchRecord {
   if (!isRec(v) || !isRec(v.entry) || !isRec(v.progress)) return false;
   const e = v.entry, p = v.progress;
   return STRING_FIELDS.every(k => typeof e[k] === 'string') && Number.isInteger(e.epicIssue)
-    && typeof p.retryCount === 'number' && typeof p.herdrFailures === 'number';
+    && typeof p.retryCount === 'number' && typeof p.herdrFailures === 'number'
+    && OPTIONAL_NUMBER_FIELDS.every(k => optional(p[k], x => typeof x === 'number' && Number.isFinite(x)))
+    && optional(p.lastNoticeKey, x => typeof x === 'string');
 }
 
 export class WatchRegistry {
   private readonly root: string;
   readonly path: string;
+  private queue: Promise<unknown> = Promise.resolve();
   constructor(agentDir: string) { this.root = join(agentDir, 'pi-scaffold'); this.path = join(this.root, 'state', 'watches.json'); }
+
+  /** Runs one read-modify-write after the previous one settles; a failed write does not block later ones. */
+  private serialized<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn, fn);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
 
   /** A missing file is empty. An unreadable file or malformed records are skipped and reported as corrupt. */
   async load(): Promise<{records: WatchRecord[]; corrupt: boolean}> {
@@ -45,19 +58,27 @@ export class WatchRegistry {
   private async save(records: WatchRecord[]): Promise<void> {
     await writeOwnedFile(this.path, `${JSON.stringify({version: 1, watches: records}, null, 2)}\n`, {root: this.root});
   }
-  /** (Re)registers a handed-off pane with fresh progress. */
-  async upsert(entry: WatchEntry): Promise<void> {
-    const records = await this.loadForWrite();
-    await this.save([...records.filter(r => !sameWatch(r.entry, entry)), {entry, progress: {...INITIAL_PROGRESS}}]);
+  /** Registers a handed-off pane. An existing watch of the same pane+session keeps its progress (a replayed handoff
+   * must not lift the auto-continue cap); only its entry is refreshed. */
+  upsert(entry: WatchEntry): Promise<void> {
+    return this.serialized(async () => {
+      const records = await this.loadForWrite();
+      const progress = records.find(r => sameWatch(r.entry, entry))?.progress ?? {...INITIAL_PROGRESS};
+      await this.save([...records.filter(r => !sameWatch(r.entry, entry)), {entry, progress}]);
+    });
   }
-  /** Re-reads right before writing to keep records other sessions added; not locked, so a write racing another session's write in the same instant can drop one of them (writes are rare: one per check per owner, one per handoff). */
-  async update(record: WatchRecord): Promise<void> {
-    const records = await this.loadForWrite();
-    if (!records.some(r => sameWatch(r.entry, record.entry))) return;
-    await this.save(records.map(r => sameWatch(r.entry, record.entry) ? record : r));
+  /** Re-reads right before writing to keep records other sessions added; not locked across processes, so a write racing another session's write in the same instant can drop one of them (writes are rare: only on a change, one per handoff). */
+  update(record: WatchRecord): Promise<void> {
+    return this.serialized(async () => {
+      const records = await this.loadForWrite();
+      if (!records.some(r => sameWatch(r.entry, record.entry))) return;
+      await this.save(records.map(r => sameWatch(r.entry, record.entry) ? record : r));
+    });
   }
-  async remove(entry: WatchEntry): Promise<void> {
-    const records = await this.loadForWrite();
-    await this.save(records.filter(r => !sameWatch(r.entry, entry)));
+  remove(entry: WatchEntry): Promise<void> {
+    return this.serialized(async () => {
+      const records = await this.loadForWrite();
+      await this.save(records.filter(r => !sameWatch(r.entry, entry)));
+    });
   }
 }

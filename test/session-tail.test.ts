@@ -82,3 +82,12 @@ test('the session log is found in the cwd directory first, then anywhere under s
   assert.deepEqual(await tailReader(root)({cwd: '/synthetic/repo', targetSessionId: 'nope'}), {kind: 'unknown', reason: 'log-missing'});
   assert.deepEqual(await tailReader(root)({cwd: '/synthetic/repo', targetSessionId: SID}), {kind: 'stopped', reason: 'stop', at: 1});
 });
+
+test('an assistant message without a numeric timestamp is unknown, never an error with a made-up identity', async t => {
+  const dir = await tmp(t);
+  const noTs = (stopReason: string, timestamp?: unknown) => JSON.stringify({type: 'message', id: 'm', parentId: null, timestamp: 't',
+    message: {role: 'assistant', content: [], stopReason, errorMessage: 'fetch failed', ...(timestamp !== undefined ? {timestamp} : {})}});
+  assert.deepEqual(await readSessionTail(await log(dir, [header(), noTs('error')])), {kind: 'unknown', reason: 'no-timestamp'});
+  assert.deepEqual(await readSessionTail(await log(dir, [header(), noTs('error', '2026-10-07')])), {kind: 'unknown', reason: 'no-timestamp'});
+  assert.deepEqual(await readSessionTail(await log(dir, [header(), noTs('stop')])), {kind: 'unknown', reason: 'no-timestamp'});
+});

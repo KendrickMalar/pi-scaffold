@@ -63,7 +63,16 @@ test('precheck mismatch: if the child moved on before sending, nothing is sent a
   s.state.tails = [fetchFailed, {kind: 'stopped', reason: 'stop', at: 200}];
   await s.watcher.tick();
   assert.equal(s.herdr.count('agentPrompt'), 0);
-  assert.equal((await s.registry.load()).records[0]!.progress.retryCount, 0);
+  const {progress} = (await s.registry.load()).records[0]!;
+  assert.equal(progress.retryCount, 0);
+  assert.equal(progress.pendingRetryAt, undefined, 'no stale schedule is left behind');
+  assert.equal(progress.pendingErrorAt, undefined);
+  // A later transient error is announced with its own wait, never sent on first sight.
+  s.state.tails = [{...fetchFailed, at: 300}];
+  s.state.now = RETRY_DELAYS_MS[0] * 5;
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  assert.match(s.notices.at(-1)!.text, /1分後に自動で再開します/);
 });
 
 test('a gone pane is notified and removed; the next check with nothing owned stops the timer', async t => {
@@ -152,12 +161,13 @@ test('the retry count is saved before sending; if that save fails nothing is sen
   assert.match(s.notices.at(-1)!.text, /監視台帳を更新できませんでした/);
 });
 
-test('a pi pane whose session belongs to another session is treated as exited', async t => {
+test('a pi pane whose session belongs to another session is reported as replaced', async t => {
   const s = await setup(t);
   s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: {kind: 'path', value: '/x/2026_other.jsonl'}});
   await s.watcher.add(entry());
   await s.watcher.tick();
-  assert.match(s.notices[0]!.text, /pi が終了しました/);
+  assert.match(s.notices[0]!.text, /下位の pane で別のセッションが動いています。監視を終えます。/);
+  assert.equal(s.notices[0]!.level, 'warning');
   assert.equal(s.herdr.count('agentPrompt'), 0);
   assert.deepEqual((await s.registry.load()).records, []);
 });
@@ -169,4 +179,46 @@ test('a pi pane whose session path ends with the target session id is checked no
   await s.watcher.tick();
   assert.match(s.notices[0]!.text, /fetch failed|エラー|API/);
   assert.equal((await s.registry.load()).records.length, 1);
+});
+
+test('a failed send is counted before typing, warned about, and not resent for the same error', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  s.state.now = RETRY_DELAYS_MS[0];
+  s.herdr.fail.agentPrompt = 'unknown';
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 1);
+  assert.equal((await s.registry.load()).records[0]!.progress.retryCount, 1, 'counted although the send failed');
+  assert.equal(s.notices.at(-1)!.level, 'warning');
+  assert.match(s.notices.at(-1)!.text, /再開の送信を確認できませんでした/);
+  delete s.herdr.fail.agentPrompt;
+  s.state.now = RETRY_DELAYS_MS[0] + 60_000;
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 1, 'no resend on the next check for the same error');
+  assert.match(s.notices.at(-1)!.text, /5分後に自動で再開します/);
+});
+
+test('an unchanged progress is not written again', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'working'});
+  await s.watcher.add(entry());
+  let updates = 0;
+  const update = s.registry.update.bind(s.registry);
+  s.registry.update = async r => { updates += 1; return update(r); };
+  await s.watcher.tick(); await s.watcher.tick();
+  assert.equal(updates, 0);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'blocked'});
+  await s.watcher.tick(); await s.watcher.tick();
+  assert.equal(updates, 1);
+});
+
+test('a terminal notice is shown once even when removing the watch keeps failing', async t => {
+  const s = await setup(t);
+  await s.watcher.add(entry());
+  s.registry.remove = async () => { throw new Error('disk full'); };
+  await s.watcher.tick(); await s.watcher.tick(); await s.watcher.tick();
+  assert.equal(s.notices.filter(n => /pane が消えました/.test(n.text)).length, 1);
+  assert.equal(s.notices.filter(n => /監視台帳を更新できませんでした/.test(n.text)).length, 1);
 });

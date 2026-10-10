@@ -1,7 +1,8 @@
 // Background watch of the stage panes this Pi session handed off. One timer per session, running only while the
 // registry holds watches this session owns; each check is observe → decide → act. Spec: Issue #36.
 import {SUPPORTED_HERDR, type HerdrPort} from '../handoff/herdr-client.js';
-import {CHECK_INTERVAL_MS, HERDR_FAILURE_LIMIT, MAX_AUTO_CONTINUE, decide, noticeHead, type NoticeLevel, type Observation, type WatchEntry} from './decide.js';
+import {isDeepStrictEqual} from 'node:util';
+import {CHECK_INTERVAL_MS, HERDR_FAILURE_LIMIT, MAX_AUTO_CONTINUE, decide, noticeHead, type NoticeLevel, type Observation, type WatchEntry, type WatchProgress} from './decide.js';
 import type {WatchRecord, WatchRegistry} from './registry.js';
 import type {TailResult} from './session-tail.js';
 
@@ -24,6 +25,9 @@ function sessionMatches(s: {kind: string; value: string}, entry: WatchEntry): bo
   return true;
 }
 
+/** JSON drops undefined fields, so `{a: undefined}` and `{}` are the same saved progress. */
+const stripUndefined = (p: WatchProgress) => Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined));
+
 export class StageWatcher {
   private timer: unknown;
   private running = false;
@@ -31,6 +35,8 @@ export class StageWatcher {
   private corruptNotified = false;
   private versionFailures = 0;
   private registryNotified = false;
+  /** Watches whose terminal notice (gone/exited/replaced) was shown; a failing remove must not repeat it every check. */
+  private readonly ended = new Set<string>();
   constructor(private readonly deps: WatcherDeps) {}
 
   get active(): boolean { return this.timer !== undefined; }
@@ -103,7 +109,7 @@ export class StageWatcher {
       try { return (await this.deps.herdr.processInfo(entry.paneId)).shellReady ? {kind: 'exited'} : {kind: 'unclear', reason: 'agent-not-detected'}; }
       catch (e) { return {kind: 'unclear', reason: (e as Error).message}; }
     }
-    if (pane.session && !sessionMatches(pane.session, entry)) return {kind: 'exited'};
+    if (pane.session && !sessionMatches(pane.session, entry)) return {kind: 'replaced'};
     switch (pane.status) {
       case 'working': return {kind: 'working'};
       case 'blocked': return {kind: 'blocked'};
@@ -114,21 +120,28 @@ export class StageWatcher {
 
   private async check(record: WatchRecord): Promise<void> {
     const {entry} = record;
+    const key = `${entry.paneId}\u0000${entry.targetSessionId}`;
     const {actions, next} = decide(entry, record.progress, await this.observe(entry), this.deps.now());
-    let progress = next, remove = false;
+    const ending = actions.some(a => a.type === 'stop');
+    let progress: WatchProgress = next;
     for (const action of actions) {
-      if (action.type === 'notify') this.deps.notify(action.text, action.level);
-      else if (action.type === 'stop') remove = true;
+      if (action.type === 'notify') { if (!(ending && this.ended.has(key))) this.deps.notify(action.text, action.level); }
+      else if (action.type === 'stop') continue;
       else {
         // Re-check right before typing into the child: someone may have moved it on since the observation.
         const again = await this.observe(entry);
-        if (again.kind !== 'idle' || again.tail.kind !== 'error' || again.tail.at !== action.errorAt) { progress = record.progress; continue; }
+        if (again.kind !== 'idle' || again.tail.kind !== 'error' || again.tail.at !== action.errorAt) {
+          // Drop the schedule too: a later error must get its own announced wait, never this one's.
+          progress = {...record.progress, pendingRetryAt: undefined, pendingErrorAt: undefined};
+          continue;
+        }
         // Persist the count BEFORE typing: a lost save after a send could otherwise cause a second "continue".
         try { await this.deps.registry.update({entry, progress: next}); }
         catch (e) {
           if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`pi-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
           return;
         }
+        record = {entry, progress: next}; // saved: compare later writes against this
         try {
           await this.deps.herdr.agentPrompt(entry.paneId, action.text);
           this.deps.notify(`${noticeHead(entry)}: 自動で再開を送りました（${next.retryCount}/${MAX_AUTO_CONTINUE}回目）。`, 'info');
@@ -138,7 +151,7 @@ export class StageWatcher {
         }
       }
     }
-    if (remove) await this.deps.registry.remove(entry);
-    else await this.deps.registry.update({entry, progress});
+    if (ending) { this.ended.add(key); await this.deps.registry.remove(entry); this.ended.delete(key); return; }
+    if (!isDeepStrictEqual(stripUndefined(progress), stripUndefined(record.progress))) await this.deps.registry.update({entry, progress});
   }
 }

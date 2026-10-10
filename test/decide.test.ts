@@ -84,3 +84,41 @@ test('herdr failures notify once at the third in a row and reset on any good obs
   assert.deepEqual(seen, [0, 0, 1, 0, 0]);
   assert.equal(run({kind: 'working'}, p).next.herdrFailures, 0);
 });
+
+test('a stale schedule never sends on a newly seen error: it is rescheduled with a notice first', () => {
+  const scheduled = run(transient(100), INITIAL_PROGRESS, 0);
+  assert.equal(scheduled.next.pendingErrorAt, 100);
+  const other = run({kind: 'idle', tail: {kind: 'error', transient: false, message: '400 bad', at: 150}}, scheduled.next, 10);
+  assert.deepEqual(types(other), ['notify']);
+  const later = run(transient(200), other.next, RETRY_DELAYS_MS[0] * 10);
+  assert.deepEqual(types(later), ['notify'], 'no prompt at first sight of at=200');
+  assert.match((later.actions[0] as {text: string}).text, /1分後に自動で再開します/);
+  assert.equal(later.next.pendingRetryAt, RETRY_DELAYS_MS[0] * 11);
+  assert.equal(later.next.pendingErrorAt, 200);
+  // Even if a schedule somehow survived, it applies only to its own error.
+  const stale = run(transient(300), {...INITIAL_PROGRESS, pendingRetryAt: 5, pendingErrorAt: 100}, 1_000);
+  assert.deepEqual(types(stale), ['notify']);
+  assert.equal(stale.next.pendingErrorAt, 300);
+});
+
+test('every non-transient outcome clears the pending schedule', () => {
+  const pending = run(transient(100), INITIAL_PROGRESS, 0).next;
+  const outcomes: Observation[] = [
+    {kind: 'blocked'}, {kind: 'working'}, {kind: 'gone'}, {kind: 'exited'}, {kind: 'replaced'},
+    {kind: 'idle', tail: {kind: 'unknown', reason: 'log-version'}},
+    {kind: 'idle', tail: {kind: 'error', transient: false, message: '400 bad', at: 150}},
+    {kind: 'idle', tail: {kind: 'stopped', reason: 'stop', at: 160}},
+  ];
+  for (const obs of outcomes) {
+    const r = run(obs, pending, 10);
+    assert.equal(r.next.pendingRetryAt, undefined, obs.kind);
+    assert.equal(r.next.pendingErrorAt, undefined, obs.kind);
+  }
+});
+
+test('replaced: another session runs in the pane, a warning and stop', () => {
+  const r = run({kind: 'replaced'});
+  assert.deepEqual(types(r), ['notify', 'stop']);
+  assert.equal((r.actions[0] as {level: string}).level, 'warning');
+  assert.match((r.actions[0] as {text: string}).text, /下位の pane で別のセッションが動いています。監視を終えます。$/);
+});

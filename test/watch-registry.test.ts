@@ -17,7 +17,7 @@ test('a missing registry is empty and not corrupt', async t => {
   assert.deepEqual(await (await registry(t)).load(), {records: [], corrupt: false});
 });
 
-test('upsert adds once per pane+session, resets progress, and writes an owner-only file', async t => {
+test('upsert adds once per pane+session, keeps the progress of an existing watch, and writes an owner-only file', async t => {
   const r = await registry(t);
   await r.upsert(entry());
   await r.update({entry: entry(), progress: {...INITIAL_PROGRESS, retryCount: 2}});
@@ -26,7 +26,8 @@ test('upsert adds once per pane+session, resets progress, and writes an owner-on
   await r.upsert(entry());
   const {records} = await r.load();
   assert.deepEqual(records.map(x => x.entry.paneId).sort(), ['w9:p2', 'w9:p3']);
-  assert.equal(records.find(x => x.entry.paneId === 'w9:p2')?.progress.retryCount, 0);
+  assert.equal(records.find(x => x.entry.paneId === 'w9:p2')?.progress.retryCount, 2, 'a replayed handoff must not reset the count');
+  assert.equal(records.find(x => x.entry.paneId === 'w9:p3')?.progress.retryCount, 0);
   assert.equal((await stat(r.path)).mode & 0o777, 0o600);
 });
 
@@ -70,5 +71,49 @@ test('remove on a file with a malformed record keeps the good record and moves t
   assert.equal(await readFile(join(dirname(r.path), aside[0]!), 'utf8'), original);
   const loaded = await r.load();
   assert.equal(loaded.corrupt, false);
+  assert.deepEqual(loaded.records.map(x => x.entry.paneId), ['w9:p2']);
+});
+
+test('a re-upsert keeps the cap state and refreshes the entry', async t => {
+  const r = await registry(t);
+  await r.upsert(entry());
+  await r.update({entry: entry(), progress: {...INITIAL_PROGRESS, retryCount: 3, exhaustedErrorAt: 42, lastNoticeKey: 'exhausted:42'}});
+  await r.upsert({...entry(), addedAt: '2026-10-12T00:00:00.000Z'});
+  const [rec] = (await r.load()).records;
+  assert.equal(rec!.entry.addedAt, '2026-10-12T00:00:00.000Z');
+  assert.deepEqual(rec!.progress, {...INITIAL_PROGRESS, retryCount: 3, exhaustedErrorAt: 42, lastNoticeKey: 'exhausted:42'});
+});
+
+test('concurrent update and upsert on the same instance both persist; a failed write does not break later ones', async t => {
+  const r = await registry(t);
+  await r.upsert(entry());
+  await Promise.all([
+    r.update({entry: entry(), progress: {...INITIAL_PROGRESS, retryCount: 1}}),
+    r.upsert(entry('w9:p3')),
+    r.update({entry: entry(), progress: {...INITIAL_PROGRESS, retryCount: 2}}),
+    r.upsert(entry('w9:p4')),
+  ]);
+  const {records} = await r.load();
+  assert.deepEqual(records.map(x => x.entry.paneId).sort(), ['w9:p2', 'w9:p3', 'w9:p4']);
+  assert.equal(records.find(x => x.entry.paneId === 'w9:p2')?.progress.retryCount, 2);
+  const internals = r as unknown as {save(records: unknown[]): Promise<void>};
+  const save = internals.save;
+  let fails = 1;
+  internals.save = async function (this: unknown, records) { if (fails-- > 0) throw new Error('disk full'); return save.call(this, records); };
+  const outcomes = await Promise.allSettled([r.update({entry: entry(), progress: {...INITIAL_PROGRESS, retryCount: 9}}), r.remove(entry('w9:p4'))]);
+  assert.deepEqual(outcomes.map(o => o.status), ['rejected', 'fulfilled']);
+  assert.equal((await r.load()).records.find(x => x.entry.paneId === 'w9:p2')?.progress.retryCount, 2);
+  assert.deepEqual((await r.load()).records.map(x => x.entry.paneId).sort(), ['w9:p2', 'w9:p3']);
+});
+
+test('progress fields with the wrong type make the record malformed', async t => {
+  const r = await registry(t);
+  await mkdir(dirname(r.path), {recursive: true, mode: 0o700});
+  const bad = [{pendingRetryAt: 'soon'}, {pendingErrorAt: null}, {exhaustedErrorAt: 'x'}, {lastNoticeKey: 7}];
+  const watches = [{entry: entry(), progress: {...INITIAL_PROGRESS, pendingRetryAt: 1, pendingErrorAt: 2, exhaustedErrorAt: 3, lastNoticeKey: 'k'}},
+    ...bad.map((p, i) => ({entry: entry(`w9:p${i + 10}`), progress: {...INITIAL_PROGRESS, ...p}}))];
+  await writeFile(r.path, JSON.stringify({version: 1, watches}), {mode: 0o600});
+  const loaded = await r.load();
+  assert.equal(loaded.corrupt, true);
   assert.deepEqual(loaded.records.map(x => x.entry.paneId), ['w9:p2']);
 });

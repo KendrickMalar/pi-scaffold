@@ -78,7 +78,7 @@
 | `extensions/index.ts` | `session_start` で再開、`session_shutdown` で停止 | 既存 |
 | handoff 系ツール（`handoffStage` の呼び出し側） | `applied` の直後に台帳へ登録し、監視を起こす | 既存 |
 
-台帳の 1 件: `entry`（3.1 の登録内容）＋ `progress`（`retryCount`・`pendingRetryAt`・`exhaustedErrorAt`・`lastNoticeKey`・`herdrFailures`）。
+台帳の 1 件: `entry`（3.1 の登録内容）＋ `progress`（`retryCount`・`pendingRetryAt`・`pendingErrorAt`・`exhaustedErrorAt`・`lastNoticeKey`・`herdrFailures`）。`pendingRetryAt` は `pendingErrorAt`（予定を告げたエラーの `timestamp`）にだけ効き、別のエラーや一時的エラー以外の状態を見たら消す。
 
 ## 5. 異常時の扱い
 

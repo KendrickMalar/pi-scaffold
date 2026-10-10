@@ -64,7 +64,9 @@ export async function readSessionTail(path: string): Promise<TailResult> {
       try { entry = JSON.parse(lines[i]!); } catch { continue; }
       if (!isRec(entry) || entry.type !== 'message' || !isRec(entry.message) || entry.message.role !== 'assistant') continue;
       const m = entry.message;
-      const at = typeof m.timestamp === 'number' ? m.timestamp : 0;
+      // The timestamp is the error's identity for the watch; without one, never act on this record.
+      if (typeof m.timestamp !== 'number' || !Number.isFinite(m.timestamp)) return {kind: 'unknown', reason: 'no-timestamp'};
+      const at = m.timestamp;
       if (m.stopReason === 'error') {
         const message = typeof m.errorMessage === 'string' ? m.errorMessage : '';
         return {kind: 'error', transient: isTransientError(message), message, at};
