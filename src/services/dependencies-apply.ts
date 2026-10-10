@@ -11,6 +11,7 @@ import {canonicalJson, dependencyPlanDigest, taggedDigest} from '../core/digests
 import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {renderDependencyMermaid, validateDependencyGraph, type Edge} from '../core/dependency-graph.js';
+import {editScopeProblems} from '../core/wave-plan.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
@@ -25,7 +26,12 @@ const PROJECT_RE = /^PVT_[A-Za-z0-9_-]{1,200}$/;
 
 export function decodeDependenciesApplyInput(value: unknown): Decoded<DependenciesApplyInput> {
   return decodeMutationInput<{plan: DependencyPlan; projectId?: string; design?: DesignRef}>(value, {
-    plan: {decode: (r, v, p) => readDependencyPlan(r, v, p)},
+    // Node edit scopes must equal the Features'; one scaffold_waves_verify cannot judge is refused before any change.
+    plan: {decode: (r, v, p) => {
+      const plan = readDependencyPlan(r, v, p);
+      plan.nodes?.forEach((n, i) => { for (const q of editScopeProblems(n.editScope ?? [], `${p}.nodes[${i}].editScope`)) r.add(q.code, q.path, q.message); });
+      return plan;
+    }},
     design: {optional: true, decode: (r, v, p) => readDesignRef(r, v, p)},
     projectId: {optional: true, decode: (r, v, p) => r.pattern(v, p, x => typeof x === 'string' && PROJECT_RE.test(x), 'a Projects V2 node id (PVT_…)')},
   });

@@ -16,6 +16,23 @@ export function normalizeScope(raw: string): string | undefined {
   if (!parts.length || parts.includes('..') || parts.some(p => /[.\s]$/.test(p) || /^\s/.test(p))) return undefined;
   return parts.join('/');
 }
+/** A fix to suggest for an entry normalizeScope rejects: the directory in front of a glob, or a repo-relative path. */
+function scopeSuggestion(raw: string): string {
+  const parts = raw.split('/').filter(p => p !== '' && p !== '.');
+  const glob = parts.findIndex(p => /[\\*?[\]{}]/.test(p));
+  const fix = normalizeScope((glob === -1 ? parts : parts.slice(0, glob)).join('/'));
+  return fix && fix !== raw ? fix : 'src';
+}
+/**
+ * The one judgement of an edit scope that scaffold_waves_verify relies on: every entry must pass normalizeScope and the
+ * scope must name at least one path. Returns one UNKNOWN_SCOPE problem per entry it cannot judge (or one for an empty
+ * scope), so tools that accept an editScope can refuse it before anything is written.
+ */
+export function editScopeProblems(editScope: readonly string[], path: string): Problem[] {
+  if (!editScope.length) return [problem('UNKNOWN_SCOPE', path, 'Name at least one repo-relative directory or file path, such as `src`.')];
+  return editScope.flatMap((raw, i) => normalizeScope(raw) !== undefined ? [] : [problem('UNKNOWN_SCOPE', `${path}[${i}]`,
+    `${JSON.stringify(raw)} cannot be judged by scaffold_waves_verify (empty, root, glob, absolute or ".."); use a repo-relative directory or file path such as \`${scopeSuggestion(raw)}\` instead.`)]);
+}
 /** Comparison form: case-folded NFC (macOS/Windows file systems are case-insensitive; NFC/NFD name the same file). */
 const fold = (p: string) => p.normalize('NFC').toLowerCase();
 const overlaps = (a: string, b: string) => { const x = fold(a), y = fold(b); return x === y || x.startsWith(y + '/') || y.startsWith(x + '/'); };
@@ -56,9 +73,8 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
   checks.push('dependency-order');
   const scopes = new Map<number, string[]>();
   for (const f of features) {
-    const norm = f.editScope.map(normalizeScope);
-    if (!f.editScope.length || norm.some(s => s === undefined)) problems.push(problem('UNKNOWN_SCOPE', `features[#${f.issue}].editScope`, `${f.featureKey}'s edit scope cannot be judged (empty, root, glob, absolute or ".."); it is never treated as parallel-safe.`));
-    else scopes.set(f.issue, norm as string[]);
+    if (editScopeProblems(f.editScope, '').length) problems.push(problem('UNKNOWN_SCOPE', `features[#${f.issue}].editScope`, `${f.featureKey}'s edit scope cannot be judged (empty, root, glob, absolute or ".."); it is never treated as parallel-safe.`));
+    else scopes.set(f.issue, f.editScope.map(normalizeScope) as string[]);
   }
   const byWave = new Map<number, number[]>();
   for (const [issue, w] of wave) byWave.set(w, [...(byWave.get(w) ?? []), issue]);

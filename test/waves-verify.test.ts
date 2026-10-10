@@ -17,12 +17,12 @@ const dependencyDigest = taggedDigest('dependency-plan', dependencyPlan);
 const plan = (waves: Record<number, number>, over: Partial<WavePlan> = {}): WavePlan => ({version: 1, assignments: Object.entries(waves).map(([i, w]) => ({issue: Number(i), wave: w})), dependencyDigest, featureSetDigest, ...over});
 const WAVES = {11: 1, 12: 1, 13: 2};
 
-function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>; closed?: number[]; extraChild?: boolean; noDependencyPlan?: boolean} = {}) {
+function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>; closed?: number[]; extraChild?: boolean; noDependencyPlan?: boolean; scopes?: Record<number, string[]>} = {}) {
   const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
   const epic: EpicDocV1 = {...populatedDoc(), stage: 'basic-design', dependencyPlan: opts.noDependencyPlan ? null : dependencyPlan, wavePlan: opts.saved === undefined ? plan(WAVES) : opts.saved, handoff: null};
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [11, 12, 13]});
   for (const n of [11, 12, 13]) {
-    const f: FeatureDocV1 = {...featureDoc(), workflowId: epic.workflowId, featureKey: KEYS[n]!, parentEpic: 10, editScope: SCOPES[n]!};
+    const f: FeatureDocV1 = {...featureDoc(), workflowId: epic.workflowId, featureKey: KEYS[n]!, parentEpic: 10, editScope: opts.scopes?.[n] ?? SCOPES[n]!};
     gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(f), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', ...(opts.labels?.[n] ?? [`Wave: ${WAVES[n as 11]}`])], state: opts.closed?.includes(n) ? 'closed' : 'open'});
   }
   gh.issues.get(13)!.blockedBy = [11];
@@ -270,4 +270,16 @@ test('when nothing could be read consistently, both digests are null', async t =
   assert.equal(d.passed, false);
   assert.ok(out.r.problems.some(p => p.code === 'CHANGED_DURING_READ'), JSON.stringify(out.r.problems));
   assert.equal(d.dependencyDigest, null); assert.equal(d.featureSetDigest, null);
+});
+
+test('a Feature created before editScope was checked still gets UNKNOWN_SCOPE (behaviour unchanged)', async t => {
+  const gh = world({scopes: {12: ['src/**']}});
+  const out = await (await harness(t, gh)).invoke();
+  const d = out.r.data as Data;
+  assert.equal(d.passed, false);
+  const p = out.r.problems.find(x => x.code === 'UNKNOWN_SCOPE');
+  assert.ok(p, JSON.stringify(out.r.problems));
+  assert.equal(p.path, 'features[#12].editScope');
+  assert.equal(p.message, 'F002\'s edit scope cannot be judged (empty, root, glob, absolute or ".."); it is never treated as parallel-safe.');
+  assert.equal(writes(gh), 0);
 });

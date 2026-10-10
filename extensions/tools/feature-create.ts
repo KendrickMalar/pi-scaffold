@@ -13,7 +13,9 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'approval of the current specification, acceptance criteria that reference the Epic\'s requirements (an Epic AC ID must keep its exact content), '
       + 'basic-tier coding-manager/coder/tester bindings allowed by the owner policy, and a design document that exists at gitRef with the given sha256. '
       + 'Creates the Issue with the pi-gh task template under the real Epic (labels Type: Scaffold, Scope: Feature, Stage: BasicDesign), attaches it as '
-      + 'a native sub-issue and reads it back. Never edits the Epic, starts agents or changes models. Re-running the same operationId never posts twice.',
+      + 'a native sub-issue and reads it back. Never edits the Epic, starts agents or changes models. Re-running the same operationId never posts twice. '
+      + 'editScope lists repo-relative directory or file paths (e.g. "src", "src/a.ts"). Empty, root ("."), glob ("src/**", "*"), absolute ("/") '
+      + 'and ".." entries cannot be judged by scaffold_waves_verify, so each is refused as UNKNOWN_SCOPE before anything is written; use "src", not "src/**".',
     parameters: Type.Object({
       ...mutationInputFields,
       featureKey: Type.String({pattern: '^F[0-9]{3,}$'}),

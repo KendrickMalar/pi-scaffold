@@ -97,6 +97,49 @@ for (const [label, change, path] of [
   });
 }
 
+// ---- editScope: the same judgement scaffold_waves_verify makes, before anything is written ------------
+
+for (const bad of ['src/**', '*', '', '.', '../x', '/'] as const) {
+  test(`editScope ${JSON.stringify(bad)} is blocked before any write and names the entry`, async t => {
+    const gh = world();
+    const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/export', bad]}));
+    assert.equal(out.r.status, 'blocked');
+    const named = out.r.problems.filter(x => x.path === 'editScope[1]');
+    assert.ok(named.some(x => x.code === 'UNKNOWN_SCOPE'), JSON.stringify(out.r.problems));
+    assert.ok(!out.r.problems.some(x => x.path === 'editScope[0]'), JSON.stringify(out.r.problems));
+    assert.equal(gh.writes, 0, JSON.stringify(gh.calls.map(c => c.name)));
+    noSideEffects(gh);
+  });
+}
+
+test('a glob editScope suggests the directory to use instead', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/**']}));
+  assert.equal(out.r.status, 'blocked');
+  const p = out.r.problems.find(x => x.code === 'UNKNOWN_SCOPE' && x.path === 'editScope[0]');
+  assert.ok(p, JSON.stringify(out.r.problems));
+  assert.match(p.message, /^"src\/\*\*" cannot be judged by scaffold_waves_verify/);
+  assert.match(p.message, /such as `src`/);
+  assert.equal(gh.writes, 0);
+});
+
+test('every unjudgeable editScope entry is reported', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/**', 'lib', '../x']}));
+  assert.equal(out.r.status, 'blocked');
+  assert.deepEqual(out.r.problems.filter(x => x.code === 'UNKNOWN_SCOPE').map(x => x.path), ['editScope[0]', 'editScope[2]']);
+  assert.equal(gh.writes, 0);
+});
+
+for (const good of [['src'], ['src/a.ts']]) {
+  test(`editScope ${JSON.stringify(good)} is accepted`, async t => {
+    const gh = world();
+    const out = await (await harness(t, gh)).invoke(base(gh, {editScope: good}));
+    assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+    assert.deepEqual(featureOf(gh, (out.r.data as Data).number).editScope, good);
+  });
+}
+
 test('an AC referencing a REQ the Epic does not have is blocked', async t => {
   const gh = world();
   const out = await (await harness(t, gh)).invoke(base(gh, {criteria: [{id: 'AC101', requirementIds: ['REQ999'], verification: 'x', expectedResult: 'y'}]}));

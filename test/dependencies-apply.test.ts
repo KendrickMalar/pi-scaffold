@@ -59,6 +59,18 @@ for (const [label, edges, code] of [
   });
 }
 
+for (const bad of ['src/**', '.', '../x', '/']) {
+  test(`a plan node editScope ${JSON.stringify(bad)} that scaffold_waves_verify cannot judge is blocked with zero changes`, async t => {
+    const gh = world(); const before = gh.issues.get(10)!.body;
+    const p = params(gh); (p.plan as DependencyPlan).nodes[1] = {...node(12), editScope: [bad]};
+    const out = await (await harness(t, gh)).invoke(p);
+    assert.equal(out.r.status, 'blocked');
+    assert.ok(out.r.problems.some(x => x.code === 'UNKNOWN_SCOPE' && x.path === 'plan.nodes[1].editScope[0]'), JSON.stringify(out.r.problems));
+    assert.equal(gh.writes, 0);
+    noChanges(gh, before);
+  });
+}
+
 test('a node of another Epic is blocked', async t => {
   const gh = world(); const before = gh.issues.get(10)!.body;
   const p = params(gh); (p.plan as DependencyPlan).nodes[2] = {...node(13), issue: 20};

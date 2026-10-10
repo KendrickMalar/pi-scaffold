@@ -13,6 +13,7 @@ import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {approvalViewDigest} from '../core/approvals.js';
 import {checkFeatureBindings, FEATURE_ROLES} from '../core/model-bindings.js';
+import {editScopeProblems} from '../core/wave-plan.js';
 import {specificationApprovalView} from '../core/specification-gate.js';
 import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/template-snapshot.js';
 import type {ToolCall} from '../core/runtime.js';
@@ -34,7 +35,13 @@ export function decodeFeatureCreateInput(value: unknown): Decoded<FeatureCreateI
     featureKey: {decode: (r, v, p) => r.stableId('F', v, p)},
     title: {decode: (r, v, p) => { const t = r.text(v, p); if (typeof v === 'string' && (/[\r\n\u0000-\u001f\u007f]/.test(v) || Array.from(v).length > 256)) r.add('INVALID_FORMAT', p, 'Title must be a single line of at most 256 characters.'); return t; }},
     purpose: {decode: (r, v, p) => r.text(v, p)},
-    editScope: {decode: (r, v, p) => { const x = r.texts(v, p); if (Array.isArray(v) && !v.length) r.add('EMPTY', p, 'Name at least one path the Feature may edit.'); return x; }},
+    // Checked here, before anything is read or written, with the same judgement scaffold_waves_verify applies later.
+    editScope: {decode: (r, v, p) => {
+      const x = r.texts(v, p);
+      if (Array.isArray(v) && !v.length) r.add('EMPTY', p, 'Name at least one path the Feature may edit.');
+      else if (Array.isArray(v)) for (const q of editScopeProblems(x, p)) r.add(q.code, q.path, q.message);
+      return x;
+    }},
     outOfScope: {decode: (r, v, p) => r.texts(v, p)},
     designRef: {decode: (r, v, p) => readDesignRef(r, v, p)},
     criteria: {decode: (r, v, p) => {
