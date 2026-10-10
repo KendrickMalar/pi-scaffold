@@ -194,6 +194,16 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     if (started.sessionId !== ready.sessionId) return run.stop([problem('RECEIVER_SESSION_MISMATCH', 'receiver', 'A different session reported the start.')]);
     return {status: 'applied', data: {nonceSha256: prepared.nonceSha256, tabId: tab.tabId, paneId: tab.paneId, targetSessionId: started.sessionId, phase: 'turn-started'}};
   });
+  if (result.status === 'applied' && call.runtime.watch) {
+    const d = result.data as HandoffData;
+    try {
+      await call.runtime.watch.add({
+        ownerSessionId: call.env.identity().sessionId, paneId: d.paneId, tabId: d.tabId, workspaceId: binding.workspaceId,
+        targetSessionId: d.targetSessionId, cwd: ctx.repoRoot, repo: input.repo, epicIssue: input.epicIssue, targetStage: input.nextStage,
+        addedAt: new Date(call.now()).toISOString(),
+      });
+    } catch { /* Watching is best effort; the handoff itself is already applied. */ }
+  }
   return result as ScaffoldResult<HandoffData>;
 }
 
