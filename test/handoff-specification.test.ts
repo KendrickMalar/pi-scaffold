@@ -398,3 +398,29 @@ test('an Epic that merely claims this operation committed the stage (no journal 
   assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
   noLaunch(herdr);
 });
+
+test('an applied handoff registers the new pane for watching; a failing watch does not change the result', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir);
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const added: unknown[] = [];
+  h.runtime.watch = {add: async entry => { added.push(entry); }};
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(added.length, 1);
+  const e = added[0] as Record<string, unknown>;
+  assert.deepEqual({paneId: e.paneId, tabId: e.tabId, workspaceId: e.workspaceId, targetSessionId: e.targetSessionId, cwd: e.cwd, repo: e.repo, epicIssue: e.epicIssue, targetStage: e.targetStage},
+    {paneId: 'w9:p2', tabId: 'w9:t2', workspaceId: 'w9', targetSessionId: 'target-session', cwd: '/synthetic/repo', repo: 'example/demo', epicIssue: 10, targetStage: 'specification'});
+  assert.equal(typeof e.ownerSessionId, 'string');
+  assert.ok((e.ownerSessionId as string).length > 0);
+});
+
+test('a watch registration that throws still reports the handoff as applied', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir);
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  h.runtime.watch = {add: async () => { throw new Error('disk full'); }};
+  assert.equal((await h.invoke()).r.status, 'applied');
+});

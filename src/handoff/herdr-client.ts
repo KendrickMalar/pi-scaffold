@@ -6,6 +6,9 @@ export const SUPPORTED_HERDR = Object.freeze({version: '0.9.1', protocol: 22});
 /** not-started/failed: definitely no effect; unknown: the request may have taken effect. */
 export class HerdrError extends Error { constructor(readonly kind: 'not-started' | 'failed' | 'unknown', message: string) { super(message); } }
 
+/** `pane get`: a missing pane is not an error; `agent` is absent when Herdr detects no agent in it. */
+export type PaneState = {exists: false} | {exists: true; agent?: string; status?: string; session?: {kind: string; value: string}};
+
 export interface HerdrPort {
   version(): Promise<{version: string; protocol: number}>;
   currentPane(): Promise<{workspaceId: string; paneId: string}>;
@@ -14,6 +17,7 @@ export interface HerdrPort {
   processInfo(paneId: string): Promise<{shellReady: boolean}>;
   paneRun(paneId: string, command: string): Promise<void>;
   agentPrompt(paneId: string, text: string): Promise<void>;
+  paneGet(paneId: string): Promise<PaneState>;
 }
 
 type Rec = Record<string, unknown>;
@@ -30,7 +34,7 @@ const SHELLS = /^-?(zsh|bash|fish|sh|dash|ksh)$/;
 
 /** caller: HERDR_PANE_ID/WORKSPACE_ID/TAB_ID/SESSION of the calling pane; without them `--current` means the focused pane. */
 export function createHerdrCli(options: {bin?: string; socketPath?: string; timeoutMs?: number; caller?: Record<string, string | undefined>} = {}): HerdrPort {
-  const run = (args: string[], mutation: boolean): Promise<string> => new Promise((resolve, reject) => {
+  const run = (args: string[], mutation: boolean, opts: {errorJson?: boolean} = {}): Promise<string> => new Promise((resolve, reject) => {
     const env: Record<string, string> = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C.UTF-8'};
     if (options.socketPath) env.HERDR_SOCKET_PATH = options.socketPath;
     for (const k of ['HERDR_PANE_ID', 'HERDR_WORKSPACE_ID', 'HERDR_TAB_ID', 'HERDR_SESSION']) { const v = options.caller?.[k]; if (v) env[k] = v; }
@@ -38,6 +42,8 @@ export function createHerdrCli(options: {bin?: string; socketPath?: string; time
       if (!error) return resolve(String(stdout));
       const e = error as NodeJS.ErrnoException & {killed?: boolean; signal?: string};
       if (e.code === 'ENOENT') return reject(new HerdrError('not-started', 'herdr is not installed.'));
+      // Read-only calls that report "not found" as a JSON error on stdout let the caller decide.
+      if (opts.errorJson && !mutation && String(stdout).trim().startsWith('{')) return resolve(String(stdout));
       // A change that did not finish cleanly may already have been typed/applied: it is unknown, never definitely failed.
       if (mutation) return reject(new HerdrError('unknown', `herdr ${args.slice(0, 2).join(' ')} did not confirm: ${String(stderr).trim().slice(0, 200)}`));
       if (e.killed || e.signal) return reject(new HerdrError('failed', `herdr ${args[0]} did not finish.`));
@@ -83,6 +89,17 @@ export function createHerdrCli(options: {bin?: string; socketPath?: string; time
       return {shellReady: procs.length === 1 && SHELLS.test(String(procs[0]!.name ?? ''))};
     },
     async paneRun(paneId, command) { await run(['pane', 'run', paneId, command], true); },
+    async paneGet(paneId) {
+      const r = json(await run(['pane', 'get', paneId], false, {errorJson: true}));
+      if (isRec(r.error)) {
+        if (r.error.code === 'pane_not_found') return {exists: false};
+        throw new HerdrError('failed', `herdr pane get failed: ${String(r.error.code ?? 'error')}`);
+      }
+      const pane = isRec(r.result) && isRec(r.result.pane) ? r.result.pane : undefined;
+      if (!pane) throw new HerdrError('failed', 'herdr pane get returned no pane.');
+      const sess = isRec(pane.agent_session) && typeof pane.agent_session.kind === 'string' && typeof pane.agent_session.value === 'string' ? {kind: pane.agent_session.kind, value: pane.agent_session.value} : undefined;
+      return {exists: true, ...(sess ? {session: sess} : {}), ...(typeof pane.agent === 'string' ? {agent: pane.agent} : {}), ...(typeof pane.agent_status === 'string' ? {status: pane.agent_status} : {})};
+    },
     async agentPrompt(paneId, text) { await run(['agent', 'prompt', paneId, text], true); },
   };
 }

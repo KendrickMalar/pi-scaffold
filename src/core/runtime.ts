@@ -12,6 +12,7 @@ import {deriveRepoContext, resolveAgentDir} from './repo-context.js';
 import {PiGhBridge, type ToolExecutor} from '../ports/pi-gh.js';
 import {createGitReader, type GitReader} from '../ports/git-read.js';
 import {createHerdrCli, type HerdrPort} from '../handoff/herdr-client.js';
+import type {WatchEntry} from '../watch/decide.js';
 
 export interface ToolEnv {
   cwd: string;
@@ -37,6 +38,8 @@ export interface ScaffoldRuntime {
   /** Work budget of one tool call; long work pauses as `partial` and resumes with the same operationId. */
   budgetMs?: number;
   now?: () => number;
+  /** Set by the extension: registers an applied handoff's pane for background watching (Issue #36). */
+  watch?: {add(entry: WatchEntry): Promise<void>};
 }
 
 export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<string, string | undefined>; home?: string} = {}): ScaffoldRuntime {
@@ -47,6 +50,7 @@ export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<
     ...(options.timeoutMs !== undefined ? {timeoutMs: options.timeoutMs} : {}),
     ...(options.budgetMs !== undefined ? {budgetMs: options.budgetMs} : {}),
     ...(options.now !== undefined ? {now: options.now} : {}),
+    ...(options.watch ? {watch: options.watch} : {}),
     ...(options.environment ? {environment: options.environment} : {}), ...(options.herdr ? {herdr: options.herdr} : {}),
     ...(options.waitMs !== undefined ? {waitMs: options.waitMs} : {}), ...(options.pollMs !== undefined ? {pollMs: options.pollMs} : {}),
   };
