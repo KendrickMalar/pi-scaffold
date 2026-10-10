@@ -1,5 +1,5 @@
 // In-memory Herdr 0.9.1 for handoff tests. Never touches a real Herdr session.
-import type {HerdrPort} from '../../src/handoff/herdr-client.js';
+import type {HerdrPort, PaneState} from '../../src/handoff/herdr-client.js';
 import {HerdrError} from '../../src/handoff/herdr-client.js';
 
 export class FakeHerdr implements HerdrPort {
@@ -11,6 +11,8 @@ export class FakeHerdr implements HerdrPort {
   onPrompt?: (paneId: string, text: string) => Promise<void> | void;
   fail: Partial<Record<'tabCreate' | 'paneRun' | 'agentPrompt', 'unknown' | 'not-started' | 'unknown-before'>> = {};
   shellReady = true;
+  readonly panes = new Map<string, PaneState>();
+  paneGetFails = false;
 
   get tabCreates() { return this.calls.filter(c => c.command === 'tabCreate').length; }
   count(command: string) { return this.calls.filter(c => c.command === command).length; }
@@ -31,6 +33,11 @@ export class FakeHerdr implements HerdrPort {
     this.calls.push({command: 'paneRun', args: {paneId, command}});
     if (this.fail.paneRun) throw new HerdrError(this.fail.paneRun === 'unknown-before' ? 'unknown' : this.fail.paneRun, 'pane run failed');
     await this.onPaneRun?.(paneId, command);
+  }
+  async paneGet(paneId: string): Promise<PaneState> {
+    this.calls.push({command: 'paneGet', args: {paneId}});
+    if (this.paneGetFails) throw new HerdrError('failed', 'pane get failed');
+    return this.panes.get(paneId) ?? {exists: false};
   }
   async agentPrompt(paneId: string, text: string) {
     this.calls.push({command: 'agentPrompt', args: {paneId, text}});

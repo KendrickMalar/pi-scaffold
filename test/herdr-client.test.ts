@@ -29,3 +29,16 @@ test('a failed pane run or prompt may have been typed already, so it is unknown,
   await assert.rejects(cli.agentPrompt('w1:p2', 'hi'), (e: unknown) => e instanceof HerdrError && e.kind === 'unknown');
   await assert.rejects(cli.currentPane(), (e: unknown) => e instanceof HerdrError && e.kind === 'failed');
 });
+
+test('pane get: a missing pane, a Pi pane and a plain shell pane are told apart', async t => {
+  const {bin} = await fakeBin(t, `const id = process.argv[4];
+if (id === 'w1:gone') { console.log(JSON.stringify({error: {code: 'pane_not_found', message: 'pane w1:gone not found'}, id: 'cli:pane:get'})); process.exit(1); }
+if (id === 'w1:pi') { console.log(JSON.stringify({id: 'cli:pane:get', result: {pane: {agent: 'pi', agent_status: 'idle', pane_id: id}}})); process.exit(0); }
+if (id === 'w1:sh') { console.log(JSON.stringify({id: 'cli:pane:get', result: {pane: {agent_status: 'unknown', pane_id: id}}})); process.exit(0); }
+console.log(JSON.stringify({error: {code: 'internal', message: 'boom'}})); process.exit(1);`);
+  const cli = createHerdrCli({bin});
+  assert.deepEqual(await cli.paneGet('w1:gone'), {exists: false});
+  assert.deepEqual(await cli.paneGet('w1:pi'), {exists: true, agent: 'pi', status: 'idle'});
+  assert.deepEqual(await cli.paneGet('w1:sh'), {exists: true, status: 'unknown'});
+  await assert.rejects(cli.paneGet('w1:other'), (e: unknown) => e instanceof HerdrError && e.kind === 'failed');
+});
