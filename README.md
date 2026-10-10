@@ -48,6 +48,17 @@ Epicは `setup → specification → basic-design → implementation → verific
 - **取消**：reload / tree / forkで会話が変わると、実行中の呼び出しは`cancelled`になります（書き込みの途中なら`unknown`）。
 - pi-ghに必要な機能が無いときは`CAPABILITY_MISSING`で止まります。ghやAPIを直接呼んで回避することはしません。
 
+
+### 下位工程セッションの監視
+
+引き継ぎが完了すると、親セッションはその下位 pane を60秒ごとに確認します（Herdr 0.9.1／protocol 22 のときだけ）。
+
+- pane が消えた、pi が終了した、確認・入力待ち、エラー停止、返事待ち・完了のときは、親TUIに通知します。同じ状態で通知を繰り返すことはありません。
+- 別のセッションが動いている pane（pane ID が使い回された場合など）には送らず、監視を終えます。
+- 一時的な API エラー（429・5xx・overloaded・接続エラーなど）で止まったときだけ、1分→5分→15分あけて最大3回「続けて」を送ります。送る直前に、同じエラーで止まったままかを確かめます。
+- usage limit・認証・400系のエラーは通知だけです。下位のセッションログの形式（version 3）が違う場合も、自動では送りません。
+- 監視台帳は `<agentDir>/pi-scaffold/state/watches.json` です。監視するのは、引き継いだ本人のセッションだけです。同じセッションを開き直すと、監視を再開します。
+
 ## 必要なもの
 
 - Pi 1.x、pi-gh 0.5.0以上（`gh_labels_list`、ラベル絞り込み、`*_if_current`）
