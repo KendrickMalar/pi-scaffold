@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {labelDefinitions, waveLabelDefinition, FIXED_LABEL_DEFINITIONS} from '../src/core/label-definitions.js';
 import {FIXED_LABEL_NAMES} from '../src/core/label-policy.js';
@@ -255,4 +256,98 @@ test('uncertain steps are reconciled before the budget pause, so the status is p
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'partial');
   assert.ok(!resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
+});
+
+// pi-gh 0.7.0+ (`labels-create-many`): missing labels are created in batches instead of one change per label.
+const batching = () => { const gh = new FakePiGh(); gh.features = [...gh.features, 'labels-create-many']; return gh; };
+const perLabelCreates = (gh: FakePiGh) => gh.labelChanges.filter(c => c.operation === 'label-create').length;
+
+test('with labels-create-many, all 211 are created in batches of at most 40, then read back', async t => {
+  const gh = batching();
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(gh.labels.size, 211);
+  assert.equal(perLabelCreates(gh), 0, 'no one-by-one creation');
+  assert.equal(gh.labelBatches.length, 6);
+  assert.ok(gh.labelBatches.every(b => b.length >= 1 && b.length <= 40));
+  assert.equal(new Set(gh.labelBatches.flat()).size, 211, 'every label is sent exactly once');
+  assert.equal((out.r.data as {created: string[]}).created.length, 211);
+});
+
+test('batches carry only the missing labels', async t => {
+  const gh = batching().seedLabels(all().slice(0, 100));
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual(gh.labelBatches.flat().sort(), all().slice(100).map(d => d.name).sort());
+  assert.equal((out.r.data as {created: string[]; unchanged: string[]}).unchanged.length, 100);
+});
+
+test('an uncertain batch that did not land is reconciled as not applied and sent once more', async t => {
+  const gh = batching();
+  let calls = 0;
+  gh.overrides.set('gh_labels_apply', () => { calls++; return calls === 2 ? {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} : undefined; });
+  const h = await harness(t, gh);
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'unknown');
+  assert.equal(gh.labelBatches.length, 1, 'nothing is sent after the uncertain batch');
+  gh.overrides.delete('gh_labels_apply');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.labels.size, 211);
+  assert.equal(new Set(gh.labelBatches.flat()).size, 211);
+});
+
+test('an uncertain batch that landed partly: the resume creates only the labels still missing', async t => {
+  const gh = batching();
+  let calls = 0;
+  gh.overrides.set('gh_labels_apply', args => {
+    calls++;
+    if (calls !== 2) return undefined;
+    const change = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {labels: {name: string; color: string; description: string}[]};
+    for (const l of change.labels.slice(0, 10)) gh.labels.set(l.name.toLowerCase(), {...l, id: gh.labels.size + 1});
+    return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true};
+  });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  gh.overrides.delete('gh_labels_apply');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.labels.size, 211);
+  // labelBatches[0] is the first batch; the uncertain second one was answered by the override (never recorded).
+  const sentAfter = gh.labelBatches.slice(1).flat();
+  assert.equal(sentAfter.length, 211 - 40 - 10, 'the 10 that landed are not sent again');
+  assert.equal(new Set(sentAfter).size, sentAfter.length);
+});
+
+test('the call budget pauses between batches and the same operation finishes the rest', async t => {
+  let clock = 0;
+  const gh = batching();
+  gh.onCall = () => { clock += 5_000; };
+  const h = await harness(t, gh, {budgetMs: 30_000, now: () => clock});
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  assert.ok(gh.labelBatches.length >= 1, 'each call makes progress before pausing');
+  let last = first;
+  for (let i = 0; i < 20 && last.r.status === 'partial'; i++) last = await h.invoke();
+  assert.equal(last.r.status, 'applied', JSON.stringify(last.r.problems));
+  assert.equal(gh.labels.size, 211);
+  assert.equal(new Set(gh.labelBatches.flat()).size, gh.labelBatches.flat().length, 'no label is sent twice');
+});
+
+test('a mismatching label with onMismatch=update is still edited one by one while missing ones are batched', async t => {
+  const defs = all();
+  const gh = batching().seedLabels([{...defs[0]!, color: '000000'}, ...defs.slice(1, 50)]);
+  const out = await (await harness(t, gh, {defaultParams: params({onMismatch: 'update'})})).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-edit').length, 1);
+  assert.equal(gh.labelBatches.flat().length, 161);
+  assert.deepEqual((out.r.data as {updated: string[]}).updated, [defs[0]!.name]);
+});
+
+test('without the labels-create-many feature (pi-gh 0.6.0 and older) labels are created one by one as before', async t => {
+  const gh = new FakePiGh().seedLabels(all().slice(0, 205));
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(perLabelCreates(gh), 6);
+  assert.equal(gh.labelBatches.length, 0);
 });

@@ -1,6 +1,7 @@
 // #3 scaffold_labels_ensure: compare all 211 managed label definitions with one gh_labels_list read, create the
 // missing ones (and, only when asked, update mismatching ones), then read the whole list back before success.
-// Only label-create/label-edit are used; Issue labels are never touched.
+// Only label-create/label-edit (and, with pi-gh's `labels-create-many` feature, batched creation) are used; Issue
+// labels are never touched.
 import {join} from 'node:path';
 import {StrictReader, isRepoRef, isUuid, problem, type Decoded, type Problem, type ScaffoldResult} from '../core/contracts.js';
 import {withOperation, type OperationRun, type Reconcile} from '../core/lifecycle.js';
@@ -72,6 +73,30 @@ function reconcileWith(def: LabelDefinition, call: ToolCall, repo: string, kind:
   };
 }
 
+/** Labels per label-create-many change: keeps one pi-gh call well inside the call limit. */
+export const CREATE_BATCH = 40;
+const planStep = (id: number) => `create-many-plan:${id}`, batchStep = (id: number) => `create-many:${id}`;
+const plans = (run: OperationRun) => run.record.steps.filter(s => s.name.startsWith('create-many-plan:')).map(s => ({id: Number(s.name.slice('create-many-plan:'.length)), names: s.data as string[]}));
+const batchPending = (run: OperationRun, id: number) => run.record.steps.some(s => s.name === batchStep(id) && (s.phase === 'requested' || s.phase === 'unknown'));
+
+async function applyMany(defs: LabelDefinition[], call: ToolCall, changePath: string, repo: string): Promise<GhOutcome<true>> {
+  const change = {version: 1, repo, operation: 'label-create-many', labels: defs.map(d => ({name: d.name, color: d.color, description: d.description}))};
+  await writeOwnedFile(changePath, JSON.stringify(change), {root: call.namespaceRoot});
+  return call.bridge.call('gh_labels_apply', {changePath}, () => true as const, call.scope);
+}
+/**
+ * An uncertain batch is settled from a fresh read: none of its labels exist → not applied (the same batch is sent
+ * again); any of them exist → applied (pi-gh stops at the first uncertain write, so the rest are simply still
+ * missing and go into a new batch, judged like every other label by the rules and the final read-back).
+ */
+function reconcileMany(names: string[], call: ToolCall, repo: string): Reconcile {
+  return async () => {
+    const read = await readLabels(call, repo);
+    if ('error' in read) return 'unknown';
+    return names.some(n => read.labels.has(n.toLowerCase())) ? 'applied' : 'not-applied';
+  };
+}
+
 const mismatchProblem = (def: LabelDefinition, actual: LabelDefinition) =>
   problem('LABEL_MISMATCH', `labels.${def.name}`, `Existing label differs: "${actual.name}" #${actual.color} "${actual.description}" (expected "${def.name}" #${def.color} "${def.description}"). It is not overwritten unless onMismatch is "update".`);
 const stepKind = (run: OperationRun, def: LabelDefinition): 'create' | 'update' | undefined =>
@@ -97,6 +122,8 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
   const operation = LABELS_ENSURE;
   const caps = await call.bridge.requireCapabilities(['gh_labels_list', 'gh_labels_apply'], call.scope);
   if (!caps.ok) return {status: caps.problems.some(p => p.code === 'STALE_SCOPE') ? 'cancelled' : 'blocked', operation, problems: caps.problems};
+  // pi-gh 0.7.0+ creates many labels in one change (one listing before and after instead of per label).
+  const batching = (await call.bridge.requireCapabilities([], call.scope, ['labels-create-many'])).ok;
   const context = await call.repoContext(input.repo, null);
   if (!context.ok) return {status: 'blocked', operation, problems: context.problems};
   const onMismatch = input.onMismatch ?? 'block';
@@ -104,7 +131,8 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
   const dir = join(context.value.workflowStateRoot, 'artifacts', input.operationId);
   const payloadDigest = taggedDigest('labels-ensure', {repo: input.repo, onMismatch, definitions: definitionsDigest()});
   const result = await withOperation({operation, repo: input.repo, workflowId: '_repo', operationId: input.operationId, payloadDigest, journal: call.journal(context.value), scope: call.scope}, async run => {
-    const done = (kind: 'create' | 'update') => defs.filter(d => run.record.steps.some(s => s.name === `${kind}:${d.name}` && s.phase === 'done')).map(d => d.name);
+    const batched = () => new Set(plans(run).filter(p => run.record.steps.some(s => s.name === batchStep(p.id) && s.phase === 'done')).flatMap(p => p.names));
+    const done = (kind: 'create' | 'update') => defs.filter(d => run.record.steps.some(s => s.name === `${kind}:${d.name}` && s.phase === 'done') || (kind === 'create' && batched().has(d.name))).map(d => d.name);
     const summary = (labels: LabelIndex): LabelsEnsureData => {
       const created = done('create'), updated = done('update');
       const states = defs.map(d => [d, labelState(d, labels)] as const);
@@ -120,12 +148,33 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
     if ('error' in first) return run.stop(first.error);
     const mismatches = defs.flatMap(d => { const s = labelState(d, first.labels); return s.state === 'mismatch' && !stepKind(run, d) ? [mismatchProblem(d, s.actual)] : []; });
     if (mismatches.length && onMismatch === 'block') return run.stop(mismatches, summary(first.labels));
+    const current = batching ? await createInBatches(first.labels) : first.labels;
     for (const def of defs) {
       const pending = stepKind(run, def);
-      if (labelState(def, first.labels).state === 'match' && !pending) continue;
+      if (labelState(def, current).state === 'match' && !pending) continue;
       // Uncertain steps are settled (read-only reconcile first) before the budget can pause the run.
-      if (!pending && call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')], summary(first.labels));
-      await ensureLabelDefinition(def, first.labels, call, run, dir, input.repo, onMismatch);
+      if (!pending && call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')], summary(current));
+      await ensureLabelDefinition(def, current, call, run, dir, input.repo, onMismatch);
+    }
+    async function createInBatches(start: LabelIndex): Promise<LabelIndex> {
+      // Uncertain batches are settled before anything else (and before the budget can pause the run).
+      const pendingPlans = plans(run).filter(p => batchPending(run, p.id));
+      for (const p of pendingPlans) {
+        const planned = p.names.map(n => defs.find(d => d.name === n)!);
+        await run.write(batchStep(p.id), () => applyMany(planned, call, join(dir, `create-many-${p.id}.json`), input.repo), {reconcile: reconcileMany(p.names, call, input.repo)});
+      }
+      let labels = new Map(start);
+      if (pendingPlans.length) { run.checkpoint(); const again = await readLabels(call, input.repo); if ('error' in again) return run.stop(again.error); labels = again.labels; }
+      // One-by-one steps left uncertain by an older call are settled by the per-label loop; everything else missing is batched.
+      const missing = defs.filter(d => labelState(d, labels).state === 'missing' && !stepKind(run, d));
+      for (let i = 0; i < missing.length; i += CREATE_BATCH) {
+        if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Progress is recorded; call again with the same operationId to continue.')], summary(labels));
+        const batch = missing.slice(i, i + CREATE_BATCH), id = Math.max(0, ...plans(run).map(p => p.id)) + 1;
+        run.note(planStep(id), batch.map(d => d.name));
+        await run.write(batchStep(id), () => applyMany(batch, call, join(dir, `create-many-${id}.json`), input.repo), {reconcile: reconcileMany(batch.map(d => d.name), call, input.repo)});
+        for (const d of batch) labels.set(d.name.toLowerCase(), d);
+      }
+      return labels;
     }
     // Success only after every definition is read back as expected.
     run.checkpoint();
