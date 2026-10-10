@@ -1,7 +1,7 @@
 // Background watch of the stage panes this Pi session handed off. One timer per session, running only while the
 // registry holds watches this session owns; each check is observe → decide → act. Spec: Issue #36.
 import {SUPPORTED_HERDR, type HerdrPort} from '../handoff/herdr-client.js';
-import {CHECK_INTERVAL_MS, MAX_AUTO_CONTINUE, decide, noticeHead, type NoticeLevel, type Observation, type WatchEntry} from './decide.js';
+import {CHECK_INTERVAL_MS, HERDR_FAILURE_LIMIT, MAX_AUTO_CONTINUE, decide, noticeHead, type NoticeLevel, type Observation, type WatchEntry} from './decide.js';
 import type {WatchRecord, WatchRegistry} from './registry.js';
 import type {TailResult} from './session-tail.js';
 
@@ -18,11 +18,19 @@ export interface WatcherDeps {
   clearInterval?(handle: unknown): void;
 }
 
+function sessionMatches(s: {kind: string; value: string}, entry: WatchEntry): boolean {
+  if (s.kind === 'id') return s.value === entry.targetSessionId;
+  if (s.kind === 'path') return s.value.endsWith(`_${entry.targetSessionId}.jsonl`);
+  return true;
+}
+
 export class StageWatcher {
   private timer: unknown;
   private running = false;
   private herdr: 'ok' | 'unsupported' | undefined;
   private corruptNotified = false;
+  private versionFailures = 0;
+  private registryNotified = false;
   constructor(private readonly deps: WatcherDeps) {}
 
   get active(): boolean { return this.timer !== undefined; }
@@ -38,7 +46,7 @@ export class StageWatcher {
 
   private ensureTimer(): void {
     if (this.timer !== undefined || this.herdr === 'unsupported') return;
-    const fn = () => { void this.tick(); };
+    const fn = () => { void this.tick().catch(() => undefined); };
     const ms = this.deps.intervalMs ?? CHECK_INTERVAL_MS;
     const handle = this.deps.setInterval ? this.deps.setInterval(fn, ms) : setInterval(fn, ms);
     (handle as {unref?: () => void}).unref?.();
@@ -55,7 +63,13 @@ export class StageWatcher {
   private async herdrState(): Promise<'ok' | 'unsupported' | 'skip'> {
     if (this.herdr) return this.herdr;
     let v: {version: string; protocol: number};
-    try { v = await this.deps.herdr.version(); } catch { return 'skip'; }
+    try { v = await this.deps.herdr.version(); }
+    catch {
+      this.versionFailures += 1;
+      if (this.versionFailures === HERDR_FAILURE_LIMIT) this.deps.notify(`pi-scaffold: Herdr に ${HERDR_FAILURE_LIMIT} 回続けて接続できませんでした。下位の監視は接続できるまで待ちます。`, 'warning');
+      return 'skip';
+    }
+    this.versionFailures = 0;
     this.herdr = v.version === SUPPORTED_HERDR.version && v.protocol === SUPPORTED_HERDR.protocol ? 'ok' : 'unsupported';
     if (this.herdr === 'unsupported') this.deps.notify(`pi-scaffold: Herdr ${v.version}/protocol ${v.protocol} は未検証のため、下位の監視を止めました（必要: ${SUPPORTED_HERDR.version}/${SUPPORTED_HERDR.protocol}）。`, 'warning');
     return this.herdr;
@@ -73,7 +87,10 @@ export class StageWatcher {
       if (herdr === 'skip') return;
       for (const record of records) {
         // One broken watch must not stop the others; the next check retries it.
-        try { await this.check(record); } catch { /* retried next check */ }
+        try { await this.check(record); }
+        catch (e) {
+          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`pi-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
+        }
       }
     } finally { this.running = false; }
   }
@@ -86,6 +103,7 @@ export class StageWatcher {
       try { return (await this.deps.herdr.processInfo(entry.paneId)).shellReady ? {kind: 'exited'} : {kind: 'unclear', reason: 'agent-not-detected'}; }
       catch (e) { return {kind: 'unclear', reason: (e as Error).message}; }
     }
+    if (pane.session && !sessionMatches(pane.session, entry)) return {kind: 'exited'};
     switch (pane.status) {
       case 'working': return {kind: 'working'};
       case 'blocked': return {kind: 'blocked'};
@@ -105,6 +123,12 @@ export class StageWatcher {
         // Re-check right before typing into the child: someone may have moved it on since the observation.
         const again = await this.observe(entry);
         if (again.kind !== 'idle' || again.tail.kind !== 'error' || again.tail.at !== action.errorAt) { progress = record.progress; continue; }
+        // Persist the count BEFORE typing: a lost save after a send could otherwise cause a second "continue".
+        try { await this.deps.registry.update({entry, progress: next}); }
+        catch (e) {
+          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`pi-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
+          return;
+        }
         try {
           await this.deps.herdr.agentPrompt(entry.paneId, action.text);
           this.deps.notify(`${noticeHead(entry)}: 自動で再開を送りました（${next.retryCount}/${MAX_AUTO_CONTINUE}回目）。`, 'info');

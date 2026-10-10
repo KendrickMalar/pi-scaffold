@@ -108,13 +108,19 @@ test('an unsupported Herdr notifies once and stops; a failing version call only 
   await s.watcher.add(entry());
   const original = s.herdr.version.bind(s.herdr);
   s.herdr.version = async () => { throw new Error('socket down'); };
-  await s.watcher.tick();
+  await s.watcher.tick(); await s.watcher.tick();
   assert.equal(s.watcher.active, true);
   assert.equal(s.notices.length, 0);
+  await s.watcher.tick();
+  assert.equal(s.notices.length, 1);
+  assert.match(s.notices[0]!.text, /3 回続けて接続できませんでした/);
+  await s.watcher.tick();
+  assert.equal(s.notices.length, 1);
+  assert.equal(s.watcher.active, true);
   s.herdr.version = original;
   s.herdr.version_ = {version: '0.9.2', protocol: 23};
   await s.watcher.tick(); await s.watcher.tick();
-  assert.equal(s.notices.length, 1);
+  assert.equal(s.notices.length, 2);
   assert.equal(s.watcher.active, false);
 });
 
@@ -130,4 +136,37 @@ test('a check still running makes the next one a no-op', async t => {
   await s.watcher.tick();
   release(); await first;
   assert.equal(s.herdr.count('paneGet'), 1);
+});
+
+test('the retry count is saved before sending; if that save fails nothing is sent', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  s.state.now = RETRY_DELAYS_MS[0];
+  let updates = 0;
+  s.registry.update = async () => { updates += 1; throw new Error('disk full'); };
+  await s.watcher.tick();
+  assert.equal(updates, 1);
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  assert.match(s.notices.at(-1)!.text, /監視台帳を更新できませんでした/);
+});
+
+test('a pi pane whose session belongs to another session is treated as exited', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: {kind: 'path', value: '/x/2026_other.jsonl'}});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  assert.match(s.notices[0]!.text, /pi が終了しました/);
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  assert.deepEqual((await s.registry.load()).records, []);
+});
+
+test('a pi pane whose session path ends with the target session id is checked normally', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: {kind: 'path', value: '/x/2026_s-w9:p2.jsonl'}});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  assert.match(s.notices[0]!.text, /fetch failed|エラー|API/);
+  assert.equal((await s.registry.load()).records.length, 1);
 });

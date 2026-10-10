@@ -7,7 +7,7 @@ export const SUPPORTED_HERDR = Object.freeze({version: '0.9.1', protocol: 22});
 export class HerdrError extends Error { constructor(readonly kind: 'not-started' | 'failed' | 'unknown', message: string) { super(message); } }
 
 /** `pane get`: a missing pane is not an error; `agent` is absent when Herdr detects no agent in it. */
-export type PaneState = {exists: false} | {exists: true; agent?: string; status?: string};
+export type PaneState = {exists: false} | {exists: true; agent?: string; status?: string; session?: {kind: string; value: string}};
 
 export interface HerdrPort {
   version(): Promise<{version: string; protocol: number}>;
@@ -97,7 +97,8 @@ export function createHerdrCli(options: {bin?: string; socketPath?: string; time
       }
       const pane = isRec(r.result) && isRec(r.result.pane) ? r.result.pane : undefined;
       if (!pane) throw new HerdrError('failed', 'herdr pane get returned no pane.');
-      return {exists: true, ...(typeof pane.agent === 'string' ? {agent: pane.agent} : {}), ...(typeof pane.agent_status === 'string' ? {status: pane.agent_status} : {})};
+      const sess = isRec(pane.agent_session) && typeof pane.agent_session.kind === 'string' && typeof pane.agent_session.value === 'string' ? {kind: pane.agent_session.kind, value: pane.agent_session.value} : undefined;
+      return {exists: true, ...(sess ? {session: sess} : {}), ...(typeof pane.agent === 'string' ? {agent: pane.agent} : {}), ...(typeof pane.agent_status === 'string' ? {status: pane.agent_status} : {})};
     },
     async agentPrompt(paneId, text) { await run(['agent', 'prompt', paneId, text], true); },
   };
