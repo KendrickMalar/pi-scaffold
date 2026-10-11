@@ -28,7 +28,7 @@
   ],
   "scripts": {
     "prepack": "npm run build",
-    "build": "tsc -p tsconfig.core.json",
+    "build": "node -e \"process.getBuiltinModule('node:fs').rmSync('dist/src', {recursive: true, force: true})\" && tsc -p tsconfig.core.json",
     "build:test": "tsc -p tsconfig.test.json",
     "typecheck": "npm run build && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.extension.json",
     "test": "npm run build && npm run build:test && node --test --test-timeout=60000 dist/test/*.test.js",
