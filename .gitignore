@@ -3,3 +3,4 @@ dist/
 .superpowers/
 *.tgz
 __pycache__/
+.worktrees/
