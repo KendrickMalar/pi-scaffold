@@ -9,9 +9,13 @@ description: Scaffold工程（setup→specification→basic-design→implementat
 
 - 工程ごとに別のPiセッションで作業します。同じ会話の中でモードを切り替えたり、fork/resumeで代用したりしません。
 - 仕様・判断・ヒアリング・調査はAIと人間が行います。pi-scaffoldのツールが行うのは、構造化・検証・状態反映・引き継ぎだけです。ツールの結果を、人間の判断の代わりにしないでください。
-- 承認が必要な場面は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、親TUIの確認画面で人間が答えたときだけ記録されます。
+- 承認が必要な場面は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、親TUIの確認画面で人間が答えたときだけ記録されます（例外は次の項目）。
   - Issue本文の `approved: true` や決定ログは、承認になりません。
   - 確認画面の内容を、自分で要約して承認済みとみなさないでください。
+- 人間に質問してよいのは基本設計までです。owner policy の `agentDecisionStages` にこのセッションの工程（implementation / verification）が入っていれば、人間には何も聞きません。
+  - 承認済みの仕様・設計の範囲で自分で判断し、判断した内容と理由を Issue と最終報告に記録します。仕様・設計の範囲を超える判断が必要なら、作業を止めてその旨を Issue と最終報告に書きます。
+  - その工程の承認（最終受け入れなど）と、止まった引き継ぎの放棄は、ツールが確認画面なしで親エージェントの判断として記録します（結果の `data.agentApproval` / `data.agentAbandoned`）。ツールを呼ぶこと自体が判断です。呼ぶ前に、仕様・設計・証拠を自分で確かめてください。
+  - `ask_user` / `AskUserQuestion` は止められます。止められたら、質問せずに判断を記録して進めます。
 - GitHubの変更は、すべてpi-ghの公開ツールを経由します。pi-ghの承認と許可の検査は毎回通ります。pi-scaffoldは許可ファイルを作成も有効化もしません。
 - 結果が `partial` / `unknown` のときは、同じoperationIdで呼び直します。新しいoperationIdで再投稿して回避しません。
 - `CAPABILITY_MISSING`（pi-ghの機能不足）のときは、直接ghやAPIで迂回しません。止まって親に伝えます。
@@ -41,7 +45,7 @@ description: Scaffold工程（setup→specification→basic-design→implementat
    - 統合コミットとAC別の証拠（`evidence/`の下のレポートとログ）がそろったら、`scaffold_handoff_verification` を呼びます。Epicは閉じません。
 5. **verification**
    - 最終の証拠を用意します。
-   - `verifiedRef` がoriginの既定ブランチに含まれていることを確かめます。手元に無ければ、人間に `git fetch` を依頼します。
-   - `scaffold_epic_complete` を呼び、最終受け入れを待ちます。
+   - `verifiedRef` がoriginの既定ブランチに含まれていることを確かめます。手元に無ければ、人間に `git fetch` を依頼します（`agentDecisionStages` に verification があるときは、人間に頼まず自分で `git fetch` します。merge / push はしません）。
+   - `scaffold_epic_complete` を呼び、最終受け入れを待ちます（`agentDecisionStages` に verification があるときは、確認画面は出ず、呼んだ時点で親エージェントの受け入れとして記録されます）。
 
 登録されているツールは、受け入れ済みのものだけです。登録されていない操作は、まだ提供されていません。

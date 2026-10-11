@@ -6,6 +6,7 @@ import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 import {createRuntime} from '../dist/src/core/runtime.js';
 import {loadOwnerPolicy} from '../dist/src/core/model-bindings.js';
 import {acceptStartupPacket, recordTurnStarted} from '../dist/src/handoff/receiver.js';
+import {questionGuard} from '../dist/src/core/agent-decision.js';
 import {join} from 'node:path';
 import {createHerdrCli} from '../dist/src/handoff/herdr-client.js';
 import {WatchRegistry} from '../dist/src/watch/registry.js';
@@ -62,7 +63,14 @@ export default function (pi: ExtensionAPI) {
         packetPath, agentDir: runtime.agentDir, cwd: ctx.cwd, sessionId, sessionEntries: ctx.sessionManager.getEntries(),
         toolNames: pi.getAllTools().map(t => t.name), policy: policy.ok ? policy.value : undefined,
       });
-      if (r.ok) { accepted = {packetPath, sessionId}; ctx.ui.notify('pi-scaffold: 工程の引き継ぎを受け付けました。', 'info'); return; }
+      if (r.ok) {
+        accepted = {packetPath, sessionId};
+        // The session stage for agentDecisionStages: only this session, this packet's repo/workflow.
+        const {repo, workflowId, targetStage} = r.value.packet;
+        runtime.handoff = {sessionId, repo, workflowId, targetStage};
+        ctx.ui.notify('pi-scaffold: 工程の引き継ぎを受け付けました。', 'info');
+        return;
+      }
       // pi-profile may record its Profile snapshot after this handler; retry briefly for that case only.
       if (++attempts < 10 && r.problems.every(p => p.code === 'RECEIVER_PROFILE_MISMATCH')) { retry = setTimeout(() => void attempt(), 200); return; }
       ctx.ui.notify('pi-scaffold: 引き継ぎを受け付けませんでした: ' + r.problems.map(p => p.code).join(', '), 'error');
@@ -75,6 +83,10 @@ export default function (pi: ExtensionAPI) {
     }
     return undefined;
   });
+  // Agent decision stages: question tools are refused in a listed implementation/verification session. Hosts that never
+  // emit tool_call (e.g. claude-scaffold) simply skip this; approvals still follow the policy in the tools themselves.
+  const guard = questionGuard(runtime);
+  pi.on('tool_call', (event, ctx) => guard(event, ctx));
   pi.on('session_before_switch', invalidate);
   pi.on('session_before_fork', invalidate);
   pi.on('session_before_tree', invalidate);

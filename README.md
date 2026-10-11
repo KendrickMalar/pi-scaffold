@@ -31,7 +31,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 | basic-design | `scaffold_waves_apply` | 検証を通ったWave計画をFeatureのラベルへ反映し、計画をEpicに保存する。計画の2つのdigestは、先に`scaffold_waves_verify`を呼んで得る |
 | basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**親TUIで実装開始の指示**を得てから引き継ぐ |
 | implementation→verification | `scaffold_handoff_verification` | 統合コミットと、FeatureごとのAC別の証拠（レポート・ログのハッシュ）を固定して引き継ぐ。Epicは閉じない |
-| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**親TUIで最終受け入れ**を得てから、本文・Stage・closeを反映する。指定があればProjectをDoneにする |
+| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**親TUIで最終受け入れ**を得てから、本文・Stage・closeを反映する（owner policyの`agentDecisionStages`に`verification`があれば、親エージェントが自分で記録する。後述）。指定があればProjectをDoneにする |
 
 完了条件は次のとおりです。
 - 要件がすべて合格基準でカバーされ、証拠が合格している
@@ -39,7 +39,13 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 ## 共通の約束
 
-- **承認は親TUIでのみ記録します。** 対象は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、確認画面で見せた内容のdigestに結び付けます。内容が変われば失効し、headlessや子セッションでは新しく作れません。Issue本文の`approved: true`や決定ログは承認として扱いません。
+- **承認は親TUIでのみ記録します**（例外は次の「エージェント判断工程」）。対象は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、確認画面で見せた内容のdigestに結び付けます。内容が変われば失効し、headlessや子セッションでは新しく作れません。Issue本文の`approved: true`や決定ログは承認として扱いません。
+- **エージェント判断工程（`agentDecisionStages`）**：人間に質問してよいのは基本設計までです。owner policyの対象リポジトリに`agentDecisionStages`（`"implementation"`・`"verification"`のみ）を書くと、その工程のセッションでは親エージェントが人間に何も聞かず、承認済みの仕様・設計の範囲で自分で判断し、判断をIssueと最終報告に記録します。
+  - 工程は、このセッションが受け付けた引き継ぎpacketの`targetStage`で決まります。packetを受け付けていないセッション（手で起動したPiなど）、別のセッション、packetと違うリポジトリ・workflowへの呼び出しでは、これまでどおりです。
+  - その工程で起きる内容承認（検証工程の最終受け入れなど）は、確認画面を出さずに親エージェントが記録します。headlessの親でも記録できます（人間がいない前提のため）。記録には`approvedBy: "agent"`と`stage`が入り、ツール結果の`data.agentApproval`（`kind`・`stage`・`viewDigest`）で分かります。これらの項目が無い既存の記録も、引き続き有効です。
+  - 止まっている引き継ぎの放棄（`HANDOFF_IN_PROGRESS`）も、確認画面なしで親エージェントが行います。結果の`data.agentAbandoned`に放棄したoperationIdが入ります。
+  - 子セッション（subagent）は、どの工程でも承認を記録できません。
+  - 実際のPiでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止め、自分で判断して記録するよう伝えます。`tool_call`を出さないホスト（Claude Code上のclaude-scaffoldなど）ではこの遮断は効きませんが、承認の扱いは同じです。
 - **operationId**：書き込みのあるツールは、手順ごとにjournalへ記録します。同じoperationIdでの再実行は、続きから再開するか`noop`を返します。別の内容で同じoperationIdを使うと止まります。結果が分からない書き込みは、GitHubを読み直して照合してから進め、むやみに再送しません。
 - **結果のstatus**：`validated` `prepared` `applied` `noop` `blocked` `partial` `unknown` `cancelled` の8種類です。
   - `partial`と`unknown`は`resumeToken`（＝operationId）付きで返します。同じoperationIdで再開してください。
@@ -67,6 +73,11 @@ Epicは `setup → specification → basic-design → implementation → verific
   - Herdr 0.9.1（protocol 22）
   - pi-profileの`developer` Profile
   - owner policy（`$PI_CODING_AGENT_DIR/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
+  - 各リポジトリのエントリには、任意で`agentDecisionStages`を書けます。値は`"implementation"`と`"verification"`だけの配列で、重複や他の値（`"basic-design"`など）はpolicyのエラーです。書かなければ`[]`と同じで、動作は変わりません。
+
+```json
+{"version": 1, "repos": {"OWNER/*": {"authMode": "file-backed", "models": [], "agentDecisionStages": ["implementation", "verification"]}}}
+```
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
 新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。

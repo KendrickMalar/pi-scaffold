@@ -5,9 +5,9 @@
 import {join} from 'node:path';
 import {
   decodeMutationInput, isGitObjectId, isSha256, problem,
-  type Decoded, type EpicDocV1, type GitObjectId, type IssueSnapshot, type MutationInput, type OwnedEvidenceRef, type Problem, type ScaffoldResult,
+  type ApprovalRef, type Decoded, type EpicDocV1, type GitObjectId, type IssueSnapshot, type MutationInput, type OwnedEvidenceRef, type Problem, type ScaffoldResult,
 } from '../core/contracts.js';
-import {approvalViewDigest} from '../core/approvals.js';
+import {approvalViewDigest, withAgentApproval} from '../core/approvals.js';
 import {patchDoc} from '../core/body-codec.js';
 import {taggedDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
@@ -73,6 +73,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
   const projectDone = (items: ProjectItem[] | undefined) => !!items?.find(i => i.id === input.project!.itemId)?.fieldValues?.nodes?.some(v => v.field?.id === input.project!.statusFieldId && v.optionId === input.project!.doneOptionId);
 
   let gate: CompletionResult | undefined;
+  let approval: ApprovalRef | undefined;
   if (!closedByUs) {
     // ---- everything is (re)checked until this operation has closed the Issue; an already-closed Epic is no shortcut ----
     const pre: Problem[] = [];
@@ -109,11 +110,13 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     if (problems.length) return blocked(problems);
     const view = completionApprovalView(epic, set.value.featureSetDigest, input.finalEvidenceRefs, gate, set.value.features, input.project);
     const existing = await call.approvals.requireContentApproval('epic-completion', epic.workflowId, approvalViewDigest('epic-completion', view), context.value);
-    if (!existing.ok) {
+    if (existing.ok) approval = existing.value;
+    else {
       if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
       if (call.environment().PI_SUBAGENT_CHILD) return blocked([problem('APPROVAL_UI_REQUIRED', 'epic-completion', 'A subagent child cannot give the final acceptance.')]);
-      const confirmed = await call.approvals.confirmContent('epic-completion', epic.workflowId, view, context.value, call.env.approvalUi, call.scope);
+      const confirmed = await call.approvals.confirmContent('epic-completion', epic.workflowId, view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, epic.workflowId)});
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
+      approval = confirmed.data;
     }
   }
 
@@ -190,8 +193,8 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       const d = now.value.doc as EpicDocV1;
       const issueClosed = now.value.state === 'closed';
       const pendingStep = d.stage !== 'completed' ? 'epic-body' : !now.value.labels.includes('Stage: Completed') ? 'epic-labels' : !issueClosed ? 'close' : input.project ? 'project' : null;
-      return {...result, data: {issueClosed, projectUpdated: false, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep}} as ScaffoldResult<EpicCompleteData>;
+      return withAgentApproval({...result, data: {issueClosed, projectUpdated: false, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep}} as ScaffoldResult<EpicCompleteData>, approval);
     }
   }
-  return result as ScaffoldResult<EpicCompleteData>;
+  return withAgentApproval(result as ScaffoldResult<EpicCompleteData>, approval);
 }

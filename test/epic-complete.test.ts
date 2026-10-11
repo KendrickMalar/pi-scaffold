@@ -347,3 +347,55 @@ test('the acceptance shows the Features, evidence and Project target, and binds 
   assert.notEqual(v1.contentDigest, v2.contentDigest);
   assert.match(v1.text, /#11 F001/); assert.match(v1.text, /final\/11\.json/); assert.match(v1.text, /PVTI_10/);
 });
+
+// ---- agent decision stages ------------------------------------------------------------------------
+
+const agentPolicy = (stages: ('implementation' | 'verification')[], key = 'example/demo'): OwnerPolicy => ({version: 1, repos: {[key]: {authMode: 'file-backed', models: [], agentDecisionStages: stages}}});
+const accepted = (targetStage: 'specification' | 'basic-design' | 'implementation' | 'verification', extra: Record<string, string> = {}) => ({sessionId: 'session-harness', repo: 'example/demo', workflowId: epicDoc().workflowId, targetStage, ...extra});
+
+test('in a Verification session listed in agentDecisionStages the parent records the final acceptance itself (no dialog, headless ok)', async t => {
+  for (const interactive of [true, false]) {
+    const gh = world();
+    const h = await harness(t, gh, {interactive, policy: agentPolicy(['verification']), handoff: accepted('verification')});
+    const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+    assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+    assert.equal(out.confirmCalls, 0, 'the human is not asked');
+    const d = out.r.data as Data & {agentApproval?: {kind: string; stage: string; viewDigest: string}};
+    assert.deepEqual([d.agentApproval?.kind, d.agentApproval?.stage], ['epic-completion', 'verification']);
+    assert.match(d.agentApproval!.viewDigest, /^[0-9a-f]{64}$/);
+    assert.equal(gh.issues.get(10)!.state, 'closed');
+  }
+});
+
+test('the final acceptance still needs the human when the stage is not listed, the packet is another stage/repo, or there is none', async t => {
+  for (const scenario of [
+    {policy: agentPolicy(['implementation']), handoff: accepted('verification')},
+    {policy: agentPolicy(['implementation', 'verification']), handoff: accepted('basic-design')},
+    {policy: agentPolicy(['implementation', 'verification']), handoff: accepted('specification')},
+    {policy: agentPolicy(['verification'], 'example/*'), handoff: accepted('verification', {repo: 'example/other'})},
+    {policy: agentPolicy(['verification'])},
+    {policy, handoff: accepted('verification')},
+  ] as Scenario[]) {
+    const gh = world(), before = gh.issues.get(10)!.body;
+    const headless = await harness(t, gh, {...scenario, interactive: false});
+    const blocked = await headless.invoke(params(gh, await writeEvidence(headless.agentDir)));
+    assert.equal(blocked.r.status, 'blocked', JSON.stringify(scenario));
+    assert.ok(blocked.r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'), JSON.stringify(blocked.r.problems));
+    nothingChanged(gh, before);
+    const parent = await harness(t, gh, {...scenario});
+    const out = await parent.invoke(params(gh, await writeEvidence(parent.agentDir)));
+    assert.equal(out.confirmCalls, 1, JSON.stringify(scenario));
+    assert.equal(out.r.status, 'applied');
+    assert.equal((out.r.data as {agentApproval?: unknown}).agentApproval, undefined);
+  }
+});
+
+test('a subagent child in a listed Verification session still cannot give the final acceptance', async t => {
+  const gh = world(), before = gh.issues.get(10)!.body;
+  const h = await harness(t, gh, {child: true, policy: agentPolicy(['verification']), handoff: accepted('verification')});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'));
+  assert.equal(out.confirmCalls, 0);
+  nothingChanged(gh, before);
+});
