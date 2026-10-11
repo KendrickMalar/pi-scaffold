@@ -13,7 +13,7 @@ export const sameWatch = (a: WatchEntry, b: WatchEntry) => a.paneId === b.paneId
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const STRING_FIELDS = ['ownerSessionId', 'paneId', 'tabId', 'workspaceId', 'targetSessionId', 'cwd', 'repo', 'targetStage', 'addedAt'] as const;
-const OPTIONAL_NUMBER_FIELDS = ['pendingRetryAt', 'pendingErrorAt', 'exhaustedErrorAt'] as const;
+const OPTIONAL_NUMBER_FIELDS = ['pendingRetryAt', 'pendingErrorAt', 'exhaustedErrorAt', 'endedAt'] as const;
 const optional = (v: unknown, ok: (x: unknown) => boolean) => v === undefined || ok(v);
 function isRecord(v: unknown): v is WatchRecord {
   if (!isRec(v) || !isRec(v.entry) || !isRec(v.progress)) return false;

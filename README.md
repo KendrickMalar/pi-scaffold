@@ -6,8 +6,8 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 
 ## 導入
 
-- npm版：`pi install npm:@papillon6814/pi-scaffold@0.4.0`。
-- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.4.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.4.1`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.4.1`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
 - 同じProfileにpi-gh 0.5.0以上も必要です。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
@@ -55,6 +55,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 - pane が消えた、pi が終了した、確認・入力待ち、エラー停止、返事待ち・完了のときは、親TUIに通知します。同じ状態で通知を繰り返すことはありません。
 - 別のセッションが動いている pane（pane ID が使い回された場合など）には送らず、監視を終えます。
+- Herdr がその pane のセッションを報告しないときは、自動の「続けて」だけを止め、そのことを一度通知します。ほかの通知は出します。
 - 一時的な API エラー（429・5xx・overloaded・接続エラーなど）で止まったときだけ、1分→5分→15分あけて最大3回「続けて」を送ります。送る直前に、同じエラーで止まったままかを確かめます。
 - usage limit・認証・400系のエラーは通知だけです。下位のセッションログの形式（version 3）が違う場合も、自動では送りません。
 - 監視台帳は `<agentDir>/pi-scaffold/state/watches.json` です。監視するのは、引き継いだ本人のセッションだけです。同じセッションを開き直すと、監視を再開します。

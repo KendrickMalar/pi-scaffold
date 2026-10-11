@@ -10,6 +10,8 @@ import type {TailResult} from '../src/watch/session-tail.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 
 const entry = (paneId = 'w9:p2', owner = 'parent'): WatchEntry => ({ownerSessionId: owner, paneId, tabId: 'w9:t2', workspaceId: 'w9', targetSessionId: `s-${paneId}`, cwd: '/synthetic/repo', repo: 'example/demo', epicIssue: 10, targetStage: 'specification', addedAt: '2026-10-11T00:00:00.000Z'});
+/** The session Herdr reports for a pane whose pi is the handed-off target. */
+const mine = (paneId = 'w9:p2') => ({kind: 'id', value: `s-${paneId}`});
 const fetchFailed: TailResult = {kind: 'error', transient: true, message: 'fetch failed', at: 100};
 
 async function setup(t: {after(fn: () => Promise<void>): void}, opts: {owner?: string} = {}) {
@@ -42,7 +44,7 @@ test('add registers the pane and starts one 60-second timer', async t => {
 
 test('a transient error: notice first, then exactly one continue after the delay', async t => {
   const s = await setup(t);
-  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
   await s.watcher.add(entry());
   await s.watcher.tick();
   assert.equal(s.herdr.count('agentPrompt'), 0);
@@ -56,7 +58,7 @@ test('a transient error: notice first, then exactly one continue after the delay
 
 test('precheck mismatch: if the child moved on before sending, nothing is sent and progress is kept', async t => {
   const s = await setup(t);
-  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
   await s.watcher.add(entry());
   await s.watcher.tick();
   s.state.now = RETRY_DELAYS_MS[0];
@@ -149,7 +151,7 @@ test('a check still running makes the next one a no-op', async t => {
 
 test('the retry count is saved before sending; if that save fails nothing is sent', async t => {
   const s = await setup(t);
-  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
   await s.watcher.add(entry());
   await s.watcher.tick();
   s.state.now = RETRY_DELAYS_MS[0];
@@ -183,7 +185,7 @@ test('a pi pane whose session path ends with the target session id is checked no
 
 test('a failed send is counted before typing, warned about, and not resent for the same error', async t => {
   const s = await setup(t);
-  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
   await s.watcher.add(entry());
   await s.watcher.tick();
   s.state.now = RETRY_DELAYS_MS[0];
@@ -221,4 +223,60 @@ test('a terminal notice is shown once even when removing the watch keeps failing
   await s.watcher.tick(); await s.watcher.tick(); await s.watcher.tick();
   assert.equal(s.notices.filter(n => /pane が消えました/.test(n.text)).length, 1);
   assert.equal(s.notices.filter(n => /監視台帳を更新できませんでした/.test(n.text)).length, 1);
+});
+
+test('a pane reporting no session gets notices but never an automatic continue', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle'});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  s.state.now = RETRY_DELAYS_MS[0];
+  await s.watcher.tick();
+  s.state.now = RETRY_DELAYS_MS[2] * 2;
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  assert.equal(s.notices.length, 1, 'one notice, not one per check');
+  assert.match(s.notices[0]!.text, /セッションを確認できないため、自動再開はしません: fetch failed/);
+  assert.equal(s.notices[0]!.level, 'warning');
+});
+
+test('a session that disappears just before sending stops the send', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
+  await s.watcher.add(entry());
+  await s.watcher.tick();
+  s.state.now = RETRY_DELAYS_MS[0];
+  const paneGet = s.herdr.paneGet.bind(s.herdr);
+  let calls = 0;
+  s.herdr.paneGet = async id => { calls += 1; const p = await paneGet(id); return calls === 2 && p.exists ? {exists: true, agent: p.agent, status: p.status} : p; };
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+});
+
+test('a watch whose removal failed is never acted on again, even after its session comes back or the parent restarts', async t => {
+  const s = await setup(t);
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
+  await s.watcher.add(entry());
+  await s.watcher.tick(); // a transient error: a continue is scheduled
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: {kind: 'id', value: 'someone-else'}});
+  const remove = s.registry.remove.bind(s.registry);
+  s.registry.remove = async () => { throw new Error('disk full'); };
+  await s.watcher.tick(); // replaced: the watch ends but stays in the registry
+  const [left] = (await s.registry.load()).records;
+  assert.equal(left!.progress.pendingRetryAt, undefined, 'the schedule is not left behind');
+  assert.equal(typeof left!.progress.endedAt, 'number');
+  // The target session returns (e.g. /resume) long after the scheduled time.
+  s.herdr.panes.set('w9:p2', {exists: true, agent: 'pi', status: 'idle', session: mine()});
+  s.state.now = RETRY_DELAYS_MS[2] * 2;
+  await s.watcher.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  // A restarted parent (fresh watcher, same registry) does not act on it either; it only finishes the removal.
+  const notices: string[] = [];
+  const restarted = new StageWatcher({ownerSessionId: 'parent', registry: s.registry, herdr: s.herdr, now: () => s.state.now,
+    readTail: async () => fetchFailed, notify: text => notices.push(text), setInterval: () => 1, clearInterval: () => undefined});
+  s.registry.remove = remove;
+  await restarted.tick();
+  assert.equal(s.herdr.count('agentPrompt'), 0);
+  assert.deepEqual(notices, []);
+  assert.deepEqual((await s.registry.load()).records, []);
 });

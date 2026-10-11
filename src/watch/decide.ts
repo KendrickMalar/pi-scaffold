@@ -14,14 +14,16 @@ export interface WatchEntry {
   cwd: string; repo: string; epicIssue: number; targetStage: string; addedAt: string;
 }
 export interface WatchProgress {
-  /** A pending schedule applies only to the error it was announced for: `pendingErrorAt` is that error's `at`. */
-  retryCount: number; pendingRetryAt?: number; pendingErrorAt?: number; exhaustedErrorAt?: number; lastNoticeKey?: string; herdrFailures: number;
+  /** A pending schedule applies only to the error it was announced for: `pendingErrorAt` is that error's `at`.
+   * `endedAt` marks a watch that has ended but could not yet be removed: it is never observed or acted on again. */
+  retryCount: number; pendingRetryAt?: number; pendingErrorAt?: number; exhaustedErrorAt?: number; endedAt?: number; lastNoticeKey?: string; herdrFailures: number;
 }
 export const INITIAL_PROGRESS: WatchProgress = Object.freeze({retryCount: 0, herdrFailures: 0});
 
 export type Observation =
   | {kind: 'gone'} | {kind: 'exited'} | {kind: 'replaced'} | {kind: 'working'} | {kind: 'blocked'}
-  | {kind: 'idle'; tail: TailResult}
+  /** `sessionConfirmed`: Herdr reported the pane's session and it is the handed-off one. Only then is a continue sent. */
+  | {kind: 'idle'; tail: TailResult; sessionConfirmed: boolean}
   | {kind: 'unclear'; reason: string};
 export type NoticeLevel = 'info' | 'warning' | 'error';
 export type WatchAction =
@@ -64,6 +66,7 @@ export function decide(entry: WatchEntry, progress: WatchProgress, obs: Observat
         break;
       }
       if (!tail.transient) { clearSchedule(); notifyOnce(`error:${tail.at}`, 'error', `下位がエラーで止まっています: ${cut(tail.message)}`); break; }
+      if (!obs.sessionConfirmed) { clearSchedule(); notifyOnce(`unconfirmed:${tail.at}`, 'warning', `下位が一時的なエラーで止まっていますが、セッションを確認できないため、自動再開はしません: ${cut(tail.message)}`); break; }
       if (p.exhaustedErrorAt === tail.at) { clearSchedule(); break; }
       if (p.retryCount >= MAX_AUTO_CONTINUE) {
         p.exhaustedErrorAt = tail.at; clearSchedule();
