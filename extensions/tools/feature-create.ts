@@ -16,7 +16,7 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'a native sub-issue and reads it back. Never edits the Epic, starts agents or changes models. Re-running the same operationId never posts twice. '
       + 'editScope lists repo-relative directory or file paths or globs (e.g. "src", "src/a.ts", "src/**/*.ts"; root "." is allowed). Empty, absolute ("/"), '
       + '"..", backslash, control/zero-width characters and segments ending in a dot or space are refused as UNKNOWN_SCOPE before anything is written. '
-      + 'scaffold_waves_verify treats globs it cannot prove disjoint as overlapping, so prefer "src" over "src/**".',
+      + 'scaffold_waves_verify treats globs it cannot prove disjoint as overlapping, so write globs whose literal parts keep them apart (e.g. "src/a/**" and "lib/**").',
     parameters: Type.Object({
       ...mutationInputFields,
       featureKey: Type.String({pattern: '^F[0-9]{3,}$'}),

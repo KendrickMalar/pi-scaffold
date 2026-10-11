@@ -152,24 +152,27 @@ test('a literal under a glob prefix that does not match is disjoint only when th
   assert.ok(conflict(sameWave(['src/*.d'], ['src/a.d/x.ts'], inDir)), 'a glob matching a directory covers what it holds');
 });
 
-test('glob scopes count shared manifests/state they may touch', () => {
-  const lock = (s: string) => s === 'pnpm-lock.yaml' ? ['pnpm-lock.yaml'] : [];
-  const m = sameWave(['**/package.json'], ['pnpm-lock.yaml'], lock);
-  assert.equal(m.passed, false);
-  assert.match(conflict(m)!.message, /manifests/);
-  assert.ok(conflict(sameWave(['packages/*/package.json'], ['tools/x/Cargo.toml'])), 'manifest by name');
-  assert.ok(conflict(sameWave(['config/*.json'], ['tsconfig.json'])), 'an extension glob can match a manifest');
-  assert.ok(conflict(sameWave(['tools/x*'], ['package.json'])), 'a free-form manifest name (x.csproj)');
-  const existing = (s: string) => s === 'packages/*-ui' ? ['packages/web-ui/package.json'] : s === 'packages/b/package.json' ? [s] : [];
-  assert.ok(conflict(sameWave(['packages/*-ui'], ['packages/b/package.json'], existing)), 'an existing manifest the glob covers');
-  assert.equal(sameWave(['packages/*-ui'], ['packages/b/package.json'], s => s === 'packages/b/package.json' ? [s] : []).passed, true, 'no manifest under the glob');
-  assert.match(conflict(sameWave(['db/**/*.sql'], ['prisma/migrations/1.sql']))!.message, /state/);
-  assert.ok(conflict(sameWave(['db/*/*.sql'], ['prisma/migrations/'])), 'a glob segment can match migrations');
-  assert.match(conflict(sameWave(['.github/**'], ['ops/migrations/']))!.message, /state/, 'workflows');
+test('glob scopes count shared manifests/state like directories: by their literal parts and the files they match', () => {
+  assert.equal(sameWave(['src/a/**'], ['lib/**']).passed, true, 'globs over ordinary directories stay parallel');
+  assert.equal(sameWave(['src/**/*.ts'], ['lib/**/*.css']).passed, true);
+  assert.equal(sameWave(['config/*.json'], ['tsconfig.json'], s => s === 'tsconfig.json' ? [s] : []).passed, true, 'the shape alone does not count');
   const sql = (s: string) => s === 'db/migrations/1.sql' ? ['db/migrations/1.sql'] : [];
-  assert.match(conflict(sameWave(['*.md'], ['db/migrations/1.sql'], sql))!.message, /state/, 'a root-level glob can touch state');
-  assert.ok(conflict(sameWave(['.'], ['package.json'])), 'root touches everything');
-  assert.equal(sameWave(['src/**/*.ts'], ['lib/**/*.css']).passed, true, 'ordinary globs stay parallel');
+  assert.equal(sameWave(['*.md'], ['db/migrations/1.sql'], sql).passed, true, 'a root-level glob is not state by its shape');
+  const pkg = (s: string) => s === 'packages/a/package.json' ? [s] : [];
+  assert.match(conflict(sameWave(['**/package.json'], ['packages/a/package.json'], pkg))!.message, /package\.json/, 'a literal last segment');
+  const lock = (s: string) => s === 'pnpm-lock.yaml' ? ['pnpm-lock.yaml'] : [];
+  assert.match(conflict(sameWave(['**/package.json'], ['pnpm-lock.yaml'], lock))!.message, /manifests/);
+  assert.match(conflict(sameWave(['packages/*/package.json'], ['tools/x/Cargo.toml']))!.message, /manifests/);
+  const svc = (s: string) => s === 'svc/migrations/x.sql' ? [s] : [];
+  assert.match(conflict(sameWave(['db/migrations/**'], ['svc/migrations/x.sql'], svc))!.message, /state/, 'a state prefix');
+  assert.match(conflict(sameWave(['.github/workflows/*.yml'], ['ops/migrations/']))!.message, /state/);
+  assert.match(conflict(sameWave(['prisma/*/schema.prisma'], ['db/migrations/1.sql'], sql))!.message, /state/);
+  const existing = (s: string) => s === 'packages/*-ui' ? ['packages/web-ui/package.json'] : s === 'packages/b/package.json' ? [s] : [];
+  assert.match(conflict(sameWave(['packages/*-ui'], ['packages/b/package.json'], existing))!.message, /manifests/, 'an existing manifest the glob matches');
+  const lib = (s: string) => s === 'src/a/**' ? ['src/a/package.json'] : s === 'lib/**' ? ['lib/package.json'] : [];
+  assert.match(conflict(sameWave(['src/a/**'], ['lib/**'], lib))!.message, /manifests/, 'existing package.json under both globs');
+  assert.equal(sameWave(['packages/*-ui'], ['packages/b/package.json'], s => s === 'packages/b/package.json' ? [s] : []).passed, true, 'no manifest under the glob');
+  assert.ok(conflict(sameWave(['.'], ['package.json'])), 'root overlaps everything by path');
 });
 
 test('readScopeContents lists each scope once at its literal prefix (the repository root as ".") and filters globs', async () => {

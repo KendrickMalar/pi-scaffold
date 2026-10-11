@@ -80,24 +80,10 @@ function overlaps(a: string, b: string, isFile: (p: string) => boolean): boolean
 
 /** Files every package/manifest change touches together (shared lockfiles), and shared state. */
 const MANIFEST = /^(\.npmrc|\.yarnrc(\.yml)?|go\.work\.sum|flake\.(nix|lock)|packages\.lock\.json|directory\.(packages|build)\.props|.+\.(csproj|fsproj|vbproj)|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|deno\.jsonc?|deno\.lock|tsconfig(\..+)?\.json|Cargo\.(toml|lock)|go\.(mod|sum|work)|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|requirements(-.+)?\.txt|setup\.(py|cfg)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|Package\.(swift|resolved)|mix\.(exs|lock)|pubspec\.(yaml|lock))$/i;
-/** Representative names of every MANIFEST alternative, to ask whether a glob's last segment could name one. */
-const MANIFEST_NAMES = ['.npmrc', '.yarnrc', '.yarnrc.yml', 'go.work.sum', 'flake.nix', 'flake.lock', 'packages.lock.json', 'directory.packages.props', 'directory.build.props', 'app.csproj', 'app.fsproj', 'app.vbproj', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.json', 'deno.jsonc', 'deno.lock', 'tsconfig.json', 'tsconfig.build.json', 'cargo.toml', 'cargo.lock', 'go.mod', 'go.sum', 'go.work', 'pyproject.toml', 'poetry.lock', 'uv.lock', 'pipfile', 'pipfile.lock', 'requirements.txt', 'requirements-dev.txt', 'setup.py', 'setup.cfg', 'gemfile', 'gemfile.lock', 'composer.json', 'composer.lock', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'gradle.lockfile', 'package.swift', 'package.resolved', 'mix.exs', 'mix.lock', 'pubspec.yaml', 'pubspec.lock'];
-const STATE_NAMES = ['schema.prisma', 'schema.sql', 'schema.rb', 'schema.graphql', 'structure.sql'];
 const isState = (raw: string) => { const p = fold(raw); return p.split('/').some(s => s === 'migrations' || s === 'migrate') || p === '.github/workflows' || p.startsWith('.github/workflows/') || /(^|\/)(schema\.(prisma|sql|rb|graphql)|structure\.sql)$/.test(p); };
 const kindOf = (p: string): 'manifest' | 'state' | undefined => MANIFEST.test(p.split('/').at(-1)!) ? 'manifest' : isState(p) ? 'state' : undefined;
-/**
- * Whether a glob could name a shared manifest/state file by its shape alone (files that do not exist yet included):
- * a manifest name for its last segment; for state a root prefix, a prefix around `.github/workflows`, a non-`**`
- * segment that can be `migrations`/`migrate`, or a last segment that can be a schema file.
- */
-function globCouldBe(glob: string, k: 'manifest' | 'state'): boolean {
-  const g = fold(glob), last = segs(g).at(-1)!, prefix = scopePrefix(g);
-  // Free-form names (*.csproj …) are also tried with the segment's own literal lead.
-  const lead = /^[^*?[\]{}]*/.exec(last)![0];
-  if (k === 'manifest') return isGlob(last) ? [...MANIFEST_NAMES, ...['csproj', 'fsproj', 'vbproj'].flatMap(e => [`${lead}.${e}`, `${lead}x.${e}`])].some(n => globMatch(n, last)) : kindOf(g) === 'manifest';
-  if (prefix === '' || isState(prefix) || related(prefix, '.github/workflows')) return true;
-  return segs(g).slice(segs(prefix).length).some(s => s !== '**' && ['migrations', 'migrate'].some(n => globMatch(n, s))) || STATE_NAMES.some(n => globMatch(n, last));
-}
+/** What a glob touches by its literal parts alone: its literal prefix, or its whole form when the last segment is literal. */
+const globKind = (glob: string, k: 'manifest' | 'state') => kindOf(scopePrefix(glob) || '.') === k || (!isGlob(segs(glob).at(-1)!) && kindOf(glob) === k);
 
 /** Files inside a scope as the repository has them (a file scope may return itself or nothing). */
 export type ScopeContents = (scope: string) => readonly string[];
@@ -155,8 +141,8 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
       const a = scopes.get(issues[i]!), b = scopes.get(issues[j]!);
       if (!a || !b) continue;
       const path = a.flatMap(x => b.filter(y => overlaps(x, y, isFile)).map(y => `${x} / ${y}`))[0];
-      // A directory scope touches whatever shared files it holds in the repository; a glob also whatever it could name.
-      const touches = (scope: string[], k: 'manifest' | 'state') => scope.some(x => x === '.' || (isGlob(x) ? globCouldBe(x, k) : kindOf(x) === k) || contents(x).some(f => kindOf(f) === k));
+      // A directory or glob scope touches whatever shared files it holds in the repository (a glob: the files it matches).
+      const touches = (scope: string[], k: 'manifest' | 'state') => scope.some(x => (isGlob(x) ? globKind(x, k) : kindOf(x) === k) || contents(x).some(f => kindOf(f) === k));
       const shared = (['manifest', 'state'] as const).find(k => touches(a, k) && touches(b, k));
       if (path || shared) problems.push(problem('EDIT_CONFLICT', `wave ${w}`, `#${issues[i]} and #${issues[j]} share Wave ${w} but ${path ? `edit overlapping paths (${path})` : `both change shared ${shared === 'manifest' ? 'manifests/lockfiles' : 'state (migrations, workflows, schema)'}`}.`));
     }
