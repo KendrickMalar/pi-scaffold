@@ -96,6 +96,10 @@ class Acceptance(unittest.TestCase):
                 users = [m for m in msgs if m.get('role') == 'user']
                 last = json.dumps(users[-1].get('content'), ensure_ascii=False) if users else ''
                 tool_done = any(m.get('role') == 'tool' for m in msgs[msgs.index(users[-1]) + 1:]) if users else False
+                # A subclass may answer some requests with an HTTP error instead (stage-watch acceptance).
+                failure = owner.model_failure(last) if hasattr(owner, 'model_failure') else None
+                if failure:
+                    self.send_response(failure[0]); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(failure[1]); return
                 self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
                 if 'OWNED_TOOL_REQUEST' in last and not tool_done:
                     args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': owner.revision, 'expectedBodySha256': hashlib.sha256(owner.body.encode()).hexdigest()}
