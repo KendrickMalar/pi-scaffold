@@ -89,3 +89,20 @@ test('only a whole-repository * after an exact owner is accepted in policy keys'
   for (const key of ['*', '*/*', '*/demo', 'ex*/*', 'example/de*', 'example/**', 'example/*/x', '/*', 'example/'])
     assert.ok(!decodeOwnerPolicy({version: 1, repos: {[key]: entry}}).ok, key);
 });
+
+test('agentDecisionStages: optional, only implementation/verification, strictly decoded', () => {
+  const entry = (extra: Record<string, unknown>) => ({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], ...extra}}});
+  const absent = decodeOwnerPolicy(entry({}));
+  assert.ok(absent.ok);
+  assert.deepEqual(repoPolicyFor(absent.value, 'example/demo')?.agentDecisionStages ?? [], [], 'absent means none');
+  for (const stages of [[], ['implementation'], ['verification'], ['implementation', 'verification']]) {
+    const r = decodeOwnerPolicy(entry({agentDecisionStages: stages}));
+    assert.ok(r.ok, JSON.stringify(stages));
+    assert.deepEqual(r.value.repos['example/demo']!.agentDecisionStages, stages);
+  }
+  for (const bad of [['specification'], ['basic-design'], ['setup'], ['completed'], ['Implementation'], ['implementation', 'implementation'], [1], [null], 'implementation', null, {implementation: true}]) {
+    const r = decodeOwnerPolicy(entry({agentDecisionStages: bad}));
+    assert.equal(r.ok, false, JSON.stringify(bad));
+    assert.ok(!r.ok && r.problems.every(p => p.path.startsWith('repos.example/demo.agentDecisionStages')), JSON.stringify(!r.ok && r.problems));
+  }
+});

@@ -30,7 +30,7 @@ export function toolEnv(ctx: ExtensionToolContext): ToolEnv {
     cwd: ctx.cwd,
     isProjectTrusted: () => ctx.isProjectTrusted(),
     executeTool: (name, args, options) => ctx.executeTool(name, args, options),
-    approvalUi: {interactive: ctx.mode === 'tui' && ctx.hasUI && !child, confirm: (title, message, options) => ctx.ui.confirm(title, message, options?.signal ? {signal: options.signal} : undefined)},
+    approvalUi: {interactive: ctx.mode === 'tui' && ctx.hasUI && !child, child, confirm: (title, message, options) => ctx.ui.confirm(title, message, options?.signal ? {signal: options.signal} : undefined)},
     identity: () => ({sessionId: ctx.sessionManager.getSessionId(), leafId: ctx.sessionManager.getLeafId() ?? ''}),
     sessionEntries: () => ctx.sessionManager.getEntries(),
     availableModels: () => ctx.modelRegistry.getAvailable().map(m => `${m.provider}/${m.id}`),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {ApprovalStore, approvalViewDigest, type ApprovalUi} from '../src/core/approvals.js';
@@ -13,7 +13,7 @@ async function setup(t: {after(fn: () => Promise<void>): void}) {
   t.after(() => rm(dir, {recursive: true, force: true}));
   const root = join(dir, 'pi-scaffold');
   const context: RepoContext = {repo: 'example/demo', repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', workflowStateRoot: join(root, 'state', 'r', WORKFLOW_ID), accountBinding: SHA_A, profileId: 'developer', profileInstructionsDigest: SHA_B};
-  return {store: new ApprovalStore(root), context};
+  return {store: new ApprovalStore(root), context, root};
 }
 function ui(answer: boolean | (() => boolean)) {
   const shown: {title: string; message: string}[] = [];
@@ -81,4 +81,70 @@ test('approvals need a bound account and profile', async t => {
     const r = await store.confirmContent('specification', WORKFLOW_ID, view(), {...context, ...missing}, ui(true).ui, makeScope());
     assert.equal(r.status, 'blocked', JSON.stringify(missing));
   }
+});
+
+// ---- agent decision stages ------------------------------------------------------------------------
+
+const recordPath = (context: RepoContext, kind: string, digest: string) => join(context.workflowStateRoot, 'approvals', kind, `${digest}.json`);
+
+test('in an agent-decision stage the parent records the approval itself: no dialog, also headless', async t => {
+  const {store, context} = await setup(t);
+  for (const [kind, stage] of [['epic-completion', 'verification'], ['implementation-start', 'implementation']] as const) {
+    let asked = 0;
+    const headless: ApprovalUi = {interactive: false, confirm: async () => { asked++; return false; }};
+    const r = await store.confirmContent(kind, WORKFLOW_ID, view(), context, headless, makeScope(), {agentStage: stage});
+    assert.equal(r.status, 'validated', JSON.stringify(r.problems));
+    assert.equal(asked, 0, 'the human is not asked');
+    assert.equal(r.data?.approvedBy, 'agent');
+    assert.equal(r.data?.stage, stage);
+    const digest = approvalViewDigest(kind, view());
+    const record = JSON.parse(await readFile(recordPath(context, kind, digest), 'utf8')) as {approvedBy: string; stage: string; sessionId: string};
+    assert.deepEqual([record.approvedBy, record.stage, record.sessionId], ['agent', stage, 'session-test']);
+    const ref = await store.requireContentApproval(kind, WORKFLOW_ID, digest, context);
+    assert.ok(ref.ok);
+    assert.deepEqual([ref.value.approvedBy, ref.value.stage], ['agent', stage]);
+  }
+});
+
+test('a child session never records an approval, not even in an agent-decision stage', async t => {
+  const {store, context} = await setup(t);
+  const child: ApprovalUi = {interactive: false, child: true, confirm: async () => true};
+  const r = await store.confirmContent('epic-completion', WORKFLOW_ID, view(), context, child, makeScope(), {agentStage: 'verification'});
+  assert.equal(r.status, 'blocked');
+  assert.ok(r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'));
+  assert.equal((await store.requireContentApproval('epic-completion', WORKFLOW_ID, approvalViewDigest('epic-completion', view()), context)).ok, false);
+});
+
+test('an agent approval still needs the bound account/profile and a current session', async t => {
+  const {store, context} = await setup(t);
+  const u: ApprovalUi = {interactive: false, confirm: async () => true};
+  assert.equal((await store.confirmContent('epic-completion', WORKFLOW_ID, view(), {...context, accountBinding: null}, u, makeScope(), {agentStage: 'verification'})).status, 'blocked');
+  const scope = makeScope(); scope.expire();
+  assert.equal((await store.confirmContent('epic-completion', WORKFLOW_ID, view(), context, u, scope, {agentStage: 'verification'})).status, 'cancelled');
+  assert.equal((await store.requireContentApproval('epic-completion', WORKFLOW_ID, approvalViewDigest('epic-completion', view()), context)).ok, false);
+});
+
+test('without an agent stage the dialog is used exactly as before', async t => {
+  const {store, context} = await setup(t);
+  const {ui: u, shown} = ui(true);
+  const r = await store.confirmContent('epic-completion', WORKFLOW_ID, view(), context, u, makeScope());
+  assert.equal(shown.length, 1);
+  assert.equal(r.data?.approvedBy, undefined);
+  const record = JSON.parse(await readFile(recordPath(context, 'epic-completion', approvalViewDigest('epic-completion', view())), 'utf8')) as Record<string, unknown>;
+  assert.equal(Object.hasOwn(record, 'approvedBy'), false, 'human records keep the original format');
+  assert.equal(Object.hasOwn(record, 'stage'), false);
+});
+
+test('records without approvedBy/stage (older versions) are still accepted; malformed agent fields are not', async t => {
+  const {store, context} = await setup(t);
+  await store.confirmContent('specification', WORKFLOW_ID, view(), context, ui(true).ui, makeScope());
+  const digest = approvalViewDigest('specification', view()), path = recordPath(context, 'specification', digest);
+  const old = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, context)).ok, true);
+  for (const bad of [{approvedBy: 'human'}, {approvedBy: 'agent'}, {approvedBy: 'agent', stage: 'basic-design'}, {stage: 'verification'}, {approvedBy: 'agent', stage: 7}]) {
+    await writeFile(path, JSON.stringify({...old, ...bad}), {mode: 0o600});
+    assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, context)).ok, false, JSON.stringify(bad));
+  }
+  await writeFile(path, JSON.stringify({...old, approvedBy: 'agent', stage: 'verification'}), {mode: 0o600});
+  assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, context)).ok, true);
 });

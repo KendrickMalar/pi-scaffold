@@ -19,7 +19,8 @@ import {promptTag} from './receiver.js';
 import {handoffDir, nonceSha256, readReceipt, writePacket, type HandoffPacketV1, type ReceiptPhase} from './packet.js';
 
 export interface HandoffInput extends MutationInput { expectedStage: Stage; nextStage: Stage }
-export interface HandoffData { nonceSha256: string; tabId: string; paneId: string; targetSessionId: string; phase: string }
+/** `agentAbandoned`: stuck handoffs the parent agent abandoned itself in an agent-decision stage (no dialog). */
+export interface HandoffData { nonceSha256: string; tabId: string; paneId: string; targetSessionId: string; phase: string; agentAbandoned?: string[] }
 export type StageGate = (snapshot: IssueSnapshot) => Promise<GateResult>;
 /** pi-gh tools every Scaffold stage session needs, besides this package's own registered tools. */
 export const BASE_REQUIRED_TOOLS = ['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'];
@@ -85,18 +86,22 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   // An Epic that only *names* this operation (no live journal record here) is not trusted as our commit.
   if (!(await committedByUs(snap.value, input, journal))) { const p = await readyForCommit(snap.value, input, gate); if (p.length) return blocked(p); }
   const busy = (await journal.list()).filter(r => !r.abandonedAt && r.operationId !== input.operationId && r.operation === operation && ['running', 'partial', 'unknown'].includes(r.status));
+  let agentAbandoned: string[] | undefined;
   if (busy.length) {
     const stuck = problem('HANDOFF_IN_PROGRESS', 'operationId', `Another handoff of this Epic is in progress (${busy.map(r => r.operationId).join(', ')}); resume it, or abandon it from the parent TUI to start over.`);
-    // Only a human in the parent TUI may abandon a stuck handoff. Its tab and any receiving session are left as they are.
-    if (!call.env.approvalUi.interactive) return blocked([stuck]);
+    // Only a human in the parent TUI may abandon a stuck handoff — or, in an agent-decision stage of the owner policy, the
+    // parent agent itself (no dialog, any mode; children never reach here). Its tab and any receiving session are left as they are.
+    const agentStage = await call.agentDecisionStage(input.repo, doc.workflowId);
+    if (!agentStage && !call.env.approvalUi.interactive) return blocked([stuck]);
     const details = busy.map(r => {
       const tab = r.steps.find(s => s.name === 'tab-ids')?.data as {tabId?: string; paneId?: string} | undefined;
       return `- operation ${r.operationId}（状態: ${r.status}、最後の段階: ${r.steps.at(-1)?.name ?? 'なし'}${tab?.tabId ? `、タブ ${tab.tabId}` : ''}）`;
     }).join('\n');
-    let ok = false;
-    try { ok = await call.env.approvalUi.confirm('pi-scaffold: 止まっている引き継ぎを放棄しますか？', `Epic #${input.epicIssue}（${input.repo}）に、終わっていない引き継ぎがあります。\n${details}\n\n放棄すると、その引き継ぎは再開できなくなり、新しい引き継ぎを始めます。既存のタブや起動済みのPiは閉じません。GitHubのStage・本文は変えません。`, {signal: call.scope.signal}); } catch { ok = false; }
+    let ok = !!agentStage;
+    if (!agentStage) try { ok = await call.env.approvalUi.confirm('pi-scaffold: 止まっている引き継ぎを放棄しますか？', `Epic #${input.epicIssue}（${input.repo}）に、終わっていない引き継ぎがあります。\n${details}\n\n放棄すると、その引き継ぎは再開できなくなり、新しい引き継ぎを始めます。既存のタブや起動済みのPiは閉じません。GitHubのStage・本文は変えません。`, {signal: call.scope.signal}); } catch { ok = false; }
     if (!ok || !call.scope.isCurrent()) return blocked([stuck]);
     for (const r of busy) await journal.abandon(r.operationId);
+    if (agentStage) agentAbandoned = busy.map(r => r.operationId);
   }
   if (ctx.profileId !== 'developer' || !ctx.profileInstructionsDigest) return blocked([problem('PROFILE_NOT_DEVELOPMENT', 'profile', 'Stage sessions start only from the Development (developer) Profile.')]);
   if (!ctx.accountBinding) return blocked([problem('ACCOUNT_UNBOUND', 'account', 'Owner policy must declare authMode "file-backed" for this repository.')]);
@@ -204,7 +209,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       });
     } catch { /* Watching is best effort; the handoff itself is already applied. */ }
   }
-  return result as ScaffoldResult<HandoffData>;
+  return (agentAbandoned && result.data ? {...result, data: {...result.data, agentAbandoned}} : result) as ScaffoldResult<HandoffData>;
 }
 
 async function commitStage(run: OperationRun, call: ToolCall, input: HandoffInput, gate: StageGate, nonceSha: string, dir: string): Promise<void> {

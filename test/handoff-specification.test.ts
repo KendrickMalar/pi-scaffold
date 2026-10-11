@@ -11,7 +11,7 @@ import {labelDefinitions} from '../src/core/label-definitions.js';
 import {acceptStartupPacket, recordTurnStarted} from '../src/handoff/receiver.js';
 import type {EpicDocV1} from '../src/core/contracts.js';
 import type {OwnerPolicy} from '../src/core/model-bindings.js';
-import {initialDoc, populatedDoc, OPERATION_ID} from './helpers/docs.js';
+import {initialDoc, populatedDoc, OPERATION_ID, WORKFLOW_ID} from './helpers/docs.js';
 
 const policy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: []}}};
 const profile = (id = 'developer', instructions = '開発用（架空）') => ({type: 'custom', customType: 'startup-profile-state', data: {version: 1, id, label: id, instructions}});
@@ -376,6 +376,38 @@ test('headless or child sessions cannot abandon a stuck handoff', async t => {
   assert.equal(next.r.status, 'blocked');
   assert.equal(next.confirmCalls, 0);
   assert.equal(herdr.tabCreates, 1);
+});
+
+test('in an implementation/verification session listed in agentDecisionStages the parent abandons a stuck handoff itself', async t => {
+  for (const stage of ['implementation', 'verification'] as const) {
+    const gh = world(), herdr = new FakeHerdr();
+    let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+    const agentPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentDecisionStages: [stage]}}};
+    const h = await harness(t, gh, herdr, {interactive: false, confirm: false, policy: agentPolicy, handoff: {sessionId: 'session-harness', repo: 'example/demo', workflowId: WORKFLOW_ID, targetStage: stage}}); agentDir = h.agentDir;
+    assert.equal((await h.invoke()).r.status, 'partial');
+    receiver(herdr, () => agentDir);
+    const fresh = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
+    assert.equal(fresh.r.status, 'applied', JSON.stringify(fresh.r.problems));
+    assert.equal(fresh.confirmCalls, 0, 'no dialog');
+    assert.deepEqual((fresh.r.data as {agentAbandoned?: string[]}).agentAbandoned, [OPERATION_ID]);
+    assert.equal(herdr.tabCreates, 2, 'a new tab; the old one is kept');
+    assert.notEqual((await h.invoke()).r.status, 'applied', 'the abandoned operation cannot be resumed');
+  }
+});
+
+test('an unlisted stage or a basic-design session still needs the human to abandon a stuck handoff', async t => {
+  for (const [stages, stage] of [[['verification'], 'implementation'], [['implementation', 'verification'], 'basic-design']] as const) {
+    const gh = world(), herdr = new FakeHerdr();
+    let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+    const agentPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentDecisionStages: [...stages]}}};
+    const h = await harness(t, gh, herdr, {interactive: false, policy: agentPolicy, handoff: {sessionId: 'session-harness', repo: 'example/demo', workflowId: WORKFLOW_ID, targetStage: stage}}); agentDir = h.agentDir;
+    assert.equal((await h.invoke()).r.status, 'partial');
+    const next = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
+    assert.equal(next.r.status, 'blocked');
+    assert.ok(next.r.problems.some(p => p.code === 'HANDOFF_IN_PROGRESS'));
+    assert.equal(next.confirmCalls, 0);
+    assert.equal(herdr.tabCreates, 1);
+  }
 });
 
 test('a tab-create reply lost before the tab existed is reconciled as not applied and created once', async t => {

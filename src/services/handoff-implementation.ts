@@ -1,8 +1,8 @@
 // #14 scaffold_handoff_implementation: basic-design → implementation only. The design, Features, criteria, bindings and
 // Waves must be complete and consistent, and the parent TUI must approve starting implementation for exactly that state
 // (headless sessions may only reference an existing start approval). Transport is #5's driver; only the Epic's Stage moves.
-import {decodeMutationInput, problem, type Decoded, type EpicDocV1, type GateResult, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult} from '../core/contracts.js';
-import {approvalViewDigest} from '../core/approvals.js';
+import {decodeMutationInput, problem, type ApprovalRef, type Decoded, type EpicDocV1, type GateResult, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult} from '../core/contracts.js';
+import {approvalViewDigest, withAgentApproval} from '../core/approvals.js';
 import {blobKey, checkDesignReady, startApprovalView} from '../core/design-gate.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
@@ -49,6 +49,7 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
   if (!context.ok) return blocked(context.problems);
   const handoff = {...input, expectedStage: 'basic-design' as const, nextStage: 'implementation' as const};
   const repoRoot = repoOnly.value.repoRoot;
+  let approval: ApprovalRef | undefined;
   let justChecked: {bodySha256: string; ready: Awaited<ReturnType<typeof readiness>>} | undefined;
   if (!(await committedByUs(snap.value, handoff, call.journal(context.value)))) {
     // Cheap preconditions first: nothing is asked for a handoff that cannot proceed.
@@ -67,10 +68,12 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
     if (!ready.view) return blocked(ready.problems);
     justChecked = {bodySha256: snap.value.bodySha256, ready};
     const existing = await call.approvals.requireContentApproval('implementation-start', doc.workflowId, approvalViewDigest('implementation-start', ready.view), context.value);
-    if (!existing.ok) {
+    if (existing.ok) approval = existing.value;
+    else {
       if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
-      const confirmed = await call.approvals.confirmContent('implementation-start', doc.workflowId, ready.view, context.value, call.env.approvalUi, call.scope);
+      const confirmed = await call.approvals.confirmContent('implementation-start', doc.workflowId, ready.view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, doc.workflowId)});
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
+      approval = confirmed.data;
     }
   }
   // Right before the stage commit: still ready, and the start approval matches the state as it is now.
@@ -83,5 +86,5 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
     const approved = await call.approvals.requireContentApproval('implementation-start', (s.doc as EpicDocV1).workflowId, approvalViewDigest('implementation-start', ready.view), context.value);
     return (approved.ok ? {status: 'validated', problems: [], artifactDigests: {startApproval: ready.view.contentDigest}} : {status: 'blocked', problems: approved.problems, artifactDigests: {}}) as GateResult;
   };
-  return handoffStage(handoff, gate, call, operation);
+  return withAgentApproval(await handoffStage(handoff, gate, call, operation), approval);
 }

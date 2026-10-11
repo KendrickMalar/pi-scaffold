@@ -18,6 +18,9 @@ export const LIMITS = Object.freeze({
 
 export const STAGES = ['setup', 'specification', 'basic-design', 'implementation', 'verification', 'completed'] as const;
 export type Stage = typeof STAGES[number];
+/** Stages whose parent agent decides and records content approvals itself when the owner policy lists them (no questions to the human). */
+export const AGENT_DECISION_STAGES = ['implementation', 'verification'] as const;
+export type AgentDecisionStage = typeof AGENT_DECISION_STAGES[number];
 export const HANDOFF_PHASES = ['prepared', 'tab-created', 'receiver-ready', 'stage-committed', 'prompt-sent', 'turn-started'] as const;
 export type HandoffPhase = typeof HANDOFF_PHASES[number];
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -109,7 +112,8 @@ export interface RepoContext {
   accountBinding: Sha256 | null; profileId: string | null; profileInstructionsDigest: Sha256 | null;
 }
 export interface CallScope { sessionId: string; leafId: string; generation: number; signal: AbortSignal; isCurrent(): boolean }
-export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256 }
+/** `approvedBy`/`stage` are present only for approvals the parent agent recorded itself in an agent-decision stage. */
+export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256; approvedBy?: 'agent'; stage?: AgentDecisionStage }
 export type ApprovalKind = 'specification' | 'implementation-start' | 'epic-completion';
 export interface OwnedArtifactRef { path: string; sha256: Sha256; operationId: UUID }
 export type OwnedPacketRef = OwnedArtifactRef;

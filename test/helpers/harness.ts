@@ -10,6 +10,7 @@ import type {TSchema} from 'typebox';
 import {createRuntime, type ScaffoldRuntime} from '../../src/core/runtime.js';
 import type {GitReader} from '../../src/ports/git-read.js';
 import type {OwnerPolicy} from '../../src/core/model-bindings.js';
+import type {AcceptedHandoff} from '../../src/core/agent-decision.js';
 import type {ScaffoldResult} from '../../src/core/contracts.js';
 import {FakePiGh} from './fake-pi-gh.js';
 
@@ -40,6 +41,8 @@ export interface Scenario {
   remote?: {branch: string; sha: string};
   /** Files under a repo path for `git ls-tree` (read-only). */
   tree?: Record<string, string[]>;
+  /** The handoff packet this session accepted (set by the extension on session_start in reality). Session id is `session-harness`. */
+  handoff?: AcceptedHandoff;
 }
 export interface Invocation {
   r: ScaffoldResult; isError: boolean; inputSchemaValid: boolean; inputSchemaErrors: string[]; outputSchemaValid: boolean;
@@ -82,6 +85,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     listTree: async (_ref, path) => scenario.tree?.[path] ?? [],
   };
   const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.environment ? {environment: () => scenario.environment!} : {}), ...(scenario.herdr && 'tabCreate' in scenario.herdr ? {herdr: () => scenario.herdr as HerdrPort} : {}), ...(scenario.waitMs !== undefined ? {waitMs: scenario.waitMs} : {}), ...(scenario.pollMs !== undefined ? {pollMs: scenario.pollMs} : {}), ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});
+  if (scenario.handoff) runtime.handoff = scenario.handoff;
   const tool = createTool(runtime);
   let confirmCalls = 0;
   const ctx = {

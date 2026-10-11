@@ -3,11 +3,12 @@
 import {homedir} from 'node:os';
 import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
-import {LIMITS, failed, problem, type CallScope, type Decoded, type RepoContext} from './contracts.js';
+import {LIMITS, failed, problem, type AgentDecisionStage, type CallScope, type Decoded, type RepoContext} from './contracts.js';
 import {RuntimeScope} from './lifecycle.js';
 import {OperationJournal} from './journal.js';
 import {ApprovalStore, type ApprovalUi} from './approvals.js';
 import {loadOwnerPolicy, type OwnerPolicy} from './model-bindings.js';
+import {resolveAgentDecisionStage, type AcceptedHandoff} from './agent-decision.js';
 import {deriveRepoContext, resolveAgentDir} from './repo-context.js';
 import {PiGhBridge, type ToolExecutor} from '../ports/pi-gh.js';
 import {createGitReader, type GitReader} from '../ports/git-read.js';
@@ -40,6 +41,8 @@ export interface ScaffoldRuntime {
   now?: () => number;
   /** Set by the extension: registers an applied handoff's pane for background watching (Issue #36). */
   watch?: {add(entry: WatchEntry): Promise<void>};
+  /** Set by the extension when this session accepted a handoff packet; its targetStage is the session stage. */
+  handoff?: AcceptedHandoff;
 }
 
 export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<string, string | undefined>; home?: string} = {}): ScaffoldRuntime {
@@ -81,6 +84,12 @@ export class ToolCall {
       cwd: this.env.cwd, repo, workflowId, trusted: this.env.isProjectTrusted(), agentDir: this.runtime.agentDir, agentDirRealpath,
       sessionEntries: this.env.sessionEntries(), policy: policy.value, git: this.runtime.git,
     });
+  }
+  /** The agent-decision stage of this call (see agent-decision.ts); never for a subagent child. */
+  async agentDecisionStage(repo: string, workflowId: string): Promise<AgentDecisionStage | undefined> {
+    if (this.env.approvalUi.child || this.environment().PI_SUBAGENT_CHILD || !this.runtime.handoff) return undefined;
+    const policy = await this.policy();
+    return resolveAgentDecisionStage(this.runtime.handoff, policy.ok ? policy.value : undefined, {sessionId: this.scope.sessionId, repo, workflowId});
   }
   environment(): Record<string, string | undefined> { return this.runtime.environment ? this.runtime.environment() : process.env; }
   herdr(): HerdrPort { const env = this.environment(); return this.runtime.herdr ? this.runtime.herdr() : createHerdrCli({...(env.HERDR_BIN_PATH ? {bin: env.HERDR_BIN_PATH} : {}), ...(env.HERDR_SOCKET_PATH ? {socketPath: env.HERDR_SOCKET_PATH} : {}), caller: env}); }

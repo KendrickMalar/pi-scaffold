@@ -1,12 +1,16 @@
 // Owner policy ($PI_CODING_AGENT_DIR/pi-scaffold/policy.json): per-repo allowed model tuples and auth mode.
 // Only provider/id/thinking are handled; no model descriptors, auth.json or settings.json are read or changed.
 import {join} from 'node:path';
-import {StrictReader, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type Decoded, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
+import {StrictReader, AGENT_DECISION_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentDecisionStage, type Decoded, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
 import {OwnedFileError, readOwnedJson} from './files.js';
 
 export const FEATURE_ROLES: readonly FeatureRole[] = ['coding-manager', 'coder', 'tester'];
 export interface PolicyModel { model: string; thinking: ThinkingLevel; tier: 'basic' | 'upper'; roles: FeatureRole[] }
-export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[] }
+/**
+ * `agentDecisionStages`: stages (implementation/verification only) in which the parent agent must not ask the human;
+ * it decides within the approved spec/design and records content approvals itself. Absent means none (`[]`).
+ */
+export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[]; agentDecisionStages?: AgentDecisionStage[] }
 export interface OwnerPolicy { version: 1; repos: Record<string, RepoPolicy> }
 
 /** A policy key is OWNER/REPO, or OWNER/* for every repository of exactly that owner. No other wildcard exists. */
@@ -31,7 +35,7 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   else for (const [repo, v] of Object.entries(raw)) {
     const p = `repos.${repo}`;
     if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
-    const e = r.object(v, p, ['authMode', 'models']) ?? {};
+    const e = r.object(v, p, ['authMode', 'models'], ['agentDecisionStages']) ?? {};
     const authMode = r.literal(e.authMode, `${p}.authMode`, ['file-backed'] as const);
     const models = r.array(e.models, `${p}.models`, (m, q) => {
       const x = r.object(m, q, ['model', 'thinking', 'tier', 'roles']) ?? {};
@@ -41,7 +45,9 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
         roles: r.array(x.roles, `${q}.roles`, (role, rp) => r.literal(role, rp, FEATURE_ROLES)),
       };
     });
-    repos[repo] = {authMode, models};
+    const stages = e.agentDecisionStages === undefined ? undefined : r.array(e.agentDecisionStages, `${p}.agentDecisionStages`, (s, q) => r.literal(s, q, AGENT_DECISION_STAGES));
+    if (Array.isArray(e.agentDecisionStages) && e.agentDecisionStages.length !== new Set(e.agentDecisionStages).size) r.add('DUPLICATE_VALUE', `${p}.agentDecisionStages`, 'Each stage may appear once.');
+    repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {})};
   }
   return r.result({version: 1, repos});
 }
