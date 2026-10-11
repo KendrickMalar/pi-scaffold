@@ -98,6 +98,6 @@ npm test
 - **Herdr実機での引き継ぎ**：`python3 scripts/test-native-handoff.py --pi-gh <pi-gh> --pi-profile <pi-profile>`
 - **Herdr実機での下位監視**：`python3 scripts/test-native-watch.py --pi-gh <pi-gh> --pi-profile <pi-profile>`。一時的なエラーへの「続けて」が1回だけ届くこと、親の `/reload` 後もタイマーが1本であること、下位の `/new` で送らずに監視が終わることを確かめます。60秒ごとの確認を待つため、10分ほどかかります。
 - **全工程を通す試験**：`python3 scripts/test-native-workflow.py --pi-gh <pi-gh> --pi-profile <pi-profile>`
-  - Herdrを使う2つは、専用のherdr session `pst`で実行します。終了後にセッションを停止し、一時ディレクトリを削除します。
+  - Herdrを使う3つは、専用のherdr session `pst`で実行します。終了後にセッションを停止し、一時ディレクトリを削除します。
 
 起動中のPiは、pi-ghやpi-scaffoldを入れ替えたら再起動しないと新しい版を読み込みません。
