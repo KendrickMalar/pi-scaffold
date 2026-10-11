@@ -109,8 +109,8 @@ test('concurrent update and upsert on the same instance both persist; a failed w
 test('progress fields with the wrong type make the record malformed', async t => {
   const r = await registry(t);
   await mkdir(dirname(r.path), {recursive: true, mode: 0o700});
-  const bad = [{pendingRetryAt: 'soon'}, {pendingErrorAt: null}, {exhaustedErrorAt: 'x'}, {lastNoticeKey: 7}];
-  const watches = [{entry: entry(), progress: {...INITIAL_PROGRESS, pendingRetryAt: 1, pendingErrorAt: 2, exhaustedErrorAt: 3, lastNoticeKey: 'k'}},
+  const bad = [{pendingRetryAt: 'soon'}, {pendingErrorAt: null}, {exhaustedErrorAt: 'x'}, {endedAt: 'x'}, {lastNoticeKey: 7}];
+  const watches = [{entry: entry(), progress: {...INITIAL_PROGRESS, pendingRetryAt: 1, pendingErrorAt: 2, exhaustedErrorAt: 3, endedAt: 4, lastNoticeKey: 'k'}},
     ...bad.map((p, i) => ({entry: entry(`w9:p${i + 10}`), progress: {...INITIAL_PROGRESS, ...p}}))];
   await writeFile(r.path, JSON.stringify({version: 1, watches}), {mode: 0o600});
   const loaded = await r.load();

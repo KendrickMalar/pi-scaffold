@@ -113,7 +113,7 @@ export class StageWatcher {
     switch (pane.status) {
       case 'working': return {kind: 'working'};
       case 'blocked': return {kind: 'blocked'};
-      case 'idle': case 'done': return {kind: 'idle', tail: await this.deps.readTail(entry)};
+      case 'idle': case 'done': return {kind: 'idle', tail: await this.deps.readTail(entry), sessionConfirmed: pane.session !== undefined};
       default: return {kind: 'unclear', reason: `status-${pane.status ?? 'none'}`};
     }
   }
@@ -121,6 +121,8 @@ export class StageWatcher {
   private async check(record: WatchRecord): Promise<void> {
     const {entry} = record;
     const key = `${entry.paneId}\u0000${entry.targetSessionId}`;
+    // Ended earlier but not yet removed: only finish the removal. Observing it again could act on a stale watch.
+    if (record.progress.endedAt !== undefined || this.ended.has(key)) { await this.deps.registry.remove(entry); this.ended.delete(key); return; }
     const {actions, next} = decide(entry, record.progress, await this.observe(entry), this.deps.now());
     const ending = actions.some(a => a.type === 'stop');
     let progress: WatchProgress = next;
@@ -130,7 +132,7 @@ export class StageWatcher {
       else {
         // Re-check right before typing into the child: someone may have moved it on since the observation.
         const again = await this.observe(entry);
-        if (again.kind !== 'idle' || again.tail.kind !== 'error' || again.tail.at !== action.errorAt) {
+        if (again.kind !== 'idle' || !again.sessionConfirmed || again.tail.kind !== 'error' || again.tail.at !== action.errorAt) {
           // Drop the schedule too: a later error must get its own announced wait, never this one's.
           progress = {...record.progress, pendingRetryAt: undefined, pendingErrorAt: undefined};
           continue;
@@ -151,7 +153,15 @@ export class StageWatcher {
         }
       }
     }
-    if (ending) { this.ended.add(key); await this.deps.registry.remove(entry); this.ended.delete(key); return; }
+    if (ending) {
+      this.ended.add(key);
+      // Mark it ended (schedule already cleared) before removing: if the removal fails, the record that stays behind
+      // can never be acted on, not even by a restarted parent. A failed mark is covered by `ended` for this process.
+      try { await this.deps.registry.update({entry, progress: {...progress, endedAt: this.deps.now()}}); } catch { /* the removal below reports */ }
+      await this.deps.registry.remove(entry);
+      this.ended.delete(key);
+      return;
+    }
     if (!isDeepStrictEqual(stripUndefined(progress), stripUndefined(record.progress))) await this.deps.registry.update({entry, progress});
   }
 }
