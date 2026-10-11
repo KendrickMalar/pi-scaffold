@@ -8,7 +8,7 @@ export function createTool(runtime: ScaffoldRuntime) {
     name: WAVES_VERIFY,
     label: 'Scaffold: Wave割り当ての検証',
     description: 'Read-only check of an Epic\'s execution Waves: every native Feature (closed included) has exactly one Wave 1–200; each dependency '
-      + 'from→to has wave(from) < wave(to); Features sharing a Wave do not edit overlapping paths or shared manifests/lockfiles/state '
+      + 'from→to has wave(from) < wave(to); Features sharing a Wave do not edit overlapping paths or globs (anything not provably disjoint overlaps) or shared manifests/lockfiles/state '
       + '(migrations, workflows, schema), and undecidable edit scopes never pass; labels show exactly one canonical "Wave: N" matching the plan; '
       + 'GitHub dependencies equal the saved dependency plan. Checks the given plan or the Epic\'s saved one. Changes during reading never pass. '
       + 'Never fixes, labels or touches Projects. Call this first to get the digests a plan must carry: data.dependencyDigest (from the Epic\'s saved '

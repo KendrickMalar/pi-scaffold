@@ -30,7 +30,8 @@ description: Scaffold工程（setup→specification→basic-design→implementat
 3. **basic-design**
    - 設計書をコミットします。
    - `scaffold_feature_create` で、Featureを1件ずつ作ります。
-   - `editScope` には、リポジトリ相対のディレクトリかファイルのパスを書きます（例: `src`、`src/a.ts`）。空・ルート（`.`）・glob（`src/**`、`*`）・絶対パス（`/`）・`..` を含むパスは、Wave計画で並行可否を判定できないため、`UNKNOWN_SCOPE` で作成前に止まります。Featureを後から直すツールはないので、`src/**` ではなく `src` のように書きます。
+   - `editScope` には、リポジトリ相対のディレクトリ・ファイル・glob を書きます（例: `src`、`src/a.ts`、`src/**/*.ts`）。ルート（`.`）も書けます。空・絶対パス（`/`）・`..`・バックスラッシュ・制御文字・末尾がドットか空白の区切りは、`UNKNOWN_SCOPE` で作成前に止まります。
+   - glob は、互いに重ならないと示せない限り、同じWaveでは競合とみなされます。広いglob（`src/**`、`*.md` などルート直下から始まるもの）は共有のmanifest・stateにも触れうるとみなされ、並行しにくくなります。ディレクトリ全体なら `src/**` より `src` と書き、並行させたいFeatureは `src/a` と `src/b`、`src/**/*.ts` と `src/**/*.css` のように、重ならないと分かる形で書きます。Featureを後から直すツールはありません。
    - `scaffold_dependencies_apply` で、全Featureの依存を登録します。このとき **`design`（設計書の path / sha256 / コミット）を必ず渡します**。Epicに設計書の参照が無いと、実装工程へは引き継げません（`DESIGN_UNSET`）。
    - Wave計画（`plan`）には `dependencyDigest` と `featureSetDigest` が必要です。**先に `scaffold_waves_verify` を呼んで digest を得ます**（`plan` なしで呼べば、計画が未保存でも `data` に2つが返ります）。`scaffold_dependencies_apply` の結果の `dependencyDigest` も同じ値です。digest を自分で計算したり、パッケージの内部を読んだりしません。
    - 返った digest を入れた計画を `scaffold_waves_verify` で確かめ、`scaffold_waves_apply` で反映します。`dependencyDigest` が null（`DEPENDENCY_PLAN_UNSET`）なら、先に依存を登録します。

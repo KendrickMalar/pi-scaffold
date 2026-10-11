@@ -1,27 +1,28 @@
 // #13 Wave plan validation (pure, read-only). Every Feature (closed included) gets exactly one Wave 1–200; a dependency
-// from→to needs wave(from) < wave(to); Features sharing a Wave must not overlap in what they edit. Undecidable edit
-// scopes never count as parallel-safe.
+// from→to needs wave(from) < wave(to); Features sharing a Wave must not overlap in what they edit (paths and globs;
+// anything not provably disjoint overlaps). Undecidable edit scopes never count as parallel-safe.
+import {matchesGlob} from 'node:path';
 import {StrictReader, problem, readWavePlan, type Problem, type WaveCheck, type WavePlan, type Sha256} from './contracts.js';
 
 export interface WaveFeature { issue: number; featureKey: string; editScope: readonly string[]; labels: readonly string[] }
 export interface WaveEdge { from: number; to: number }
 
+const GLOB = /[*?[\]{}]/;
 /**
- * Repo-relative, slash-normalized path without a trailing slash; undefined when it cannot be judged safely
- * (globs, absolute, "..", control/zero-width characters, segments ending in a dot or space).
+ * Repo-relative, slash-normalized path or glob (`*`, `**`, `?`, `[...]`, `{a,b}`) without a trailing slash; the repository
+ * root is ".". Undefined when it cannot be judged safely (empty, absolute, "..", backslash, control/zero-width
+ * characters, segments ending in a dot or space).
  */
 export function normalizeScope(raw: string): string | undefined {
-  if (typeof raw !== 'string' || !raw.trim() || /[\\*?[\]{}]/.test(raw) || raw.startsWith('/') || /[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202f\u2060\ufeff]/.test(raw)) return undefined;
+  if (typeof raw !== 'string' || !raw.trim() || raw.includes('\\') || raw.startsWith('/') || /[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202f\u2060\ufeff]/.test(raw)) return undefined;
   const parts = raw.split('/').filter(p => p !== '' && p !== '.');
-  if (!parts.length || parts.includes('..') || parts.some(p => /[.\s]$/.test(p) || /^\s/.test(p))) return undefined;
-  return parts.join('/');
+  if (parts.includes('..') || parts.some(p => /[.\s]$/.test(p) || /^\s/.test(p))) return undefined;
+  return parts.length ? parts.join('/') : '.';
 }
-/** A fix to suggest for an entry normalizeScope rejects: the directory in front of a glob, or a repo-relative path. */
+/** A repo-relative path to suggest for an entry normalizeScope rejects. */
 function scopeSuggestion(raw: string): string {
-  const parts = raw.split('/').filter(p => p !== '' && p !== '.');
-  const glob = parts.findIndex(p => /[\\*?[\]{}]/.test(p));
-  const fix = normalizeScope((glob === -1 ? parts : parts.slice(0, glob)).join('/'));
-  return fix && fix !== raw ? fix : 'src';
+  const fix = normalizeScope(raw.replace(/\\/g, '/').split('/').filter(p => p && p !== '..' && !/[\u0000-\u001f\u007f\u200b-\u200f\u2028-\u202f\u2060\ufeff]/.test(p)).map(p => p.replace(/[.\s]+$/, '').replace(/^\s+/, '')).join('/'));
+  return fix && fix !== '.' && fix !== raw ? fix : 'src';
 }
 /**
  * The one judgement of an edit scope that scaffold_waves_verify relies on: every entry must pass normalizeScope and the
@@ -29,21 +30,91 @@ function scopeSuggestion(raw: string): string {
  * scope), so tools that accept an editScope can refuse it before anything is written.
  */
 export function editScopeProblems(editScope: readonly string[], path: string): Problem[] {
-  if (!editScope.length) return [problem('UNKNOWN_SCOPE', path, 'Name at least one repo-relative directory or file path, such as `src`.')];
+  if (!editScope.length) return [problem('UNKNOWN_SCOPE', path, 'Name at least one repo-relative path or pattern, such as `src` or `src/**/*.ts`.')];
   return editScope.flatMap((raw, i) => normalizeScope(raw) !== undefined ? [] : [problem('UNKNOWN_SCOPE', `${path}[${i}]`,
-    `${JSON.stringify(raw)} cannot be judged by scaffold_waves_verify (empty, root, glob, absolute or ".."); use a repo-relative directory or file path such as \`${scopeSuggestion(raw)}\` instead.`)]);
+    `${JSON.stringify(raw)} cannot be judged by scaffold_waves_verify (empty, absolute, "..", a backslash, a control or zero-width character, or a segment ending in a dot or space); use a repo-relative path or pattern such as \`${scopeSuggestion(raw)}\` instead.`)]);
 }
 /** Comparison form: case-folded NFC (macOS/Windows file systems are case-insensitive; NFC/NFD name the same file). */
 const fold = (p: string) => p.normalize('NFC').toLowerCase();
-const overlaps = (a: string, b: string) => { const x = fold(a), y = fold(b); return x === y || x.startsWith(y + '/') || y.startsWith(x + '/'); };
+const segs = (p: string) => p === '.' || p === '' ? [] : p.split('/');
+const isGlob = (p: string) => GLOB.test(p);
+/** Segments in front of the first segment holding a glob character ("" for the root). */
+export function scopePrefix(scope: string): string {
+  const s = segs(scope), i = s.findIndex(isGlob);
+  return (i === -1 ? s : s.slice(0, i)).join('/');
+}
+const within = (x: string, dir: string) => dir === '' || x === dir || x.startsWith(dir + '/');
+const related = (x: string, y: string) => within(x, y) || within(y, x);
+/** matchesGlob that also lets `*`/`**` match dot-named segments below the literal prefix (conservative). */
+function globMatch(file: string, glob: string): boolean {
+  if (matchesGlob(file, glob)) return true;
+  const n = segs(scopePrefix(glob)).length, f = file.split('/');
+  return f.slice(n).some(p => p.startsWith('.')) && matchesGlob([...f.slice(0, n), ...f.slice(n).map(p => p.replace(/^\./, '_'))].join('/'), glob);
+}
+/** Whether a repo file lies in a scope: under a literal path, or matching a glob itself or through a matching directory. */
+export function inScope(file: string, scope: string): boolean {
+  const f = fold(file), s = fold(scope);
+  if (s === '.') return true;
+  if (!isGlob(s)) return within(f, s);
+  if (!within(f, scopePrefix(s))) return false;
+  const parts = f.split('/');
+  return parts.some((_, i) => globMatch(parts.slice(0, i + 1).join('/'), s));
+}
+/** Literal suffix of a last segment of the form `*<suffix>` (one leading `*`, nothing else glob-like). */
+const starSuffix = (glob: string) => { const m = /^\*([^*?[\]{}]+)$/.exec(segs(glob).at(-1) ?? ''); return m?.[1]; };
+/**
+ * Whether two scopes may name the same file. Anything not provably disjoint overlaps. `isFile(p)` is true when the
+ * repository shows the literal path p is a file (so it cannot hold glob matches).
+ */
+function overlaps(a: string, b: string, isFile: (p: string) => boolean): boolean {
+  const x = fold(a), y = fold(b);
+  if (x === '.' || y === '.') return true;
+  const gx = isGlob(x), gy = isGlob(y);
+  if (!gx && !gy) return related(x, y);
+  if (!related(scopePrefix(x), scopePrefix(y))) return false;
+  if (gx && gy) { const sx = starSuffix(x), sy = starSuffix(y); return !(sx && sy && !sx.endsWith(sy) && !sy.endsWith(sx)); }
+  const [lit, glob, raw] = gx ? [y, x, b] : [x, y, a];
+  if (within(scopePrefix(glob), lit) || inScope(lit, glob)) return true;
+  return !isFile(raw);
+}
 
 /** Files every package/manifest change touches together (shared lockfiles), and shared state. */
 const MANIFEST = /^(\.npmrc|\.yarnrc(\.yml)?|go\.work\.sum|flake\.(nix|lock)|packages\.lock\.json|directory\.(packages|build)\.props|.+\.(csproj|fsproj|vbproj)|package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|deno\.jsonc?|deno\.lock|tsconfig(\..+)?\.json|Cargo\.(toml|lock)|go\.(mod|sum|work)|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|requirements(-.+)?\.txt|setup\.(py|cfg)|Gemfile(\.lock)?|composer\.(json|lock)|pom\.xml|build\.gradle(\.kts)?|settings\.gradle(\.kts)?|gradle\.lockfile|Package\.(swift|resolved)|mix\.(exs|lock)|pubspec\.(yaml|lock))$/i;
+/** Representative names of every MANIFEST alternative, to ask whether a glob's last segment could name one. */
+const MANIFEST_NAMES = ['.npmrc', '.yarnrc', '.yarnrc.yml', 'go.work.sum', 'flake.nix', 'flake.lock', 'packages.lock.json', 'directory.packages.props', 'directory.build.props', 'app.csproj', 'app.fsproj', 'app.vbproj', 'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'yarn.lock', 'bun.lock', 'bun.lockb', 'deno.json', 'deno.jsonc', 'deno.lock', 'tsconfig.json', 'tsconfig.build.json', 'cargo.toml', 'cargo.lock', 'go.mod', 'go.sum', 'go.work', 'pyproject.toml', 'poetry.lock', 'uv.lock', 'pipfile', 'pipfile.lock', 'requirements.txt', 'requirements-dev.txt', 'setup.py', 'setup.cfg', 'gemfile', 'gemfile.lock', 'composer.json', 'composer.lock', 'pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'gradle.lockfile', 'package.swift', 'package.resolved', 'mix.exs', 'mix.lock', 'pubspec.yaml', 'pubspec.lock'];
+const STATE_NAMES = ['schema.prisma', 'schema.sql', 'schema.rb', 'schema.graphql', 'structure.sql'];
 const isState = (raw: string) => { const p = fold(raw); return p.split('/').some(s => s === 'migrations' || s === 'migrate') || p === '.github/workflows' || p.startsWith('.github/workflows/') || /(^|\/)(schema\.(prisma|sql|rb|graphql)|structure\.sql)$/.test(p); };
 const kindOf = (p: string): 'manifest' | 'state' | undefined => MANIFEST.test(p.split('/').at(-1)!) ? 'manifest' : isState(p) ? 'state' : undefined;
+/**
+ * Whether a glob could name a shared manifest/state file by its shape alone (files that do not exist yet included):
+ * a manifest name for its last segment; for state a root prefix, a prefix around `.github/workflows`, a non-`**`
+ * segment that can be `migrations`/`migrate`, or a last segment that can be a schema file.
+ */
+function globCouldBe(glob: string, k: 'manifest' | 'state'): boolean {
+  const g = fold(glob), last = segs(g).at(-1)!, prefix = scopePrefix(g);
+  // Free-form names (*.csproj …) are also tried with the segment's own literal lead.
+  const lead = /^[^*?[\]{}]*/.exec(last)![0];
+  if (k === 'manifest') return isGlob(last) ? [...MANIFEST_NAMES, ...['csproj', 'fsproj', 'vbproj'].flatMap(e => [`${lead}.${e}`, `${lead}x.${e}`])].some(n => globMatch(n, last)) : kindOf(g) === 'manifest';
+  if (prefix === '' || isState(prefix) || related(prefix, '.github/workflows')) return true;
+  return segs(g).slice(segs(prefix).length).some(s => s !== '**' && ['migrations', 'migrate'].some(n => globMatch(n, s))) || STATE_NAMES.some(n => globMatch(n, last));
+}
 
 /** Files inside a scope as the repository has them (a file scope may return itself or nothing). */
 export type ScopeContents = (scope: string) => readonly string[];
+
+/**
+ * Contents of every judgeable scope, keyed by its normalized form: the tree is listed once per literal prefix (the
+ * repository root as ".") and globs keep only the files inScope.
+ */
+export async function readScopeContents(editScopes: readonly (readonly string[])[], list: (path: string) => Promise<readonly string[] | undefined>): Promise<Map<string, readonly string[]>> {
+  const listed = new Map<string, readonly string[]>(), out = new Map<string, readonly string[]>();
+  for (const scope of new Set(editScopes.flatMap(s => s.map(normalizeScope).filter((x): x is string => !!x)))) {
+    const at = isGlob(scope) ? scopePrefix(scope) || '.' : scope;
+    if (!listed.has(at)) listed.set(at, (await list(at)) ?? []);
+    out.set(scope, isGlob(scope) ? listed.get(at)!.filter(f => inScope(f, scope)) : listed.get(at)!);
+  }
+  return out;
+}
 
 export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeature[], edges: readonly WaveEdge[], digests: {featureSetDigest: Sha256; dependencyDigest: Sha256 | null}, contents: ScopeContents = () => []): WaveCheck {
   const checks: string[] = [], problems: Problem[] = [];
@@ -73,18 +144,19 @@ export function validateWavePlan(rawPlan: unknown, features: readonly WaveFeatur
   checks.push('dependency-order');
   const scopes = new Map<number, string[]>();
   for (const f of features) {
-    if (editScopeProblems(f.editScope, '').length) problems.push(problem('UNKNOWN_SCOPE', `features[#${f.issue}].editScope`, `${f.featureKey}'s edit scope cannot be judged (empty, root, glob, absolute or ".."); it is never treated as parallel-safe.`));
+    if (editScopeProblems(f.editScope, '').length) problems.push(problem('UNKNOWN_SCOPE', `features[#${f.issue}].editScope`, `${f.featureKey}'s edit scope cannot be judged (empty, absolute, "..", a backslash, a control or zero-width character, or a segment ending in a dot or space); it is never treated as parallel-safe.`));
     else scopes.set(f.issue, f.editScope.map(normalizeScope) as string[]);
   }
+  const isFile = (p: string) => { const c = contents(p); return c.length === 1 && fold(c[0]!) === fold(p); };
   const byWave = new Map<number, number[]>();
   for (const [issue, w] of wave) byWave.set(w, [...(byWave.get(w) ?? []), issue]);
   for (const [w, issues] of byWave) {
     for (let i = 0; i < issues.length; i++) for (let j = i + 1; j < issues.length; j++) {
       const a = scopes.get(issues[i]!), b = scopes.get(issues[j]!);
       if (!a || !b) continue;
-      const path = a.flatMap(x => b.filter(y => overlaps(x, y)).map(y => `${x} / ${y}`))[0];
-      // A directory scope touches whatever shared files it holds in the repository.
-      const touches = (scope: string[], k: 'manifest' | 'state') => scope.some(x => kindOf(x) === k || contents(x).some(f => kindOf(f) === k));
+      const path = a.flatMap(x => b.filter(y => overlaps(x, y, isFile)).map(y => `${x} / ${y}`))[0];
+      // A directory scope touches whatever shared files it holds in the repository; a glob also whatever it could name.
+      const touches = (scope: string[], k: 'manifest' | 'state') => scope.some(x => x === '.' || (isGlob(x) ? globCouldBe(x, k) : kindOf(x) === k) || contents(x).some(f => kindOf(f) === k));
       const shared = (['manifest', 'state'] as const).find(k => touches(a, k) && touches(b, k));
       if (path || shared) problems.push(problem('EDIT_CONFLICT', `wave ${w}`, `#${issues[i]} and #${issues[j]} share Wave ${w} but ${path ? `edit overlapping paths (${path})` : `both change shared ${shared === 'manifest' ? 'manifests/lockfiles' : 'state (migrations, workflows, schema)'}`}.`));
     }

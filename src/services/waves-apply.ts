@@ -13,7 +13,7 @@ import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {labelDefinitions} from '../core/label-definitions.js';
 import {prepareLabelEdit, waveLabelName} from '../core/label-policy.js';
-import {canonicalWavePlan, checkWaveLabels, isWaveLike, normalizeScope, validateWavePlan, type WaveEdge} from '../core/wave-plan.js';
+import {canonicalWavePlan, checkWaveLabels, isWaveLike, readScopeContents, validateWavePlan, type WaveEdge} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
@@ -77,8 +77,7 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
     }
   }
   const graph = validateDependencyGraph(edges, epic.dependencyPlan!, features.map(f => ({issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope})));
-  const tree = new Map<string, readonly string[]>();
-  for (const scope of new Set(features.flatMap(f => f.doc.editScope.map(normalizeScope).filter((x): x is string => !!x)))) tree.set(scope, (await call.runtime.git.listTree('HEAD', scope, repoOnly.value.repoRoot)) ?? []);
+  const tree = await readScopeContents(features.map(f => f.doc.editScope), path => call.runtime.git.listTree('HEAD', path, repoOnly.value.repoRoot));
   const check = validateWavePlan(input.plan, features.map(f => ({issue: f.number, featureKey: f.doc.featureKey, editScope: f.doc.editScope, labels: f.labels})), edges,
     {featureSetDigest: set.value.featureSetDigest, dependencyDigest: dependencyPlanDigest(epic.dependencyPlan)}, s => tree.get(s) ?? []);
   if (graph.status !== 'validated' || !check.passed) return blocked([...graph.problems, ...check.problems]);

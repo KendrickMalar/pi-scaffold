@@ -14,8 +14,9 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'basic-tier coding-manager/coder/tester bindings allowed by the owner policy, and a design document that exists at gitRef with the given sha256. '
       + 'Creates the Issue with the pi-gh task template under the real Epic (labels Type: Scaffold, Scope: Feature, Stage: BasicDesign), attaches it as '
       + 'a native sub-issue and reads it back. Never edits the Epic, starts agents or changes models. Re-running the same operationId never posts twice. '
-      + 'editScope lists repo-relative directory or file paths (e.g. "src", "src/a.ts"). Empty, root ("."), glob ("src/**", "*"), absolute ("/") '
-      + 'and ".." entries cannot be judged by scaffold_waves_verify, so each is refused as UNKNOWN_SCOPE before anything is written; use "src", not "src/**".',
+      + 'editScope lists repo-relative directory or file paths or globs (e.g. "src", "src/a.ts", "src/**/*.ts"; root "." is allowed). Empty, absolute ("/"), '
+      + '"..", backslash, control/zero-width characters and segments ending in a dot or space are refused as UNKNOWN_SCOPE before anything is written. '
+      + 'scaffold_waves_verify treats globs it cannot prove disjoint as overlapping, so prefer "src" over "src/**".',
     parameters: Type.Object({
       ...mutationInputFields,
       featureKey: Type.String({pattern: '^F[0-9]{3,}$'}),

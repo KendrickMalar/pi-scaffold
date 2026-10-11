@@ -6,8 +6,8 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 
 ## 導入
 
-- npm版：`pi install npm:@papillon6814/pi-scaffold@0.4.1`。
-- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.4.1`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.5.0`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.5.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
 - 同じProfileにpi-gh 0.5.0以上も必要です。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
@@ -25,9 +25,9 @@ Epicは `setup → specification → basic-design → implementation → verific
 | specification | `scaffold_research_begin` | 調査項目の担当（claim）を取り、調査指示（brief）を返す。調査の実行やモデル呼び出しはしない |
 | specification | `scaffold_research_resolve` | 根拠（https URL、またはハッシュ付きの手元ファイル）のある結果を反映する。結果をREQ/AC/Dへ自動で昇格しない |
 | specification→basic-design | `scaffold_handoff_basic_design` | 仕様がそろっていることを確認し、**親TUIで仕様の内容承認**を得てから引き継ぐ |
-| basic-design | `scaffold_feature_create` | Featureを1件作る。pi-ghのtaskテンプレートで作成し、Epicのnative sub-issueとして接続する。`editScope`はリポジトリ相対のディレクトリかファイル（例: `src`、`src/a.ts`）。空・ルート・glob・絶対パス・`..`は`scaffold_waves_verify`で判定できないため、GitHubに書く前に`UNKNOWN_SCOPE`で止まる（`src/**`ではなく`src`と書く） |
+| basic-design | `scaffold_feature_create` | Featureを1件作る。pi-ghのtaskテンプレートで作成し、Epicのnative sub-issueとして接続する。`editScope`はリポジトリ相対のディレクトリ・ファイル・glob（例: `src`、`src/a.ts`、`src/**/*.ts`、`{a,b}`、`[ab]`、`?`）。ルート（`.`、`./`、`**`）も書ける。空・絶対パス・`..`・バックスラッシュ・制御文字/ゼロ幅文字・末尾がドットか空白の区切りは、GitHubに書く前に`UNKNOWN_SCOPE`で止まる |
 | basic-design | `scaffold_dependencies_apply` | Feature間の依存を検査し（循環・未知・自己辺、判定できない`editScope`）、足りない依存だけを追加する。計画と固定IDのMermaid図をEpicに保存する。`design`（設計書のpath/sha256/コミット。手元のgitで確認）を渡すと、Epicの基本設計の参照も同じ更新で保存する（実装工程への引き継ぎに必要）。結果の`dependencyDigest`は、Wave計画に入れる値 |
-| basic-design | `scaffold_waves_verify` | （読み取りのみ）Wave・依存順・同じWave内の編集競合・ラベルを検証する。合格しない場合も、Wave計画に入れる`dependencyDigest`と`featureSetDigest`を`data`に返す。依存計画が未保存なら`dependencyDigest`はnullで、`DEPENDENCY_PLAN_UNSET`を返す |
+| basic-design | `scaffold_waves_verify` | （読み取りのみ）Wave・依存順・同じWave内の編集競合・ラベルを検証する。globの重なりは、互いに重ならないと示せない限り重なりとみなす（例: `src/**/*.ts`と`src/**/*.css`は並行可、`src/**`と`src/a.ts`・ルートと何でもは競合）。globが共有のmanifest/lockfile・state（migrations、workflows、schema）に触れうる場合も競合とみなす。合格しない場合も、Wave計画に入れる`dependencyDigest`と`featureSetDigest`を`data`に返す。依存計画が未保存なら`dependencyDigest`はnullで、`DEPENDENCY_PLAN_UNSET`を返す |
 | basic-design | `scaffold_waves_apply` | 検証を通ったWave計画をFeatureのラベルへ反映し、計画をEpicに保存する。計画の2つのdigestは、先に`scaffold_waves_verify`を呼んで得る |
 | basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**親TUIで実装開始の指示**を得てから引き継ぐ |
 | implementation→verification | `scaffold_handoff_verification` | 統合コミットと、FeatureごとのAC別の証拠（レポート・ログのハッシュ）を固定して引き継ぐ。Epicは閉じない |
