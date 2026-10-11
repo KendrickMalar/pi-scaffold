@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {validateWavePlan, checkWaveLabels, normalizeScope, type WaveFeature} from '../src/core/wave-plan.js';
+import {validateWavePlan, checkWaveLabels, normalizeScope, editScopeProblems, readScopeContents, type WaveFeature} from '../src/core/wave-plan.js';
 import {SHA_A, SHA_B} from './helpers/docs.js';
 import type {WavePlan} from '../src/core/contracts.js';
 
@@ -71,7 +71,7 @@ test('conflicting paths in different Waves are fine', () => {
   assert.equal(c.passed, true, JSON.stringify(c.problems));
 });
 
-for (const [label, scope] of [['empty', []], ['root', ['.']], ['glob', ['src/**']], ['parent', ['../x']], ['absolute', ['/etc/x']], ['backslash', ['src\\x']]] as const) {
+for (const [label, scope] of [['empty', []], ['blank entry', ['  ']], ['parent', ['../x']], ['parent glob', ['src/../**']], ['absolute', ['/etc/x']], ['absolute glob', ['/src/**']], ['backslash', ['src\\x']]] as const) {
   test(`an undecidable edit scope (${label}) never passes`, () => {
     const c = validateWavePlan(planOf([[11, 1], [12, 2]]), [feat(11, [...scope]), feat(12, ['src/b/'])], [], digests);
     assert.equal(c.passed, false);
@@ -82,7 +82,114 @@ for (const [label, scope] of [['empty', []], ['root', ['.']], ['glob', ['src/**'
 test('scope normalization is repo-relative and stable', () => {
   assert.equal(normalizeScope('./src//a/'), 'src/a');
   assert.equal(normalizeScope('src/a'), 'src/a');
-  assert.equal(normalizeScope('src/**'), undefined);
+  assert.equal(normalizeScope('src/**'), 'src/**');
+  assert.equal(normalizeScope('./src//**/*.ts'), 'src/**/*.ts');
+  for (const root of ['.', './', './/']) assert.equal(normalizeScope(root), '.');
+  assert.equal(normalizeScope('**'), '**');
+  for (const bad of ['', ' ', '/x', '../x', 'a/../b', 'a\\b', 'src/*.', 'src/a /b']) assert.equal(normalizeScope(bad), undefined, bad);
+});
+
+for (const [label, scope] of [['root', ['.']], ['root slash', ['./']], ['all', ['**']], ['glob', ['src/**']], ['glob ext', ['src/**/*.ts']], ['char class', ['src/[ab].ts']], ['brace', ['src/{a,b}/x.ts']], ['question', ['src/?.ts']]] as const) {
+  test(`a ${label} edit scope is judgeable`, () => {
+    assert.deepEqual(editScopeProblems([...scope], 'editScope'), []);
+    const c = validateWavePlan(planOf([[11, 1], [12, 2]]), [feat(11, [...scope]), feat(12, ['src/b/'])], [], digests);
+    assert.ok(!codes(c).includes('UNKNOWN_SCOPE'), JSON.stringify(c.problems));
+  });
+}
+
+test('UNKNOWN_SCOPE messages no longer mention glob or root', () => {
+  const p = editScopeProblems(['../x'], 'editScope');
+  assert.equal(p.length, 1);
+  assert.doesNotMatch(p[0]!.message, /glob|root/);
+  const c = validateWavePlan(planOf([[11, 1], [12, 2]]), [feat(11, ['/x']), feat(12, ['src/b/'])], [], digests);
+  assert.doesNotMatch(c.problems.find(x => x.code === 'UNKNOWN_SCOPE')!.message, /glob|root/);
+});
+
+// ---- glob / root overlap --------------------------------------------------------------------------
+
+const sameWave = (a: readonly string[], b: readonly string[], contents?: (s: string) => readonly string[]) => validateWavePlan(planOf([[11, 1], [12, 1]]), [feat(11, [...a]), feat(12, [...b])], [], digests, contents);
+const conflict = (c: {problems: {code: string; message: string}[]}) => c.problems.find(p => p.code === 'EDIT_CONFLICT');
+
+for (const [label, a, b] of [
+  ['a glob and a disjoint directory', ['src/a/**/*.ts'], ['lib/b/']],
+  ['a glob and a disjoint glob', ['src/a/**/*.ts'], ['lib/**/*.ts']],
+  ['two globs with different extensions', ['src/**/*.ts'], ['src/**/*.css']],
+  ['nested globs with different extensions', ['src/**/*.ts'], ['src/ui/*.css']],
+] as const) {
+  test(`same Wave with ${label} passes`, () => {
+    const c = sameWave(a, b);
+    assert.equal(c.passed, true, JSON.stringify(c.problems));
+  });
+}
+
+for (const [label, a, b] of [
+  ['src/** and src/a.ts', ['src/**'], ['src/a.ts']],
+  ['src/*.ts and src/**', ['src/*.ts'], ['src/**']],
+  ['src/** and its own directory', ['src/**'], ['src']],
+  ['a directory above a glob', ['src'], ['src/ui/**/*.ts']],
+  ['the same glob', ['src/**/*.ts'], ['src/**/*.ts']],
+  ['suffixes that end with each other', ['src/**/*.ts'], ['src/**/*.d.ts']],
+  ['a brace glob and a literal it matches', ['src/{a,b}.ts'], ['src/b.ts']],
+  ['case-folded glob and literal', ['SRC/*.TS'], ['src/a.ts']],
+  ['root and a file', ['.'], ['docs/x.md']],
+  ['root slash and a glob', ['./'], ['docs/**/*.md']],
+  ['** and a file', ['**'], ['docs/x.md']],
+] as const) {
+  test(`same Wave with ${label} conflicts`, () => {
+    const c = sameWave(a, b);
+    assert.equal(c.passed, false, JSON.stringify(c.problems));
+    assert.ok(conflict(c), JSON.stringify(c.problems));
+  });
+}
+
+test('a literal under a glob prefix that does not match is disjoint only when the repository shows it is a file', () => {
+  const file = (s: string) => s === 'src/styles/a.css' ? ['src/styles/a.css'] : [];
+  assert.equal(sameWave(['src/**/*.ts'], ['src/styles/a.css'], file).passed, true, 'a non-matching file is disjoint');
+  assert.ok(conflict(sameWave(['src/**/*.ts'], ['src/styles/a.css'])), 'unknown on disk: it may be a directory holding matches');
+  const dir = (s: string) => s === 'src/styles' ? ['src/styles/a.css', 'src/styles/b.ts'] : [];
+  assert.ok(conflict(sameWave(['src/**/*.ts'], ['src/styles'], dir)), 'a directory under the prefix may hold matches');
+  const inDir = (s: string) => s === 'src/a.d/x.ts' ? ['src/a.d/x.ts'] : [];
+  assert.ok(conflict(sameWave(['src/*.d'], ['src/a.d/x.ts'], inDir)), 'a glob matching a directory covers what it holds');
+});
+
+test('glob scopes count shared manifests/state like directories: by their literal parts and the files they match', () => {
+  assert.equal(sameWave(['src/a/**'], ['lib/**']).passed, true, 'globs over ordinary directories stay parallel');
+  assert.equal(sameWave(['src/**/*.ts'], ['lib/**/*.css']).passed, true);
+  assert.equal(sameWave(['config/*.json'], ['tsconfig.json'], s => s === 'tsconfig.json' ? [s] : []).passed, true, 'the shape alone does not count');
+  const sql = (s: string) => s === 'db/migrations/1.sql' ? ['db/migrations/1.sql'] : [];
+  assert.equal(sameWave(['*.md'], ['db/migrations/1.sql'], sql).passed, true, 'a root-level glob is not state by its shape');
+  const pkg = (s: string) => s === 'packages/a/package.json' ? [s] : [];
+  assert.match(conflict(sameWave(['**/package.json'], ['packages/a/package.json'], pkg))!.message, /package\.json/, 'a literal last segment');
+  const lock = (s: string) => s === 'pnpm-lock.yaml' ? ['pnpm-lock.yaml'] : [];
+  assert.match(conflict(sameWave(['**/package.json'], ['pnpm-lock.yaml'], lock))!.message, /manifests/);
+  assert.match(conflict(sameWave(['packages/*/package.json'], ['tools/x/Cargo.toml']))!.message, /manifests/);
+  const svc = (s: string) => s === 'svc/migrations/x.sql' ? [s] : [];
+  assert.match(conflict(sameWave(['db/migrations/**'], ['svc/migrations/x.sql'], svc))!.message, /state/, 'a state prefix');
+  assert.match(conflict(sameWave(['.github/workflows/*.yml'], ['ops/migrations/']))!.message, /state/);
+  assert.match(conflict(sameWave(['prisma/*/schema.prisma'], ['db/migrations/1.sql'], sql))!.message, /state/);
+  const existing = (s: string) => s === 'packages/*-ui' ? ['packages/web-ui/package.json'] : s === 'packages/b/package.json' ? [s] : [];
+  assert.match(conflict(sameWave(['packages/*-ui'], ['packages/b/package.json'], existing))!.message, /manifests/, 'an existing manifest the glob matches');
+  const lib = (s: string) => s === 'src/a/**' ? ['src/a/package.json'] : s === 'lib/**' ? ['lib/package.json'] : [];
+  assert.match(conflict(sameWave(['src/a/**'], ['lib/**'], lib))!.message, /manifests/, 'existing package.json under both globs');
+  assert.equal(sameWave(['packages/*-ui'], ['packages/b/package.json'], s => s === 'packages/b/package.json' ? [s] : []).passed, true, 'no manifest under the glob');
+  assert.ok(conflict(sameWave(['.'], ['package.json'])), 'root overlaps everything by path');
+});
+
+test('readScopeContents lists each scope once at its literal prefix (the repository root as ".") and filters globs', async () => {
+  const listed: string[] = [];
+  const files: Record<string, string[]> = {
+    '.': ['README.md', 'docs/a.md', '.github/workflows/ci.yml', 'src/a.ts'],
+    src: ['src/a.ts', 'src/ui/b.ts', 'src/ui/c.css', 'src/a.d/x.css'],
+    'src/a.ts': ['src/a.ts'],
+  };
+  const tree = await readScopeContents([['src/**/*.ts', 'src/a.ts', '.'], ['./src//**/*.ts', '**/*.yml', 'src/*.d', '../bad']], async path => { listed.push(path); return files[path]; });
+  assert.deepEqual([...listed].sort(), ['.', 'src', 'src/a.ts'], 'each listing path is read once');
+  assert.deepEqual(tree.get('src/**/*.ts'), ['src/a.ts', 'src/ui/b.ts']);
+  assert.deepEqual(tree.get('src/a.ts'), ['src/a.ts']);
+  assert.deepEqual(tree.get('.'), files['.']);
+  assert.deepEqual(tree.get('**/*.yml'), ['.github/workflows/ci.yml']);
+  assert.deepEqual(tree.get('src/*.d'), ['src/a.d/x.css']);
+  assert.equal(tree.has('../bad'), false);
 });
 
 test('labels: exactly one canonical "Wave: N" matching the plan', () => {

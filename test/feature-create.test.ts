@@ -99,7 +99,7 @@ for (const [label, change, path] of [
 
 // ---- editScope: the same judgement scaffold_waves_verify makes, before anything is written ------------
 
-for (const bad of ['src/**', '*', '', '.', '../x', '/'] as const) {
+for (const bad of ['', '  ', '../x', 'src/../**', '/', '/src/**', 'src\\x'] as const) {
   test(`editScope ${JSON.stringify(bad)} is blocked before any write and names the entry`, async t => {
     const gh = world();
     const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/export', bad]}));
@@ -112,26 +112,27 @@ for (const bad of ['src/**', '*', '', '.', '../x', '/'] as const) {
   });
 }
 
-test('a glob editScope suggests the directory to use instead', async t => {
+test('a refused editScope suggests a repo-relative path instead and no longer mentions glob or root', async t => {
   const gh = world();
-  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/**']}));
+  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['/src/**']}));
   assert.equal(out.r.status, 'blocked');
   const p = out.r.problems.find(x => x.code === 'UNKNOWN_SCOPE' && x.path === 'editScope[0]');
   assert.ok(p, JSON.stringify(out.r.problems));
-  assert.match(p.message, /^"src\/\*\*" cannot be judged by scaffold_waves_verify/);
-  assert.match(p.message, /such as `src`/);
+  assert.match(p.message, /^"\/src\/\*\*" cannot be judged by scaffold_waves_verify/);
+  assert.match(p.message, /such as `src\/\*\*`/);
+  assert.doesNotMatch(p.message, /glob|root/);
   assert.equal(gh.writes, 0);
 });
 
 test('every unjudgeable editScope entry is reported', async t => {
   const gh = world();
-  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['src/**', 'lib', '../x']}));
+  const out = await (await harness(t, gh)).invoke(base(gh, {editScope: ['/abs', 'src/**', '../x']}));
   assert.equal(out.r.status, 'blocked');
   assert.deepEqual(out.r.problems.filter(x => x.code === 'UNKNOWN_SCOPE').map(x => x.path), ['editScope[0]', 'editScope[2]']);
   assert.equal(gh.writes, 0);
 });
 
-for (const good of [['src'], ['src/a.ts']]) {
+for (const good of [['src'], ['src/a.ts'], ['src/**'], ['src/**/*.ts'], ['*'], ['.'], ['./'], ['**'], ['src/{a,b}/[xy]?.ts']]) {
   test(`editScope ${JSON.stringify(good)} is accepted`, async t => {
     const gh = world();
     const out = await (await harness(t, gh)).invoke(base(gh, {editScope: good}));

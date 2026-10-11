@@ -19,12 +19,12 @@ function epicDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
   return d;
 }
 const KEYS: Record<number, string> = {11: 'F001', 12: 'F002', 13: 'F003'};
-function world(opts: {epic?: EpicDocV1; closed?: number[]; labels?: string[]} = {}) {
+function world(opts: {epic?: EpicDocV1; closed?: number[]; labels?: string[]; scopes?: Record<number, string[]>} = {}) {
   const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: BEFORE + renderEpicBlock(epic), labels: opts.labels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [11, 12, 13]});
   for (const n of [11, 12, 13]) {
-    const f: FeatureDocV1 = {...featureDoc(), workflowId: epic.workflowId, featureKey: KEYS[n]!, parentEpic: 10, editScope: [`src/${KEYS[n]}/`], createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
+    const f: FeatureDocV1 = {...featureDoc(), workflowId: epic.workflowId, featureKey: KEYS[n]!, parentEpic: 10, editScope: opts.scopes?.[n] ?? [`src/${KEYS[n]}/`], createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
     gh.add({number: n, title: `Feature ${n}`, body: renderFeatureBlock(f), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state: opts.closed?.includes(n) ? 'closed' : 'open'});
   }
   gh.projects.set(PROJECT, []);
@@ -59,7 +59,7 @@ for (const [label, edges, code] of [
   });
 }
 
-for (const bad of ['src/**', '.', '../x', '/']) {
+for (const bad of ['../x', '/', '/src/**', 'src/../**', 'src\\x', ' ']) {
   test(`a plan node editScope ${JSON.stringify(bad)} that scaffold_waves_verify cannot judge is blocked with zero changes`, async t => {
     const gh = world(); const before = gh.issues.get(10)!.body;
     const p = params(gh); (p.plan as DependencyPlan).nodes[1] = {...node(12), editScope: [bad]};
@@ -70,6 +70,15 @@ for (const bad of ['src/**', '.', '../x', '/']) {
     noChanges(gh, before);
   });
 }
+
+test('glob and root plan node editScopes are accepted and saved', async t => {
+  const scopes: Record<number, string[]> = {11: ['src/**/*.ts'], 12: ['.'], 13: ['docs/{a,b}/*.md', '**/package.json']};
+  const gh = world({scopes});
+  const p = params(gh); (p.plan as DependencyPlan).nodes.forEach(n => { n.editScope = scopes[n.issue]!; });
+  const out = await (await harness(t, gh)).invoke(p);
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual(docOf(gh).dependencyPlan!.nodes.map(n => n.editScope), [11, 12, 13].map(n => scopes[n]));
+});
 
 test('a node of another Epic is blocked', async t => {
   const gh = world(); const before = gh.issues.get(10)!.body;

@@ -272,14 +272,25 @@ test('when nothing could be read consistently, both digests are null', async t =
   assert.equal(d.dependencyDigest, null); assert.equal(d.featureSetDigest, null);
 });
 
-test('a Feature created before editScope was checked still gets UNKNOWN_SCOPE (behaviour unchanged)', async t => {
-  const gh = world({scopes: {12: ['src/**']}});
+test('a Feature whose edit scope cannot be judged still gets UNKNOWN_SCOPE', async t => {
+  const gh = world({scopes: {12: ['../x']}});
   const out = await (await harness(t, gh)).invoke();
   const d = out.r.data as Data;
   assert.equal(d.passed, false);
   const p = out.r.problems.find(x => x.code === 'UNKNOWN_SCOPE');
   assert.ok(p, JSON.stringify(out.r.problems));
   assert.equal(p.path, 'features[#12].editScope');
-  assert.equal(p.message, 'F002\'s edit scope cannot be judged (empty, root, glob, absolute or ".."); it is never treated as parallel-safe.');
+  assert.equal(p.message, 'F002\'s edit scope cannot be judged (empty, absolute, "..", a backslash, a control or zero-width character, or a segment ending in a dot or space); it is never treated as parallel-safe.');
   assert.equal(writes(gh), 0);
+});
+
+test('glob edit scopes are judged with the repository listed at their literal prefix', async t => {
+  const conflicts = (out: {r: {problems: {code: string; message: string}[]}}) => out.r.problems.filter(p => p.code === 'EDIT_CONFLICT');
+  const scopes = {11: ['packages/*-ui'], 12: ['packages/b/package.json']};
+  const covered = await (await harness(t, world({scopes}), {tree: {packages: ['packages/web-ui/package.json', 'packages/b/package.json'], 'packages/b/package.json': ['packages/b/package.json']}})).invoke();
+  assert.ok(conflicts(covered).some(p => /#11 and #12/.test(p.message) && /manifests/.test(p.message)), JSON.stringify(covered.r.problems));
+  const filtered = await (await harness(t, world({scopes}), {tree: {packages: ['packages/b/package.json', 'packages/b/x.ts'], 'packages/b/package.json': ['packages/b/package.json']}})).invoke();
+  assert.deepEqual(conflicts(filtered), [], 'files the glob does not match are not counted');
+  const root = await (await harness(t, world({scopes: {11: ['**/*.ts'], 12: ['src/b/x.css']}}), {tree: {'.': ['src/a.ts'], 'src/b/x.css': ['src/b/x.css']}})).invoke();
+  assert.deepEqual(conflicts(root), [], 'a root-level glob is listed at the repository root');
 });

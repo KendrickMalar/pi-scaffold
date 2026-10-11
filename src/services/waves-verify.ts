@@ -3,7 +3,7 @@
 // Never fixes anything, creates labels or touches Projects.
 import {StrictReader, isRepoRef, problem, type Decoded, type EpicDocV1, type FeatureSnapshot, type Problem, type ScaffoldResult} from '../core/contracts.js';
 import {canonicalJson, dependencyPlanDigest, taggedDigest, wavePlanDigest} from '../core/digests.js';
-import {canonicalWavePlan, checkWaveLabels, normalizeScope, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
+import {canonicalWavePlan, checkWaveLabels, readScopeContents, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
@@ -93,11 +93,8 @@ async function verifyWavesInner(input: WavesVerifyInput, call: ToolCall): Promis
     const graph = validateDependencyGraph(edges, epic.dependencyPlan, features.map(f => ({issue: f.issue, featureKey: f.featureKey, editScope: f.editScope})));
     problems.push(...graph.problems.filter(p => p.code !== 'UNDECLARED_EDGE'));
   }
-  // Directory scopes are expanded with the local repository so shared manifests/state inside them count.
-  const tree = new Map<string, readonly string[]>();
-  for (const scope of new Set(features.flatMap(f => f.editScope.map(normalizeScope).filter((x): x is string => !!x)))) {
-    tree.set(scope, (await call.runtime.git.listTree('HEAD', scope, repoOnly.value.repoRoot)) ?? []);
-  }
+  // Directory and glob scopes are expanded with the local repository so shared manifests/state inside them count.
+  const tree = await readScopeContents(features.map(f => f.editScope), path => call.runtime.git.listTree('HEAD', path, repoOnly.value.repoRoot));
   const rawPlan = input.plan !== undefined ? input.plan : epic.wavePlan;
   const dependencyDigest = dependencyPlanDigest(epic.dependencyPlan);
   const check = validateWavePlan(rawPlan, features, edges, {featureSetDigest: second.featureSetDigest, dependencyDigest}, s => tree.get(s) ?? []);
