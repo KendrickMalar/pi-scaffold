@@ -6,8 +6,8 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 
 ## 導入
 
-- npm版：`pi install npm:@papillon6814/pi-scaffold@0.5.0`。
-- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.5.0`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
+- npm版：`pi install npm:@papillon6814/pi-scaffold@0.5.1`。
+- Developmentだけで使う場合：`pi-profile packages add --profile developer npm:@papillon6814/pi-scaffold@0.5.1`、`pi-profile packages install --profile developer`。共通settingsへは追加しません。
 - 同じProfileにpi-gh 0.5.0以上も必要です。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
@@ -45,7 +45,7 @@ Epicは `setup → specification → basic-design → implementation → verific
   - その工程で起きる内容承認（検証工程の最終受け入れなど）は、確認画面を出さずに親エージェントが記録します。headlessの親でも記録できます（人間がいない前提のため）。記録には`approvedBy: "agent"`と`stage`が入り、ツール結果の`data.agentApproval`（`kind`・`stage`・`viewDigest`）で分かります。これらの項目が無い既存の記録も、引き続き有効です。
   - 止まっている引き継ぎの放棄（`HANDOFF_IN_PROGRESS`）も、確認画面なしで親エージェントが行います。結果の`data.agentAbandoned`に放棄したoperationIdが入ります。
   - 子セッション（subagent）は、どの工程でも承認を記録できません。
-  - 実際のPiでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止め、自分で判断して記録するよう伝えます。`tool_call`を出さないホスト（Claude Code上のclaude-scaffoldなど）ではこの遮断は効きませんが、承認の扱いは同じです。
+  - 実際のPiでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止め、自分で判断して記録するよう伝えます。ただし、すべての質問文の先頭が`【事前作業】`の呼び出し（人にしかできない事前作業の依頼）は通します（`ask_user`は`question`、`AskUserQuestion`は`questions[].question`を見ます）。判断を求める質問は止めます。`tool_call`を出さないホスト（Claude Code上のclaude-scaffoldなど）ではこの遮断は効きませんが、承認の扱いは同じです。
 - **operationId**：書き込みのあるツールは、手順ごとにjournalへ記録します。同じoperationIdでの再実行は、続きから再開するか`noop`を返します。別の内容で同じoperationIdを使うと止まります。結果が分からない書き込みは、GitHubを読み直して照合してから進め、むやみに再送しません。
 - **結果のstatus**：`validated` `prepared` `applied` `noop` `blocked` `partial` `unknown` `cancelled` の8種類です。
   - `partial`と`unknown`は`resumeToken`（＝operationId）付きで返します。同じoperationIdで再開してください。
