@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
       // with the watcher's own updates.
       watcher = new StageWatcher({
         ownerSessionId: ctx.sessionManager.getSessionId(),
-        registry: new WatchRegistry(runtime.agentDir),
+        registry: new WatchRegistry(runtime.agentDir, runtime.scaffoldDir),
         herdr: createHerdrCli({...(process.env.HERDR_BIN_PATH ? {bin: process.env.HERDR_BIN_PATH} : {}), ...(process.env.HERDR_SOCKET_PATH ? {socketPath: process.env.HERDR_SOCKET_PATH} : {})}),
         readTail: tailReader(join(runtime.agentDir, 'sessions')),
         notify: (text, level) => ctx.ui.notify(text, level),
@@ -58,9 +58,9 @@ export default function (pi: ExtensionAPI) {
     let attempts = 0;
     const attempt = async () => {
       retry = undefined;
-      const policy = await loadOwnerPolicy(runtime.agentDir);
+      const policy = await loadOwnerPolicy(runtime.agentDir, runtime.scaffoldDir);
       const r = await acceptStartupPacket({
-        packetPath, agentDir: runtime.agentDir, cwd: ctx.cwd, sessionId, sessionEntries: ctx.sessionManager.getEntries(),
+        packetPath, agentDir: runtime.agentDir, scaffoldDir: runtime.scaffoldDir, cwd: ctx.cwd, sessionId, sessionEntries: ctx.sessionManager.getEntries(),
         toolNames: pi.getAllTools().map(t => t.name), policy: policy.ok ? policy.value : undefined,
       });
       if (r.ok) {
@@ -79,7 +79,7 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on('before_agent_start', async (event, ctx) => {
     if (accepted && ctx.sessionManager.getSessionId() === accepted.sessionId) {
-      await recordTurnStarted({packetPath: accepted.packetPath, agentDir: runtime.agentDir, sessionId: accepted.sessionId, prompt: event.prompt});
+      await recordTurnStarted({packetPath: accepted.packetPath, agentDir: runtime.agentDir, scaffoldDir: runtime.scaffoldDir, sessionId: accepted.sessionId, prompt: event.prompt});
     }
     return undefined;
   });

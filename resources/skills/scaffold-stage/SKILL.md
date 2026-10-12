@@ -7,6 +7,8 @@ description: Scaffold工程（setup→specification→basic-design→implementat
 
 ## 共通
 
+- Scaffoldの保存先は `PI_SCAFFOLD_DIR`（未指定時だけ `<agentDir>/pi-scaffold`）です。policy・監視台帳・承認・journal・調査artifacts・packet/receipt・evidenceは同じrootを使います。空文字・相対パス・制御文字は拒否し、シェル展開・symlink自動解決・fallbackはしません。現在ユーザー所有のディレクトリ700／通常ファイル600を使ってください。引き継ぎ起動のpathは安全なASCII token（`A-Z a-z 0-9 . _ / : @ + -`）に限ります。
+- `PI_CODING_AGENT_DIR` の認証と `<agentDir>/sessions` の履歴は保存先変更で動かしません。account bindingは `realpath(agentDir)` のままです。子へ両方の選択値を明示伝播します。設定変更は新しく起動したPiから適用し、既存データの自動移動はしません。
 - 工程ごとに別のPiセッションで作業します。同じ会話の中でモードを切り替えたり、fork/resumeで代用したりしません。
 - 仕様・判断・ヒアリング・調査はAIと人間が行います。pi-scaffoldのツールが行うのは、構造化・検証・状態反映・引き継ぎだけです。ツールの結果を、人間の判断の代わりにしないでください。
 - 承認が必要な場面は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、親TUIの確認画面で人間が答えたときだけ記録されます（例外は次の項目）。

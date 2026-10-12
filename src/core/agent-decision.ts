@@ -66,11 +66,11 @@ export function resolveAgentDecisionStage(handoff: AcceptedHandoff | undefined, 
  * starts with {@link PREREQUISITE_QUESTION_MARKER}). Other tools return at once without any file read. A missing or
  * invalid policy never blocks. Hosts that never emit `tool_call` are unaffected.
  */
-export function questionGuard(runtime: {agentDir: string; handoff?: AcceptedHandoff}) {
+export function questionGuard(runtime: {agentDir: string; scaffoldDir?: string; handoff?: AcceptedHandoff}) {
   return async (event: {toolName: string; input?: unknown}, ctx: {sessionManager: {getSessionId(): string}}): Promise<{block: true; reason: string} | undefined> => {
     if (!AGENT_DECISION_BLOCKED_TOOLS.includes(event.toolName) || !runtime.handoff) return undefined;
     if (isPrerequisiteRequest(event.input)) return undefined;
-    const policy = await loadOwnerPolicy(runtime.agentDir);
+    const policy = await loadOwnerPolicy(runtime.agentDir, runtime.scaffoldDir);
     const handoff = runtime.handoff;
     const stage = resolveAgentDecisionStage(handoff, policy.ok ? policy.value : undefined, {sessionId: ctx.sessionManager.getSessionId(), repo: handoff.repo, workflowId: handoff.workflowId});
     return stage ? {block: true, reason: QUESTION_BLOCK_REASON(stage)} : undefined;

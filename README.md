@@ -12,6 +12,15 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 - Profileの割り当て変更後はPiを再起動してください。`/reload`だけでは新しい指定へ切り替わりません。
 - ツールを使うリポジトリごとに、owner policy（後述）を置いてください。
 
+## Scaffoldの保存先
+
+`PI_SCAFFOLD_DIR` に専用の絶対パスを指定すると、policy・監視台帳・workflow state・承認・journal・調査artifacts・引き継ぎpacket/receipt・evidenceを、そのディレクトリにまとめて保存します。未指定のときだけ `<agentDir>/pi-scaffold`（`agentDir` は `PI_CODING_AGENT_DIR`、未指定なら `~/.pi/agent`）を使います。例：`PI_SCAFFOLD_DIR=/private/scaffold`。設定変更は**新しく起動したPiから**適用されます。既存データの移動は自動では行いません。
+
+- 空文字・相対パス・制御文字（NULを含む）は拒否します。環境変数や `~` のシェル展開、symlinkの自動解決、旧保存先へのfallbackは行いません。
+- 保存先と配下ディレクトリは現在ユーザー所有の通常ディレクトリ（700）、ファイルは通常ファイル（600）が必要です。symlink・FIFO・過大ファイル等は拒否します。引き継ぎ起動では、認証ディレクトリと保存先の両方に安全なASCII token（`A-Z a-z 0-9 . _ / : @ + -`）だけを使ってください。
+- `PI_CODING_AGENT_DIR` は**認証とPiのセッション履歴**の場所です。`PI_SCAFFOLD_DIR` で変更しません。監視が読むログも `<agentDir>/sessions` のままです。account bindingは `realpath(agentDir)` に結び付き、保存先から認証を推測しません。同じ認証で保存先を変えてもbindingは同じで、別の認証との承認/Profile照合は引き続き行います。
+- 工程を引き継ぐ子Piへ、元の `PI_CODING_AGENT_DIR` と選択済みの `PI_SCAFFOLD_DIR` を固定・quotedの起動コマンドで明示伝播します。共有台帳の監視は引き継いだ本人だけが操作します。プロセス間の同時書き込みロックはありません。
+
 ## 工程とツール
 
 Epicは `setup → specification → basic-design → implementation → verification → completed` と進みます。工程が変わるたびに、Herdrの新しいタブで別のPiセッションを起動して引き継ぎます。同じ会話の中でモードを切り替えることはしません。
@@ -64,7 +73,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - Herdr がその pane のセッションを報告しないときは、自動の「続けて」だけを止め、そのことを一度通知します。ほかの通知は出します。
 - 一時的な API エラー（429・5xx・overloaded・接続エラーなど）で止まったときだけ、1分→5分→15分あけて最大3回「続けて」を送ります。送る直前に、同じエラーで止まったままかを確かめます。
 - usage limit・認証・400系のエラーは通知だけです。下位のセッションログの形式（version 3）が違う場合も、自動では送りません。
-- 監視台帳は `<agentDir>/pi-scaffold/state/watches.json` です。監視するのは、引き継いだ本人のセッションだけです。同じセッションを開き直すと、監視を再開します。
+- 監視台帳は `<scaffoldDir>/state/watches.json`（未指定時は `<agentDir>/pi-scaffold/state/watches.json`） です。監視するのは、引き継いだ本人のセッションだけです。同じセッションを開き直すと、監視を再開します。
 
 ## 必要なもの
 
@@ -72,7 +81,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - 引き継ぎには次が必要です。
   - Herdr 0.9.1（protocol 22）
   - pi-profileの`developer` Profile
-  - owner policy（`$PI_CODING_AGENT_DIR/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
+  - owner policy（`<scaffoldDir>/policy.json`、未指定時は `<agentDir>/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
   - 各リポジトリのエントリには、任意で`agentDecisionStages`を書けます。値は`"implementation"`と`"verification"`だけの配列で、重複や他の値（`"basic-design"`など）はpolicyのエラーです。書かなければ`[]`と同じで、動作は変わりません。
 
 ```json

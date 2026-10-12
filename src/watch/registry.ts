@@ -1,10 +1,11 @@
 // The watch registry: which stage panes each Pi session handed off and how far their watch has got.
-// Shared by every session of this agent dir; each session only acts on records it owns (ownerSessionId).
+// Shared by every session using this scaffold dir; each session only acts on records it owns (ownerSessionId).
 // Not locked across processes: writes are read-modify-write, so two sessions writing in the same instant can drop
 // one record. Within one instance every write is serialized, so a check's update cannot drop a handoff's upsert.
 import {rename} from 'node:fs/promises';
 import {basename, dirname, join} from 'node:path';
 import {OwnedFileError, readOwnedJson, writeOwnedFile} from '../core/files.js';
+import {resolveScaffoldDir} from '../core/scaffold-dir.js';
 import {INITIAL_PROGRESS, type WatchEntry, type WatchProgress} from './decide.js';
 
 export interface WatchRecord { entry: WatchEntry; progress: WatchProgress }
@@ -28,7 +29,7 @@ export class WatchRegistry {
   private readonly root: string;
   readonly path: string;
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(agentDir: string) { this.root = join(agentDir, 'pi-scaffold'); this.path = join(this.root, 'state', 'watches.json'); }
+  constructor(agentDir: string, scaffoldDir?: string) { this.root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir); this.path = join(this.root, 'state', 'watches.json'); }
 
   /** Runs one read-modify-write after the previous one settles; a failed write does not block later ones. */
   private serialized<T>(fn: () => Promise<T>): Promise<T> {
@@ -38,17 +39,23 @@ export class WatchRegistry {
   }
 
   /** A missing file is empty. An unreadable file or malformed records are skipped and reported as corrupt. */
-  async load(): Promise<{records: WatchRecord[]; corrupt: boolean}> {
+  async load(): Promise<{records: WatchRecord[]; corrupt: boolean}> { return this.read(false); }
+  private async read(forWrite: boolean): Promise<{records: WatchRecord[]; corrupt: boolean}> {
     let raw: unknown;
     try { raw = await readOwnedJson(this.path, {root: this.root}); }
-    catch (e) { return {records: [], corrupt: !(e instanceof OwnedFileError && e.code === 'NOT_FOUND')}; }
+    catch (e) {
+      if (e instanceof OwnedFileError && e.code === 'NOT_FOUND') return {records: [], corrupt: false};
+      // Only actual JSON/record corruption can be quarantined. Filesystem/encoding refusals are non-mutating.
+      if (forWrite && !(e instanceof OwnedFileError && e.code === 'INVALID_JSON')) throw e;
+      return {records: [], corrupt: true};
+    }
     if (!isRec(raw) || raw.version !== 1 || !Array.isArray(raw.watches)) return {records: [], corrupt: true};
     const records = raw.watches.filter(isRecord);
     return {records, corrupt: records.length !== raw.watches.length};
   }
   /** Loads for a write. If the file is corrupt, moves it aside first so its bytes are not overwritten. */
   private async loadForWrite(): Promise<WatchRecord[]> {
-    const {records, corrupt} = await this.load();
+    const {records, corrupt} = await this.read(true);
     if (corrupt) {
       try { await rename(this.path, join(dirname(this.path), `${basename(this.path)}.corrupt-${Date.now()}`)); }
       catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }

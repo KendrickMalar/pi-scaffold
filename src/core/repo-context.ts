@@ -11,6 +11,9 @@ export function resolveAgentDir(env: Record<string, string | undefined>, home: s
   return v && isAbsolute(v) ? v : join(home, '.pi', 'agent');
 }
 
+export {resolveScaffoldDir} from './scaffold-dir.js';
+import {resolveScaffoldDir} from './scaffold-dir.js';
+
 /**
  * pi-profile has no public API; it stores `startup-profile-state` custom entries ({version,id,label,instructions}).
  * This read-only decoder mirrors its validation. Conflicting snapshots are invalid.
@@ -34,7 +37,7 @@ export function repoHash(repo: string): string { return sha256Text(repo.toLowerC
 
 export interface RepoContextInput {
   cwd: string; repo: string; workflowId: string | null; trusted: boolean;
-  agentDir: string; agentDirRealpath: string; sessionEntries: readonly unknown[];
+  agentDir: string; scaffoldDir?: string; agentDirRealpath: string; sessionEntries: readonly unknown[];
   policy: OwnerPolicy | undefined; git: GitReader;
 }
 export async function deriveRepoContext(input: RepoContextInput): Promise<Decoded<RepoContext>> {
@@ -49,7 +52,7 @@ export async function deriveRepoContext(input: RepoContextInput): Promise<Decode
   const authMode = repoPolicyFor(input.policy, input.repo)?.authMode;
   return okValue({
     repo: input.repo, repoRoot: identity.repoRoot, gitCommonDir: identity.gitCommonDir,
-    workflowStateRoot: join(input.agentDir, 'pi-scaffold', 'state', repoHash(input.repo), input.workflowId ?? '_repo'),
+    workflowStateRoot: join(resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), 'state', repoHash(input.repo), input.workflowId ?? '_repo'),
     accountBinding: authMode === 'file-backed' ? taggedDigest('account-binding', {agentDir: input.agentDirRealpath, authMode}) : null,
     profileId: profile.snapshot?.id ?? null, profileInstructionsDigest: profile.snapshot?.instructionsDigest ?? null,
   });

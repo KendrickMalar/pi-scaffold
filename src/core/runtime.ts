@@ -2,14 +2,13 @@
 // from the tool context; tests fill it with fakes. Factories only build objects; nothing starts here.
 import {homedir} from 'node:os';
 import {realpath} from 'node:fs/promises';
-import {join} from 'node:path';
 import {LIMITS, failed, problem, type AgentDecisionStage, type CallScope, type Decoded, type RepoContext} from './contracts.js';
 import {RuntimeScope} from './lifecycle.js';
 import {OperationJournal} from './journal.js';
 import {ApprovalStore, type ApprovalUi} from './approvals.js';
 import {loadOwnerPolicy, type OwnerPolicy} from './model-bindings.js';
 import {resolveAgentDecisionStage, type AcceptedHandoff} from './agent-decision.js';
-import {deriveRepoContext, resolveAgentDir} from './repo-context.js';
+import {deriveRepoContext, resolveAgentDir, resolveScaffoldDir} from './repo-context.js';
 import {PiGhBridge, type ToolExecutor} from '../ports/pi-gh.js';
 import {createGitReader, type GitReader} from '../ports/git-read.js';
 import {createHerdrCli, type HerdrPort} from '../handoff/herdr-client.js';
@@ -30,7 +29,7 @@ export interface ToolEnv {
   currentModel(): {model: string; thinking: string} | undefined;
 }
 export interface ScaffoldRuntime {
-  scope: RuntimeScope; agentDir: string; git: GitReader; timeoutMs?: number;
+  scope: RuntimeScope; agentDir: string; scaffoldDir: string; git: GitReader; timeoutMs?: number;
   /** Process environment (HERDR_*, PI_SUBAGENT_CHILD); tests inject a synthetic one. */
   environment?: () => Record<string, string | undefined>;
   herdr?: () => HerdrPort;
@@ -46,9 +45,13 @@ export interface ScaffoldRuntime {
 }
 
 export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<string, string | undefined>; home?: string} = {}): ScaffoldRuntime {
+  const env = options.env ?? process.env;
+  const agentDir = options.agentDir ?? resolveAgentDir(env, options.home ?? homedir());
+  const scaffoldDir = resolveScaffoldDir(options.scaffoldDir === undefined ? env : {PI_SCAFFOLD_DIR: options.scaffoldDir}, agentDir);
   return {
+    scaffoldDir,
     scope: options.scope ?? new RuntimeScope(),
-    agentDir: options.agentDir ?? resolveAgentDir(options.env ?? process.env, options.home ?? homedir()),
+    agentDir,
     git: options.git ?? createGitReader(),
     ...(options.timeoutMs !== undefined ? {timeoutMs: options.timeoutMs} : {}),
     ...(options.budgetMs !== undefined ? {budgetMs: options.budgetMs} : {}),
@@ -68,20 +71,20 @@ export class ToolCall {
   readonly deadline: number;
   constructor(readonly runtime: ScaffoldRuntime, readonly env: ToolEnv, readonly scope: CallScope) {
     this.bridge = new PiGhBridge(env.executeTool, {interactiveWrites: env.approvalUi.interactive, ...(runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {})});
-    this.namespaceRoot = join(runtime.agentDir, 'pi-scaffold');
+    this.namespaceRoot = runtime.scaffoldDir;
     this.approvals = new ApprovalStore(this.namespaceRoot);
     this.deadline = this.now() + (runtime.budgetMs ?? LIMITS.callTimeoutMs);
   }
   now(): number { return (this.runtime.now ?? Date.now)(); }
   overBudget(): boolean { return this.now() >= this.deadline; }
-  policy(): Promise<Decoded<OwnerPolicy | undefined>> { return loadOwnerPolicy(this.runtime.agentDir); }
+  policy(): Promise<Decoded<OwnerPolicy | undefined>> { return loadOwnerPolicy(this.runtime.agentDir, this.runtime.scaffoldDir); }
   async repoContext(repo: string, workflowId: string | null): Promise<Decoded<RepoContext>> {
     const policy = await this.policy();
     if (!policy.ok) return policy;
     let agentDirRealpath: string;
     try { agentDirRealpath = await realpath(this.runtime.agentDir); } catch { return failed([problem('AGENT_DIR_MISSING', 'agentDir', 'The Pi agent directory does not exist.')]); }
     return deriveRepoContext({
-      cwd: this.env.cwd, repo, workflowId, trusted: this.env.isProjectTrusted(), agentDir: this.runtime.agentDir, agentDirRealpath,
+      cwd: this.env.cwd, repo, workflowId, trusted: this.env.isProjectTrusted(), agentDir: this.runtime.agentDir, scaffoldDir: this.runtime.scaffoldDir, agentDirRealpath,
       sessionEntries: this.env.sessionEntries(), policy: policy.value, git: this.runtime.git,
     });
   }
