@@ -49,10 +49,10 @@ async function boot(t: {after(fn: () => Promise<void>): void}, opts: {stages: st
   const ctx = {cwd, sessionManager: {getSessionId: () => 'stage-session', getEntries: () => [profile]}, ui: {notify: (text: string) => { notes.push(text); resolveNote(); }}};
   for (const h of handlers.get('session_start') ?? []) h({}, ctx);
   if (opts.withPacket !== false) await noted;
-  const toolCall = async (toolName: string, sessionId = 'stage-session') => {
+  const toolCall = async (toolName: string, sessionId = 'stage-session', input: Record<string, unknown> = {}) => {
     const hs = handlers.get('tool_call') ?? [];
     assert.equal(hs.length, 1, 'one tool_call handler is registered');
-    return await hs[0]!({type: 'tool_call', toolCallId: 't1', toolName, input: {}}, {...ctx, sessionManager: {...ctx.sessionManager, getSessionId: () => sessionId}}) as {block: true; reason: string} | undefined;
+    return await hs[0]!({type: 'tool_call', toolCallId: 't1', toolName, input}, {...ctx, sessionManager: {...ctx.sessionManager, getSessionId: () => sessionId}}) as {block: true; reason: string} | undefined;
   };
   return {toolCall, notes};
 }
@@ -70,4 +70,13 @@ test('extension: an unlisted stage, a basic-design packet or no packet leaves qu
   assert.equal(await (await boot(t, {stages: ['verification'], targetStage: 'implementation'})).toolCall('ask_user'), undefined);
   assert.equal(await (await boot(t, {stages: ['implementation', 'verification'], targetStage: 'basic-design'})).toolCall('ask_user'), undefined);
   assert.equal(await (await boot(t, {stages: ['implementation'], targetStage: 'implementation', withPacket: false})).toolCall('ask_user'), undefined);
+});
+
+test('extension: in a listed Implementation session, a 【事前作業】 request passes and a decision question is still blocked', async t => {
+  const {toolCall} = await boot(t, {stages: ['implementation'], targetStage: 'implementation'});
+  assert.equal(await toolCall('ask_user', 'stage-session', {question: '【事前作業】Studio にログインしてください。終わったら「完了」を選んでください。', options: ['完了']}), undefined);
+  assert.equal(await toolCall('AskUserQuestion', 'stage-session', {questions: [{question: '【事前作業】画面収録を許可してください。', header: '事前作業', options: [{label: '完了'}], multiSelect: false}]}), undefined);
+  const r = await toolCall('ask_user', 'stage-session', {question: 'A案とB案のどちらにしますか？'});
+  assert.equal(r?.block, true);
+  assert.match(r!.reason, /【事前作業】/);
 });
