@@ -40,8 +40,12 @@ export async function readPacket(path: string, root: string): Promise<Decoded<{p
   let bytes: Buffer;
   try { bytes = await readOwnedFile(path, {root, maxBytes: 64 * 1024}); }
   catch (e) { return failed([problem(e instanceof OwnedFileError ? e.code : 'PACKET_UNREADABLE', 'packet', (e as Error).message)]); }
+  let text: string;
+  // Keep the BOM in the decoded text so JSON.parse retains its former rejection boundary.
+  try { text = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes); }
+  catch { return failed([problem('INVALID_ENCODING', 'packet', 'Packet is not valid UTF-8.')]); }
   let value: unknown;
-  try { value = JSON.parse(bytes.toString('utf8')); } catch { return failed([problem('PACKET_INVALID', 'packet', 'Packet is not JSON.')]); }
+  try { value = JSON.parse(text); } catch { return failed([problem('PACKET_INVALID', 'packet', 'Packet is not JSON.')]); }
   const decoded = decodePacket(value);
   return decoded.ok ? okValue({packet: decoded.value, sha256: sha256Bytes(bytes)}) : decoded;
 }
