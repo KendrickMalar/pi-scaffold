@@ -1,6 +1,7 @@
-// Owner policy ($PI_CODING_AGENT_DIR/pi-scaffold/policy.json): per-repo allowed model tuples and auth mode.
+// Owner policy (<scaffoldDir>/policy.json; default <agentDir>/pi-scaffold): per-repo allowed model tuples and auth mode.
 // Only provider/id/thinking are handled; no model descriptors, auth.json or settings.json are read or changed.
 import {join} from 'node:path';
+import {resolveScaffoldDir} from './scaffold-dir.js';
 import {StrictReader, AGENT_DECISION_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentDecisionStage, type Decoded, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
 import {OwnedFileError, readOwnedJson} from './files.js';
 
@@ -52,9 +53,11 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   return r.result({version: 1, repos});
 }
 
-export async function loadOwnerPolicy(agentDir: string): Promise<Decoded<OwnerPolicy | undefined>> {
-  const root = join(agentDir, 'pi-scaffold');
-  try { return decodeOwnerPolicy(await readOwnedJson(join(root, 'policy.json'), {root, maxBytes: 64 * 1024})); }
+export async function loadOwnerPolicy(agentDir: string, scaffoldDir?: string): Promise<Decoded<OwnerPolicy | undefined>> {
+  try {
+    const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
+    return decodeOwnerPolicy(await readOwnedJson(join(root, 'policy.json'), {root, maxBytes: 64 * 1024}));
+  }
   catch (e) {
     if (e instanceof OwnedFileError && e.code === 'NOT_FOUND') return okValue(undefined);
     return failed([problem(e instanceof OwnedFileError ? e.code : 'POLICY_INVALID', 'policy.json', (e as Error).message)]);

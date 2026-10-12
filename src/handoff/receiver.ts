@@ -1,21 +1,21 @@
 // Runs in the receiving Pi (--scaffold-handoff <packet>). Confirms the packet belongs to this session's
 // cwd/profile/account/tools and writes owner-only receipts the driver waits for. It is not an AI tool.
-import {dirname, join} from 'node:path';
+import {dirname} from 'node:path';
 import {realpath} from 'node:fs/promises';
 import {failed, okValue, problem, type Decoded, type Problem} from '../core/contracts.js';
 import {taggedDigest} from '../core/digests.js';
-import {readProfileSnapshot} from '../core/repo-context.js';
+import {readProfileSnapshot, resolveScaffoldDir} from '../core/repo-context.js';
 import {repoPolicyFor, type OwnerPolicy} from '../core/model-bindings.js';
 import {nonceSha256, readPacket, readReceipt, writeReceipt, type HandoffPacketV1} from './packet.js';
 
 const real = async (p: string) => { try { return await realpath(p); } catch { return p; } };
 
 export interface ReceiverInput {
-  packetPath: string; agentDir: string; cwd: string; sessionId: string;
+  packetPath: string; agentDir: string; scaffoldDir?: string; cwd: string; sessionId: string;
   sessionEntries: readonly unknown[]; toolNames: readonly string[]; policy: OwnerPolicy | undefined;
 }
 export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded<{packet: HandoffPacketV1; packetSha256: string}>> {
-  const root = join(input.agentDir, 'pi-scaffold');
+  const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir);
   const read = await readPacket(input.packetPath, root);
   if (!read.ok) return read;
   const {packet, sha256} = read.value;
@@ -39,8 +39,8 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
 
 /** Called on the first agent turn of the accepting session. Only that session can record the start. */
 export const promptTag = (nonceSha256: string) => `scaffold-${nonceSha256.slice(0, 12)}`;
-export async function recordTurnStarted(input: {packetPath: string; agentDir: string; sessionId: string; prompt: string}): Promise<boolean> {
-  const root = join(input.agentDir, 'pi-scaffold'), dir = dirname(input.packetPath);
+export async function recordTurnStarted(input: {packetPath: string; agentDir: string; scaffoldDir?: string; sessionId: string; prompt: string}): Promise<boolean> {
+  const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), dir = dirname(input.packetPath);
   const ready = await readReceipt(dir, 'receiver-ready', root);
   // Only the fixed stage prompt (carrying this packet's tag) starts the handoff turn.
   if (!ready || !input.prompt.includes(promptTag(ready.nonceSha256))) return false;

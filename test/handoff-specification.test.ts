@@ -62,7 +62,11 @@ test('a valid setup Epic is handed to a new Specification session and only start
   assert.deepEqual([tab.workspaceId, tab.cwd], ['w9', '/synthetic/repo']);
   const run = herdr.calls.find(c => c.command === 'paneRun')!.args as {paneId: string; command: string};
   assert.equal(run.paneId, 'w9:p2', 'runs only in the root pane of the created tab');
-  assert.match(run.command, /^pi-profile launch --profile developer -- --scaffold-handoff '[^']+' --model 'example-provider\/planner-1' --thinking 'medium'$/);
+  const launch = /^env PI_CODING_AGENT_DIR='([A-Za-z0-9._\/:@+-]+)' PI_SCAFFOLD_DIR='([A-Za-z0-9._\/:@+-]+)' pi-profile launch --profile developer -- --scaffold-handoff '([A-Za-z0-9._\/:@+-]+)' --model 'example-provider\/planner-1' --thinking 'medium'$/.exec(run.command);
+  assert.ok(launch, run.command);
+  assert.equal(launch[1], h.runtime.agentDir, 'original auth directory is explicit');
+  assert.equal(launch[2], h.runtime.scaffoldDir, 'selected storage directory is explicit');
+  assert.equal(launch[3], rx.packetPath(), 'only the prepared packet is launched');
   assert.equal((await stat(rx.packetPath())).mode & 0o777, 0o600);
   const doc = (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
   assert.equal(doc.stage, 'specification');
