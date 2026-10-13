@@ -103,6 +103,11 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
     operation, repo: input.repo, workflowId: epic.workflowId, operationId: input.operationId,
     payloadDigest: taggedDigest('waves-apply', {...payload, plan}), journal, scope: call.scope,
   }, async run => {
+    // 保存不能な入力は、Wave定義やFeatureラベルへ書き込む前に拒否する。
+    if (canonicalJson(epic.wavePlan === null ? null : canonicalWavePlan(epic.wavePlan)) !== canonicalJson(plan)) {
+      const capacity = patchDoc(epicSnap.value, {...epic, wavePlan: plan});
+      if (!capacity.ok) return run.stop(capacity.problems);
+    }
     const seen = (run.done('preflight') as {plan: WavePlan | null; bodySha256: string} | undefined) ?? (run.note('preflight', {plan: epic.wavePlan, bodySha256: epicSnap.value.bodySha256}), {plan: epic.wavePlan, bodySha256: epicSnap.value.bodySha256});
     // 1. Wave label definitions the plan uses (create missing ones inside the managed range only).
     const needed = [...new Set(plan.assignments.map(a => waveLabelName(a.wave)))];

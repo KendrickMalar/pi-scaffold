@@ -134,6 +134,11 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     operation, repo: input.repo, workflowId: epic.workflowId, operationId: input.operationId,
     payloadDigest: taggedDigest('dependencies-apply', payload), journal, scope: call.scope,
   }, async run => {
+    // 保存不能な入力は、依存やProjectへ書き込む前に拒否する。最後のfresh readは維持する。
+    if (canonicalJson(epic.dependencyPlan) !== canonicalJson(input.plan) || !designDone(epic)) {
+      const capacity = patchDoc(epicSnap.value, {...epic, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {})});
+      if (!capacity.ok) return run.stop(capacity.problems);
+    }
     // The Epic plan as this operation first saw it; the final save only replaces that (or an identical) plan.
     const seen = (run.done('preflight') as {plan: DependencyPlan | null; design?: DesignRef | null} | undefined) ?? (run.note('preflight', {plan: epic.dependencyPlan, design: epic.design}), {plan: epic.dependencyPlan, design: epic.design});
     const blockersOf = async (to: number): Promise<number[] | undefined> => {

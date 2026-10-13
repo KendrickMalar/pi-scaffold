@@ -21,6 +21,12 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 - `PI_CODING_AGENT_DIR` は**認証とPiのセッション履歴**の場所です。`PI_SCAFFOLD_DIR` で変更しません。監視が読むログも `<agentDir>/sessions` のままです。account bindingは `realpath(agentDir)` に結び付き、保存先から認証を推測しません。同じ認証で保存先を変えてもbindingは同じで、別の認証との承認/Profile照合は引き続き行います。
 - 工程を引き継ぐ子Piへ、元の `PI_CODING_AGENT_DIR` と選択済みの `PI_SCAFFOLD_DIR` を固定・quotedの起動コマンドで明示伝播します。共有台帳の監視は引き継いだ本人だけが操作します。プロセス間の同時書き込みロックはありません。
 
+
+## Issue本文の容量
+
+管理JSONはUTF-8で32 KiB、Issue本文全体（表示・JSON・ブロック外の追記）は64 KiBが上限です。正規形式・承認digest・所有権の検査は省略しません。JSON内に余裕があっても、本文全体が上限を超えれば保存できません。
+
+依存・Wave適用は、読み取ったEpicへ計画を追加して保存できるかを外部変更前に確認します。最初から保存不能なら依存・Project・ラベルを変更せず拒否します。実行途中の本文変更などは最後の再読込で別途検査するため、途中で停止した場合は従来どおりpartial/unknownの記録を確認し、同じoperationIdで再開します。
 ## 工程とツール
 
 Epicは `setup → specification → basic-design → implementation → verification → completed` と進みます。工程が変わるたびに、Herdrの新しいタブで別のPiセッションを起動して引き継ぎます。同じ会話の中でモードを切り替えることはしません。
