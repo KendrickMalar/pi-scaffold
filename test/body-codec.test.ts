@@ -88,16 +88,29 @@ test('body limit: exactly 64KiB is allowed, one byte more is rejected', () => {
 });
 
 function docWithJsonBytes(target: number): EpicDocV1 {
-  const doc = initialDoc(); doc.purpose = 'x';
-  const base = Buffer.byteLength(JSON.stringify(doc, null, 2));
-  doc.purpose = 'x'.repeat(target - base + 1);
+  const doc = initialDoc(); doc.purpose = '';
+  // 複数の短い質問でJSONの構造分を確保し、JSON境界と本文境界を分離する。
+  doc.questions = Array.from({length: 10}, (_, i) => ({questionId: `Q${String(i + 1).padStart(3, '0')}`, kind: 'question' as const, question: '確認', answer: null, required: false, sourceRef: null}));
+  const padding = target - Buffer.byteLength(JSON.stringify(doc, null, 2));
+  doc.purpose = 'あ'.repeat(Math.floor(padding / 3)) + 'x'.repeat(padding % 3);
   return doc;
 }
+test('16KiB超の日本語仕様を変更せずに読み取り・設計参照を追加できる', () => {
+  const doc = initialDoc(); doc.purpose = 'あ'.repeat(6000);
+  const body = renderEpicBlock(doc);
+  assert.ok(Buffer.byteLength(JSON.stringify(doc, null, 2)) > 16 * 1024);
+  assert.ok(Buffer.byteLength(body) < 64 * 1024);
+  const snap = buildSnapshot(raw(body)); assert.ok(snap.ok);
+  const next = {...doc, design: {path: 'docs/design.md', sha256: 'a'.repeat(64), gitRef: 'b'.repeat(40)}};
+  const edit = patchDoc(snap.value, next); assert.ok(edit.ok);
+  const parsed = parseIssueBody(edit.value.body); assert.ok(parsed.ok);
+  assert.equal(parsed.value.doc.purpose, doc.purpose);
+});
 
-test('JSON limit: exactly 16KiB is allowed, one byte more is rejected', () => {
-  const exact = docWithJsonBytes(LIMITS.jsonBytes);
+test('JSON limit: exactly 32KiB is allowed, one byte more is rejected', () => {
+  const exact = docWithJsonBytes(32 * 1024);
   assert.equal(parseIssueBody(renderEpicBlock(exact)).ok, true);
-  const over = docWithJsonBytes(LIMITS.jsonBytes + 1);
+  const over = docWithJsonBytes(32 * 1024 + 1);
   assert.ok(problemsOf(parseIssueBody(renderEpicBlock(over))).some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'json'));
 });
 

@@ -3,7 +3,7 @@
 
 export const LIMITS = Object.freeze({
   bodyBytes: 64 * 1024,
-  jsonBytes: 16 * 1024,
+  jsonBytes: 32 * 1024,
   artifactBytes: 1024 * 1024,
   features: 50,
   research: 50,

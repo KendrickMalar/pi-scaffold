@@ -47,6 +47,31 @@ const depAdds = (gh: FakePiGh) => gh.calls.filter(c => c.name === 'gh_dependency
 const projectCalls = (gh: FakePiGh) => gh.calls.filter(c => c.name.startsWith('gh_project_'));
 const noChanges = (gh: FakePiGh, before: string) => { assert.equal(depAdds(gh).length, 0); assert.equal(gh.count('gh_project_add_issue'), 0); assert.equal(gh.issues.get(10)!.body, before); };
 
+test('保存予定本文が64KiBを超える依存計画は辺・Projectの変更前に拒否する', async t => {
+  const gh = world();
+  const issue = gh.issues.get(10)!;
+  issue.body += '\n' + 'x'.repeat(64 * 1024 - Buffer.byteLength(issue.body) - 17);
+  assert.ok(parseIssueBody(issue.body).ok);
+  const before = issue.body;
+  const out = await (await harness(t, gh)).invoke(params(gh, [[11, 12], [12, 13]], {projectId: PROJECT}));
+  assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
+  assert.ok(out.r.problems.some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'body'));
+  assert.equal(gh.writes, 0);
+  noChanges(gh, before);
+});
+
+test('16KiB超の日本語仕様に依存計画を保存し再実行しても重複しない', async t => {
+  const gh = world({epic: epicDoc(d => { d.purpose = 'あ'.repeat(6000); })});
+  const h = await harness(t, gh); const p = params(gh);
+  assert.equal((await h.invoke(p)).r.status, 'applied');
+  assert.deepEqual(gh.issues.get(12)!.blockedBy, [11]);
+  assert.deepEqual(gh.issues.get(13)!.blockedBy, [12]);
+  assert.equal(docOf(gh).purpose, 'あ'.repeat(6000));
+  const writes = gh.writes;
+  assert.equal((await h.invoke(p)).r.status, 'noop');
+  assert.equal(gh.writes, writes);
+});
+
 for (const [label, edges, code] of [
   ['self edge', [[11, 11]], 'SELF_EDGE'], ['duplicate edge', [[11, 12], [11, 12]], 'DUPLICATE_EDGE'], ['unknown node', [[11, 99]], 'UNKNOWN_NODE'], ['cycle', [[11, 12], [12, 11]], 'CYCLE'],
 ] as const) {

@@ -50,6 +50,19 @@ const labelCreates = (gh: FakePiGh) => gh.calls.filter(c => c.name === 'gh_label
 const noChange = (gh: FakePiGh, epicBefore: string) => { assert.equal(labelEdits(gh).length, 0); assert.equal(labelCreates(gh).length, 0); assert.equal(gh.issues.get(10)!.body, epicBefore); };
 const waveOf = (gh: FakePiGh, n: number) => gh.issues.get(n)!.labels.filter(l => l.startsWith('Wave'));
 
+
+test('保存予定本文が64KiBを超えるWave計画はラベル定義・Issue変更前に拒否する', async t => {
+  const gh = world({withoutWaveDefs: true});
+  const issue = gh.issues.get(10)!;
+  issue.body += '\n' + 'x'.repeat(64 * 1024 - Buffer.byteLength(issue.body) - 17);
+  assert.ok(parseIssueBody(issue.body).ok);
+  const before = issue.body;
+  const out = await (await harness(t, gh)).invoke(params(gh));
+  assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
+  assert.ok(out.r.problems.some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'body'));
+  assert.equal(gh.writes, 0);
+  noChange(gh, before);
+});
 // ---- rejected before the first change ------------------------------------------------------------
 
 for (const [label, waves] of [
