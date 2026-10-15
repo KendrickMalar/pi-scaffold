@@ -16,6 +16,7 @@ import {readIssue, type GhOutcome} from '../ports/pi-gh.js';
 import {HerdrError, SUPPORTED_HERDR, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
 import {promptTag} from './receiver.js';
+import {pickEpicWorktree} from '../core/epic-worktree.js';
 import {handoffDir, nonceSha256, readReceipt, writePacket, type HandoffPacketV1, type ReceiptPhase} from './packet.js';
 
 export interface HandoffInput extends MutationInput { expectedStage: Stage; nextStage: Stage }
@@ -118,6 +119,8 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const unsafe = unsafeLaunchValues({agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
   if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
+  // The new stage session opens in the Epic branch's worktree when exactly one exists (design docs live there, not on main).
+  const targetCwd = pickEpicWorktree(await call.runtime.git.listWorktrees(ctx.repoRoot), input.epicIssue) ?? ctx.repoRoot;
   const resourceRefs = [...(extras.resourceRefs ?? [])];
   const payloadDigest = taggedDigest('handoff', {input, requiredTools, ...(resourceRefs.length ? {resourceRefs} : {})});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
@@ -135,7 +138,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       const nonce = randomBytes(32).toString('hex');
       const packet: HandoffPacketV1 = {
         version: 1, nonce, workflowId: doc.workflowId, repo: input.repo, epicIssue: input.epicIssue, sourceStage: input.expectedStage, targetStage: input.nextStage,
-        artifactDigests: {epicBodySha256: snap.value.bodySha256, epicLabelsSha256: snap.value.labelsSha256}, cwd: ctx.repoRoot,
+        artifactDigests: {epicBodySha256: snap.value.bodySha256, epicLabelsSha256: snap.value.labelsSha256}, cwd: targetCwd,
         profileId: ctx.profileId!, profileInstructionsDigest: ctx.profileInstructionsDigest!, accountBinding: ctx.accountBinding!, requiredTools, resourceRefs,
       };
       const written = await writePacket(dir, packet, call.namespaceRoot);
@@ -146,7 +149,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     // tab-created (no focus; reconciled by its unique label, never created twice).
     await checkBinding();
     let found: {tabId: string; paneId: string} | undefined;
-    const tab = (await run.write('tab-create', () => herdrStep(() => herdr.tabCreate({workspaceId: binding.workspaceId, cwd: ctx.repoRoot, label})), {
+    const tab = (await run.write('tab-create', () => herdrStep(() => herdr.tabCreate({workspaceId: binding.workspaceId, cwd: targetCwd, label})), {
       reconcile: async () => {
         // The label is unique per packet: a complete listing without it means the tab was never created.
         try { const tabs = await herdr.tabList(binding.workspaceId); const t = tabs.find(x => x.label === label); if (t?.paneId) { found = {tabId: t.tabId, paneId: t.paneId}; return 'applied'; } return t ? 'unknown' : 'not-applied'; }
@@ -204,7 +207,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     try {
       await call.runtime.watch.add({
         ownerSessionId: call.env.identity().sessionId, paneId: d.paneId, tabId: d.tabId, workspaceId: binding.workspaceId,
-        targetSessionId: d.targetSessionId, cwd: ctx.repoRoot, repo: input.repo, epicIssue: input.epicIssue, targetStage: input.nextStage,
+        targetSessionId: d.targetSessionId, cwd: targetCwd, repo: input.repo, epicIssue: input.epicIssue, targetStage: input.nextStage,
         addedAt: new Date(call.now()).toISOString(),
       });
     } catch { /* Watching is best effort; the handoff itself is already applied. */ }

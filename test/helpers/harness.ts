@@ -41,6 +41,8 @@ export interface Scenario {
   remote?: {branch: string; sha: string};
   /** Files under a repo path for `git ls-tree` (read-only). */
   tree?: Record<string, string[]>;
+  /** Local worktrees for `git worktree list` (read-only). */
+  worktrees?: {path: string; branch: string | null}[];
   /** The handoff packet this session accepted (set by the extension on session_start in reality). Session id is `session-harness`. */
   handoff?: AcceptedHandoff;
 }
@@ -64,6 +66,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
   const gh = scenario.gh ?? new FakePiGh();
   const herdr = scenario.herdr ?? {calls: []};
   const git: GitReader = {
+    listWorktrees: async () => scenario.worktrees ?? [],
     run: async (args: readonly string[]) => {
       // Synthetic commit graph: `cat-file -e <ref>^{commit}` and `merge-base --is-ancestor <a> <b>`.
       const commits = scenario.commits ?? {exists: [], ancestors: []};

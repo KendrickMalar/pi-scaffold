@@ -52,7 +52,7 @@ function callFor(agentDir: string, scaffoldDir?: string) {
   const git = {
     run: async () => ({code: 1, stdout: ''}),
     repoIdentity: async () => ({repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', origin: 'https://github.com/example/demo.git'}),
-    readBlob: async () => undefined, listTree: async () => [],
+    readBlob: async () => undefined, listTree: async () => [], listWorktrees: async () => [],
   };
   const options = {agentDir, git, env: {}, ...(scaffoldDir === undefined ? {} : {scaffoldDir})};
   const runtime = createRuntime(options);
