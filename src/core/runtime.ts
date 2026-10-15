@@ -38,6 +38,8 @@ export interface ScaffoldRuntime {
   /** Work budget of one tool call; long work pauses as `partial` and resumes with the same operationId. */
   budgetMs?: number;
   now?: () => number;
+  /** Set by the extension: tools currently active for the model (plan mode may narrow this). Falls back to ctx.tools. */
+  activeToolNames?: () => string[];
   /** Set by the extension: registers an applied handoff's pane for background watching (Issue #36). */
   watch?: {add(entry: WatchEntry): Promise<void>};
   /** Set by the extension when this session accepted a handoff packet; its targetStage is the session stage. */

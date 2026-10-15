@@ -18,6 +18,7 @@ import {registerTools} from './register-tools.ts';
 export default function (pi: ExtensionAPI) {
   const runtime = createRuntime();
   registerTools(pi, runtime);
+  runtime.activeToolNames = () => pi.getActiveTools();
   pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a pi-scaffold stage handoff.'});
 
   let accepted: {packetPath: string; sessionId: string} | undefined;
