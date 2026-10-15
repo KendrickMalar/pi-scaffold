@@ -120,7 +120,8 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
   // The new stage session opens in the Epic branch's worktree when exactly one exists (design docs live there, not on main).
-  const targetCwd = pickEpicWorktree(await call.runtime.git.listWorktrees(ctx.repoRoot), input.epicIssue) ?? ctx.repoRoot;
+  // Decided once per operation: a resumed call reuses the cwd stored with `prepared` (the packet's cwd), even if worktrees changed since.
+  let targetCwd = pickEpicWorktree(await call.runtime.git.listWorktrees(ctx.repoRoot), input.epicIssue) ?? ctx.repoRoot;
   const resourceRefs = [...(extras.resourceRefs ?? [])];
   const payloadDigest = taggedDigest('handoff', {input, requiredTools, ...(resourceRefs.length ? {resourceRefs} : {})});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
@@ -133,8 +134,10 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     };
     // prepared: private packet with a fresh nonce (journal keeps only its digest and path).
     budget();
-    let prepared = run.done('prepared') as {packetPath: string; packetSha256: string; nonceSha256: string} | undefined;
-    if (!prepared) {
+    let prepared = run.done('prepared') as {packetPath: string; packetSha256: string; nonceSha256: string; cwd?: string} | undefined;
+    // A `prepared` note from an older version has no cwd; its packet holds the repo root.
+    if (prepared) targetCwd = prepared.cwd ?? ctx.repoRoot;
+    else {
       const nonce = randomBytes(32).toString('hex');
       const packet: HandoffPacketV1 = {
         version: 1, nonce, workflowId: doc.workflowId, repo: input.repo, epicIssue: input.epicIssue, sourceStage: input.expectedStage, targetStage: input.nextStage,
@@ -142,7 +145,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
         profileId: ctx.profileId!, profileInstructionsDigest: ctx.profileInstructionsDigest!, accountBinding: ctx.accountBinding!, requiredTools, resourceRefs,
       };
       const written = await writePacket(dir, packet, call.namespaceRoot);
-      prepared = {packetPath: written.path, packetSha256: written.sha256, nonceSha256: nonceSha256(nonce)};
+      prepared = {packetPath: written.path, packetSha256: written.sha256, nonceSha256: nonceSha256(nonce), cwd: targetCwd};
       run.note('prepared', prepared);
     }
     const label = `scaffold-${prepared.nonceSha256.slice(0, 12)}`;

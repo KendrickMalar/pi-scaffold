@@ -117,13 +117,44 @@ test('opens the stage session in the Epic worktree when exactly one exists', asy
   const gh = world();
   const wt = '/synthetic/wt/epic-10';
   const {h, herdr} = await harness(t, gh, new FakeHerdr(), {worktrees: [{path: '/synthetic/repo', branch: 'main'}, {path: wt, branch: 'epic/10-csv'}]}, wt);
+  const added: {cwd: string}[] = [];
+  h.runtime.watch = {add: async entry => { added.push(entry); }};
   const out = await h.invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.equal((herdr.calls.find(c => c.command === 'tabCreate')!.args as {cwd: string}).cwd, wt);
   const cmd = (herdr.calls.find(c => c.command === 'paneRun')!.args as {command: string}).command;
   const packet = JSON.parse(await readFile(/--scaffold-handoff '([^']+)'/.exec(cmd)![1]!, 'utf8')) as {cwd: string};
   assert.equal(packet.cwd, wt);
+  assert.equal(added[0]!.cwd, wt);
 });
+
+test('a resumed operation keeps the cwd decided on the first call even if the Epic worktrees changed', async t => {
+  const gh = world();
+  const wtA = '/synthetic/wt/epic-10', wtB = '/synthetic/wt/epic-10-again';
+  const worktrees = [{path: '/synthetic/repo', branch: 'main'}, {path: wtA, branch: 'epic/10-csv'}];
+  const scenario: Scenario = {worktrees, waitMs: 60};
+  const {h, herdr} = await harness(t, gh, new FakeHerdr(), scenario, wtA);
+  const added: {cwd: string}[] = [];
+  h.runtime.watch = {add: async entry => { added.push(entry); }};
+  // The receiver stays silent on the first call: paused after prepared / tab-create.
+  let packetPath = '';
+  herdr.onPaneRun = async (_pane, command) => { packetPath = /--scaffold-handoff '([^']+)'/.exec(command)![1]!; };
+  herdr.onPrompt = async (_pane, text) => { await recordTurnStarted({packetPath, agentDir: h.agentDir, sessionId: 'design-session', prompt: text}); };
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial', JSON.stringify(first.r.problems));
+  // The harness shares this array with the fake git, so the Epic worktree moves between the two calls.
+  worktrees.splice(0, worktrees.length, {path: '/synthetic/repo', branch: 'main'}, {path: wtB, branch: 'epic/10-csv'});
+  const r = await acceptStartupPacket({packetPath, agentDir: h.agentDir, cwd: wtA, sessionId: 'design-session', sessionEntries: [profile()], toolNames: TOOLS, policy});
+  assert.ok(r.ok, JSON.stringify(r));
+  const second = await h.invoke();
+  assert.equal(second.r.status, 'applied', JSON.stringify(second.r.problems));
+  const tabCwds = herdr.calls.filter(c => c.command === 'tabCreate').map(c => (c.args as {cwd: string}).cwd);
+  assert.deepEqual(tabCwds, [wtA]);
+  const packet = JSON.parse(await readFile(packetPath, 'utf8')) as {cwd: string};
+  assert.equal(packet.cwd, wtA);
+  assert.deepEqual(added.map(e => e.cwd), [wtA]);
+});
+
 
 test('declining the approval cancels with zero launches', async t => {
   const gh = world();
