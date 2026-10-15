@@ -8,7 +8,7 @@ export function createTool(runtime: ScaffoldRuntime) {
     name: STAGE_CHECK,
     label: 'Scaffold: 工程を続けられるかの確認',
     description: 'Read-only. Call after reload, a plan-mode switch or resuming an interrupted stage session, before continuing work. Passes when the '
-      + 'read tools (gh_capabilities, gh_issue_get, scaffold_waves_verify, scaffold_stage_check) are active and every doc the Epic pins as '
+      + 'read tools (gh_capabilities, gh_issue_get) are active and every doc the Epic pins as '
       + '<docs/...>@sha256:<hex> in its sourceRefs has the same bytes in this cwd. Also lists the stage write tools that are inactive (expected in '
       + 'plan mode; not a failure). Never fixes anything.',
     parameters: Type.Object({

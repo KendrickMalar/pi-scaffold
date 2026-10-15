@@ -40,7 +40,7 @@ async function allTools() {
   return TOOL_FACTORIES;
 }
 
-test('exactly 15 tools are registered, with unique names, and only the verifier is read-only', async () => {
+test('exactly 15 tools are registered, with unique names, and only the verifier and the stage check are read-only', async () => {
   const {createRuntime} = await import('../src/core/runtime.js');
   const tools = (await allTools()).map(f => f(createRuntime({agentDir: '/synthetic/agent'})));
   const names = tools.map(t => t.name);
@@ -98,7 +98,7 @@ for (const name of Object.keys(INPUTS)) {
     const herdr = new FakeHerdr();
     const {createTool} = await loadToolModule(module);
     // scaffold_stage_check checks its own read tools first, so give it them to reach the capability check.
-    const tools = name === 'scaffold_stage_check' ? ['gh_capabilities', 'gh_issue_get', 'scaffold_waves_verify', 'scaffold_stage_check'] : undefined;
+    const tools = name === 'scaffold_stage_check' ? ['gh_capabilities', 'gh_issue_get'] : undefined;
     const h = await createHarness(createTool, {scenario: {gh, herdr, environment, ...(tools ? {tools} : {})}});
     t.after(h.dispose);
     const out = await h.invoke(INPUTS[name]);

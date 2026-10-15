@@ -28,7 +28,9 @@ export interface Scenario {
   /** Process environment seen by the tool (HERDR_*, PI_SUBAGENT_CHILD…). */
   environment?: Record<string, string | undefined>; waitMs?: number; pollMs?: number;
   /** Tool names registered in the calling session (ctx.tools). */
-  tools?: string[]; budgetMs?: number; now?: () => number;
+  tools?: string[];
+  /** Tools active for the model (runtime.activeToolNames, as the extension sets it); when set it wins over ctx.tools. */
+  activeTools?: string[]; budgetMs?: number; now?: () => number;
   /** Reuse another harness's agent directory (same journal), e.g. to resume from a different session model. */
   agentDir?: string;
   /** Session model; null means Pi reports no model. */
@@ -89,6 +91,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
   };
   const runtime = createRuntime({agentDir, git, timeoutMs: 2000, ...(scenario.environment ? {environment: () => scenario.environment!} : {}), ...(scenario.herdr && 'tabCreate' in scenario.herdr ? {herdr: () => scenario.herdr as HerdrPort} : {}), ...(scenario.waitMs !== undefined ? {waitMs: scenario.waitMs} : {}), ...(scenario.pollMs !== undefined ? {pollMs: scenario.pollMs} : {}), ...(scenario.budgetMs !== undefined ? {budgetMs: scenario.budgetMs} : {}), ...(scenario.now ? {now: scenario.now} : {})});
   if (scenario.handoff) runtime.handoff = scenario.handoff;
+  if (scenario.activeTools) runtime.activeToolNames = () => scenario.activeTools!;
   const tool = createTool(runtime);
   let confirmCalls = 0;
   const ctx = {

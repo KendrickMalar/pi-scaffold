@@ -9,7 +9,8 @@ export const STAGE_CHECK = 'scaffold_stage_check';
 export interface StageCheckInput { repo: string; epicIssue: number }
 export interface StageCheckData { stage: Stage | null; passed: boolean; missingReadTools: string[]; missingStageTools: string[]; docProblems: {path: string; message: string}[] }
 
-export const READ_TOOLS = ['gh_capabilities', 'gh_issue_get', 'scaffold_waves_verify', 'scaffold_stage_check'];
+// Plan mode keeps only gh reads, so only those count as required here.
+export const READ_TOOLS = ['gh_capabilities', 'gh_issue_get'];
 export const STAGE_TOOLS: Partial<Record<Stage, string[]>> = {
   specification: ['scaffold_specification_update', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_handoff_basic_design'],
   'basic-design': ['scaffold_feature_create', 'scaffold_dependencies_apply', 'scaffold_waves_apply', 'scaffold_handoff_implementation'],
