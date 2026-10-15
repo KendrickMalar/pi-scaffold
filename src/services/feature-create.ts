@@ -202,7 +202,9 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
     if (number === undefined) return run.stop([problem('ISSUE_NOT_FOUND', 'issue', 'The created Issue could not be identified.')]);
     createdNumber = number;
     // Native parent link: the only evidence of membership. The Epic body is not touched.
-    if (!(await attached(number))) {
+    // A pending write must be reconciled even when the native link already exists.
+    const pendingAttach = run.record.steps.some(s => s.name === 'attach' && (s.phase === 'requested' || s.phase === 'unknown'));
+    if (pendingAttach || !(await attached(number))) {
       run.checkpoint();
       await writeOwnedFile(attachPath, JSON.stringify({version: 1, repo: input.repo, operation: 'subissue-add', issue: input.epicIssue, relatedIssue: number}), {root: call.namespaceRoot});
       await run.write('attach', () => call.bridge.call('gh_subissue_add', {changePath: attachPath}, () => true as const, call.scope), {

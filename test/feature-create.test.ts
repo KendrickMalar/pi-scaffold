@@ -416,3 +416,82 @@ test('an Issue that carries this operation but no longer parses keeps the outcom
   assert.equal(resumed.r.status, 'unknown', JSON.stringify(resumed.r));
   assert.equal(gh.submitted.length, 1, 'never posted again');
 });
+
+// A completed remote attach must still reconcile its pending journal step on resume.
+for (const phase of ['requested', 'unknown'] as const) {
+  test(`an already attached Feature reconciles a ${phase} attach without another write`, async t => {
+    const gh = world();
+    gh.overrides.set('gh_subissue_add', () => {
+      gh.overrides.delete('gh_subissue_add');
+      gh.issues.get(10)!.subIssues = [gh.submitted[0]!.number];
+      return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+    });
+    const h = await harness(t, gh);
+    const first = await h.invoke();
+    assert.equal(first.r.status, 'unknown');
+    const n = (first.r.data as Data).number;
+    assert.deepEqual(gh.issues.get(10)!.subIssues, [n]);
+    const {readFile, writeFile} = await import('node:fs/promises');
+    const path = join(h.agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), epicOf(gh).workflowId, 'operations', `${OP}.json`);
+    type State = {status: string; steps: {name: string; phase: string}[]};
+    const before = JSON.parse(await readFile(path, 'utf8')) as State;
+    assert.equal(before.steps.find(s => s.name === 'attach')?.phase, 'unknown');
+    if (phase === 'requested') {
+      // Synthetic journal only: model a crash before the unknown response was saved.
+      before.steps.find(s => s.name === 'attach')!.phase = 'requested';
+      await writeFile(path, JSON.stringify(before), {mode: 0o600});
+    }
+    const resumed = await h.invoke();
+    assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r));
+    assert.equal((resumed.r.data as Data).parentAttached, true);
+    assert.equal(creates(gh), 1, 'never post the existing Issue again');
+    assert.equal(attaches(gh), 1, 'read-back settles the attach without resending it');
+    const after = JSON.parse(await readFile(path, 'utf8')) as State;
+    assert.equal(after.status, 'applied');
+    assert.equal(after.steps.find(s => s.name === 'attach')?.phase, 'done');
+    const again = await h.invoke();
+    assert.equal(again.r.status, 'noop');
+    assert.equal(again.ghWrites, 0);
+    const next = await h.invoke(base(gh, {operationId: OTHER_OP, featureKey: 'F002', title: '次のFeature'}));
+    assert.equal(next.r.status, 'applied', JSON.stringify(next.r.problems));
+    assert.equal(creates(gh), 2, 'the next Feature can proceed after reconciliation');
+  });
+}
+
+test('an unknown attach that did not take effect retries only the attach after read-back', async t => {
+  const gh = world();
+  gh.overrides.set('gh_subissue_add', () => {
+    gh.overrides.delete('gh_subissue_add');
+    return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+  });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  assert.deepEqual(gh.issues.get(10)!.subIssues ?? [], []);
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal((resumed.r.data as Data).parentAttached, true);
+  assert.equal(creates(gh), 1);
+  assert.equal(attaches(gh), 2, 'one unknown request and one verified retry');
+});
+
+test('an unreadable native parent link leaves an unknown attach unresolved and blocks the next Feature', async t => {
+  const gh = world();
+  gh.overrides.set('gh_subissue_add', () => {
+    gh.overrides.delete('gh_subissue_add');
+    gh.issues.get(10)!.subIssues = [gh.submitted[0]!.number];
+    return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+  });
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  gh.overrides.set('gh_subissues_list', () => FakePiGh.err('unknown', 'GITHUB_READ'));
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'unknown', JSON.stringify(resumed.r));
+  assert.ok(resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
+  assert.equal(creates(gh), 1);
+  assert.equal(attaches(gh), 1);
+  gh.overrides.delete('gh_subissues_list');
+  const next = await h.invoke(base(gh, {operationId: OTHER_OP, featureKey: 'F002', title: '次のFeature'}));
+  assert.equal(next.r.status, 'blocked');
+  assert.ok(next.r.problems.some(p => p.code === 'WORKFLOW_UNRESOLVED'));
+  assert.equal(creates(gh), 1, 'an uncertain parent link cannot authorize another post');
+});
