@@ -17,6 +17,7 @@ import {HerdrError, SUPPORTED_HERDR, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
 import {promptTag} from './receiver.js';
 import {pickEpicWorktree} from '../core/epic-worktree.js';
+import {pinnedDocRefs} from '../core/pinned-docs.js';
 import {handoffDir, nonceSha256, readReceipt, writePacket, type HandoffPacketV1, type ReceiptPhase} from './packet.js';
 
 export interface HandoffInput extends MutationInput { expectedStage: Stage; nextStage: Stage }
@@ -122,7 +123,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   // The new stage session opens in the Epic branch's worktree when exactly one exists (design docs live there, not on main).
   // Decided once per operation: a resumed call reuses the cwd stored with `prepared` (the packet's cwd), even if worktrees changed since.
   let targetCwd = pickEpicWorktree(await call.runtime.git.listWorktrees(ctx.repoRoot), input.epicIssue) ?? ctx.repoRoot;
-  const resourceRefs = [...(extras.resourceRefs ?? [])];
+  const resourceRefs = [...(extras.resourceRefs ?? []), ...pinnedDocRefs(doc)];
   const payloadDigest = taggedDigest('handoff', {input, requiredTools, ...(resourceRefs.length ? {resourceRefs} : {})});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     const budget = () => { if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Call budget used; progress is recorded. Call again with the same operationId.')]); };
