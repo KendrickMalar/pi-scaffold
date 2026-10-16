@@ -4,6 +4,7 @@ import {dirname} from 'node:path';
 import {realpath} from 'node:fs/promises';
 import {failed, okValue, problem, type Decoded, type Problem} from '../core/contracts.js';
 import {taggedDigest} from '../core/digests.js';
+import {verifyPinnedDocs} from '../core/pinned-docs.js';
 import {readProfileSnapshot, resolveScaffoldDir} from '../core/repo-context.js';
 import {repoPolicyFor, type OwnerPolicy} from '../core/model-bindings.js';
 import {nonceSha256, readPacket, readReceipt, writeReceipt, type HandoffPacketV1} from './packet.js';
@@ -29,6 +30,7 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
   if (binding !== packet.accountBinding) problems.push(problem('RECEIVER_ACCOUNT_MISMATCH', 'account', 'This session does not use the same file-backed authentication configuration.'));
   const missing = packet.requiredTools.filter(t => !input.toolNames.includes(t));
   if (missing.length) problems.push(problem('REQUIRED_TOOL_MISSING', 'tools', `Missing tools in this session: ${missing.join(', ')}.`));
+  problems.push(...await verifyPinnedDocs(input.cwd, packet.resourceRefs));
   if (problems.length) return failed(problems);
   const dir = dirname(input.packetPath);
   const existing = await readReceipt(dir, 'receiver-ready', root);

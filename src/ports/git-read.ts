@@ -1,6 +1,7 @@
 // Local, read-only git access with fixed argv (no shell). fetch/merge/push are never run.
 import {execFile} from 'node:child_process';
 import {LIMITS} from '../core/contracts.js';
+import {parseWorktreePorcelain, type WorktreeEntry} from '../core/epic-worktree.js';
 
 const ALLOWED = new Set(['rev-parse', 'cat-file', 'merge-base', 'ls-remote', 'ls-tree']);
 export interface RepoIdentity { repoRoot: string; gitCommonDir: string; origin: string }
@@ -11,11 +12,14 @@ export interface GitReader {
   listTree(ref: string, path: string, cwd: string): Promise<string[] | undefined>;
   /** Exact bytes of `<commit>:<path>`, or undefined when it does not exist (read-only `git cat-file blob`). Rejects with TOO_LARGE above the artifact limit. */
   readBlob(commit: string, path: string, cwd: string): Promise<Buffer | undefined>;
+  /** Local worktrees (read-only `git worktree list --porcelain`); [] if unreadable. */
+  listWorktrees(cwd: string): Promise<WorktreeEntry[]>;
 }
 
 export function createGitReader(options: {timeoutMs?: number; gitBin?: string} = {}): GitReader {
   const run: GitReader['run'] = (args, cwd) => {
-    const allowed = ALLOWED.has(args[0] ?? '') || (args[0] === 'remote' && args[1] === 'get-url' && args.length === 3);
+    const allowed = ALLOWED.has(args[0] ?? '') || (args[0] === 'remote' && args[1] === 'get-url' && args.length === 3)
+      || (args[0] === 'worktree' && args[1] === 'list' && args[2] === '--porcelain' && args.length === 3);
     if (!allowed) return Promise.reject(new Error(`git ${args[0] ?? ''} is not allowed.`));
     const env = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0'};
     return new Promise(resolve => {
@@ -41,6 +45,10 @@ export function createGitReader(options: {timeoutMs?: number; gitBin?: string} =
   };
   return {
     run, readBlob, listTree,
+    async listWorktrees(cwd) {
+      const r = await run(['worktree', 'list', '--porcelain'], cwd);
+      return r.code ? [] : parseWorktreePorcelain(r.stdout);
+    },
     async repoIdentity(cwd) {
       const top = await run(['rev-parse', '--show-toplevel'], cwd);
       const common = await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);

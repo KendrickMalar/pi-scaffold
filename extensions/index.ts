@@ -5,6 +5,7 @@
 import type {ExtensionAPI} from '@earendil-works/pi-coding-agent';
 import {createRuntime} from '../dist/src/core/runtime.js';
 import {loadOwnerPolicy} from '../dist/src/core/model-bindings.js';
+import {formatProblemCodes} from '../dist/src/core/pinned-docs.js';
 import {acceptStartupPacket, recordTurnStarted} from '../dist/src/handoff/receiver.js';
 import {questionGuard} from '../dist/src/core/agent-decision.js';
 import {join} from 'node:path';
@@ -17,6 +18,7 @@ import {registerTools} from './register-tools.ts';
 export default function (pi: ExtensionAPI) {
   const runtime = createRuntime();
   registerTools(pi, runtime);
+  runtime.activeToolNames = () => pi.getActiveTools();
   pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a pi-scaffold stage handoff.'});
 
   let accepted: {packetPath: string; sessionId: string} | undefined;
@@ -73,7 +75,7 @@ export default function (pi: ExtensionAPI) {
       }
       // pi-profile may record its Profile snapshot after this handler; retry briefly for that case only.
       if (++attempts < 10 && r.problems.every(p => p.code === 'RECEIVER_PROFILE_MISMATCH')) { retry = setTimeout(() => void attempt(), 200); return; }
-      ctx.ui.notify('pi-scaffold: 引き継ぎを受け付けませんでした: ' + r.problems.map(p => p.code).join(', '), 'error');
+      ctx.ui.notify('pi-scaffold: 引き継ぎを受け付けませんでした: ' + formatProblemCodes(r.problems), 'error');
     };
     void attempt();
   });

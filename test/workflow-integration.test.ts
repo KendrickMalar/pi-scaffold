@@ -28,6 +28,7 @@ const INPUTS: Record<string, Record<string, unknown>> = {
     criteria: [{id: 'AC101', requirementIds: ['REQ001'], verification: 'v', expectedResult: 'e'}], bindings: {'coding-manager': binding, coder: binding, tester: binding}},
   scaffold_dependencies_apply: {...mutation, plan: {version: 1, nodes: [], edges: []}},
   scaffold_waves_verify: {repo: 'example/demo', epicIssue: 10},
+  scaffold_stage_check: {repo: 'example/demo', epicIssue: 10},
   scaffold_waves_apply: {...mutation, plan: {version: 1, assignments: [], dependencyDigest: SHA_A, featureSetDigest: SHA_A}},
   scaffold_handoff_implementation: {...mutation},
   scaffold_handoff_verification: {...mutation, integrationRef: COMMIT, evidenceRefs: [{relativePath: 'r.json', sha256: SHA_A}]},
@@ -39,14 +40,14 @@ async function allTools() {
   return TOOL_FACTORIES;
 }
 
-test('exactly 14 tools are registered, with unique names, and only the verifier is read-only', async () => {
+test('exactly 15 tools are registered, with unique names, and only the verifier and the stage check are read-only', async () => {
   const {createRuntime} = await import('../src/core/runtime.js');
   const tools = (await allTools()).map(f => f(createRuntime({agentDir: '/synthetic/agent'})));
   const names = tools.map(t => t.name);
-  assert.equal(names.length, 14);
-  assert.equal(new Set(names).size, 14);
+  assert.equal(names.length, 15);
+  assert.equal(new Set(names).size, 15);
   assert.deepEqual([...names].sort(), Object.keys(INPUTS).sort());
-  assert.deepEqual(tools.filter(t => t.annotations.readOnlyHint).map(t => t.name), ['scaffold_waves_verify']);
+  assert.deepEqual(tools.filter(t => t.annotations.readOnlyHint).map(t => t.name), ['scaffold_waves_verify', 'scaffold_stage_check']);
 });
 
 test('no circular runtime imports in src/ and extensions/', () => {
@@ -89,14 +90,16 @@ for (const name of Object.keys(INPUTS)) {
     scaffold_specification_update: 'specification-update', scaffold_research_begin: 'research-begin', scaffold_research_resolve: 'research-resolve',
     scaffold_handoff_basic_design: 'handoff-basic-design', scaffold_feature_create: 'feature-create', scaffold_dependencies_apply: 'dependencies-apply',
     scaffold_waves_verify: 'waves-verify', scaffold_waves_apply: 'waves-apply', scaffold_handoff_implementation: 'handoff-implementation',
-    scaffold_handoff_verification: 'handoff-verification', scaffold_epic_complete: 'epic-complete',
+    scaffold_handoff_verification: 'handoff-verification', scaffold_epic_complete: 'epic-complete', scaffold_stage_check: 'stage-check',
   }[name]! + '.ts';
 
   test(`${name}: a missing pi-gh capability blocks with zero writes and zero tabs`, async t => {
     const gh = new FakePiGh(); gh.operations = [];
     const herdr = new FakeHerdr();
     const {createTool} = await loadToolModule(module);
-    const h = await createHarness(createTool, {scenario: {gh, herdr, environment}});
+    // scaffold_stage_check checks its own read tools first, so give it them to reach the capability check.
+    const tools = name === 'scaffold_stage_check' ? ['gh_capabilities', 'gh_issue_get'] : undefined;
+    const h = await createHarness(createTool, {scenario: {gh, herdr, environment, ...(tools ? {tools} : {})}});
     t.after(h.dispose);
     const out = await h.invoke(INPUTS[name]);
     assert.equal(out.inputSchemaValid, true, out.inputSchemaErrors.join('; '));
