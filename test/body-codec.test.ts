@@ -87,6 +87,14 @@ test('body limit: exactly 64KiB is allowed, one byte more is rejected', () => {
   assert.ok(problems.some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'body'));
 });
 
+/** Pads the JSON with tab characters (2 bytes each in JSON, 1 byte in the visible part) so the JSON can pass 32KiB while the whole body stays under 64KiB. */
+function docWithJsonBytesDense(target: number): EpicDocV1 {
+  const doc = initialDoc(); doc.purpose = '';
+  const padding = target - Buffer.byteLength(JSON.stringify(doc, null, 2)) - 1;
+  doc.purpose = 'x' + 'y'.repeat(padding % 2) + '\t'.repeat(Math.floor(padding / 2));
+  return doc;
+}
+
 function docWithJsonBytes(target: number): EpicDocV1 {
   const doc = initialDoc(); doc.purpose = '';
   // 複数の短い質問でJSONの構造分を確保し、JSON境界と本文境界を分離する。
@@ -107,11 +115,24 @@ test('16KiB超の日本語仕様を変更せずに読み取り・設計参照を
   assert.equal(parsed.value.doc.purpose, doc.purpose);
 });
 
-test('JSON limit: exactly 32KiB is allowed, one byte more is rejected', () => {
-  const exact = docWithJsonBytes(32 * 1024);
-  assert.equal(parseIssueBody(renderEpicBlock(exact)).ok, true);
-  const over = docWithJsonBytes(32 * 1024 + 1);
-  assert.ok(problemsOf(parseIssueBody(renderEpicBlock(over))).some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'json'));
+test('managed JSON over 32KiB is accepted while the whole body stays within 64KiB', () => {
+  const doc = docWithJsonBytesDense(34069);
+  const body = renderEpicBlock(doc);
+  assert.ok(Buffer.byteLength(JSON.stringify(doc, null, 2)) > 32 * 1024);
+  assert.ok(Buffer.byteLength(body) <= LIMITS.bodyBytes);
+  const parsed = parseIssueBody(body); assert.ok(parsed.ok);
+  const snap = buildSnapshot(raw(renderEpicBlock(initialDoc()))); assert.ok(snap.ok);
+  const next = structuredClone(doc); next.revision = snap.value.doc.revision;
+  assert.ok(patchDoc(snap.value, next).ok);
+});
+
+test('whole body one byte over 64KiB is rejected with LIMIT_EXCEEDED on body', () => {
+  const block = renderEpicBlock(docWithJsonBytesDense(34069));
+  const room = LIMITS.bodyBytes - Buffer.byteLength(block) - 1;
+  const exact = block + '\n' + 'x'.repeat(room);
+  assert.equal(Buffer.byteLength(exact), LIMITS.bodyBytes);
+  assert.equal(parseIssueBody(exact).ok, true);
+  assert.ok(problemsOf(parseIssueBody(exact + 'x')).some(p => p.code === 'LIMIT_EXCEEDED' && p.path === 'body'));
 });
 
 test('patch is rejected when the doubled visible+JSON body would exceed the limit', () => {
