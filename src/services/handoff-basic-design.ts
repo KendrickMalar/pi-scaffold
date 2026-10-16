@@ -2,7 +2,7 @@
 // content approved in the parent TUI (headless sessions may only reference an existing approval). Transport is #5's driver;
 // the gate re-checks completeness and the approval right before the stage commit.
 import {decodeMutationInput, problem, type ApprovalRef, type Decoded, type EpicDocV1, type IssueSnapshot, type MutationInput, type ScaffoldResult} from '../core/contracts.js';
-import {approvalViewDigest, withAgentApproval} from '../core/approvals.js';
+import {approvalNeedsConfirmation, approvalViewDigest, withAgentApproval} from '../core/approvals.js';
 import {checkSpecificationReady, specificationApprovalView} from '../core/specification-gate.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
@@ -46,7 +46,7 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
     const existing = await call.approvals.requireContentApproval('specification', doc.workflowId, approvalViewDigest('specification', view), context.value);
     if (existing.ok) approval = existing.value;
     else {
-      if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
+      if (!approvalNeedsConfirmation(existing.problems)) return blocked(existing.problems);
       const confirmed = await call.approvals.confirmContent('specification', doc.workflowId, view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, doc.workflowId)});
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
       approval = confirmed.data;

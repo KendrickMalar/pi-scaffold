@@ -26,6 +26,12 @@ export function withAgentApproval<R extends {data?: unknown}>(result: R, ref: Ap
 }
 
 const KIND_LABEL: Record<ApprovalKind, string> = {specification: '仕様の内容承認', 'implementation-start': '実装開始の指示', 'epic-completion': 'Epicの最終受け入れ'};
+/**
+ * True when the only problem is that no usable record exists for this profile and account, so a person may be asked.
+ * An approval of the same content that belongs to another profile or account is never reused; the person gives it again.
+ * Anything else (unreadable or invalid record, unbound context) stays blocked.
+ */
+export const approvalNeedsConfirmation = (problems: readonly {code: string}[]): boolean => problems.length > 0 && problems.every(p => p.code === 'APPROVAL_MISSING' || p.code === 'APPROVAL_MISMATCH');
 export function approvalViewDigest(kind: ApprovalKind, view: ApprovalView): Sha256 { return taggedDigest('approval-view', {kind, contentDigest: view.contentDigest, text: view.text}); }
 
 export class ApprovalStore {

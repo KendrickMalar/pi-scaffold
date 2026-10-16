@@ -7,7 +7,7 @@ import {
   decodeMutationInput, isGitObjectId, isSha256, problem,
   type ApprovalRef, type Decoded, type EpicDocV1, type GitObjectId, type IssueSnapshot, type MutationInput, type OwnedEvidenceRef, type Problem, type ScaffoldResult,
 } from '../core/contracts.js';
-import {approvalViewDigest, withAgentApproval} from '../core/approvals.js';
+import {approvalNeedsConfirmation, approvalViewDigest, withAgentApproval} from '../core/approvals.js';
 import {patchDoc} from '../core/body-codec.js';
 import {taggedDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
@@ -112,7 +112,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     const existing = await call.approvals.requireContentApproval('epic-completion', epic.workflowId, approvalViewDigest('epic-completion', view), context.value);
     if (existing.ok) approval = existing.value;
     else {
-      if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
+      if (!approvalNeedsConfirmation(existing.problems)) return blocked(existing.problems);
       if (call.environment().PI_SUBAGENT_CHILD) return blocked([problem('APPROVAL_UI_REQUIRED', 'epic-completion', 'A subagent child cannot give the final acceptance.')]);
       const confirmed = await call.approvals.confirmContent('epic-completion', epic.workflowId, view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, epic.workflowId)});
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
