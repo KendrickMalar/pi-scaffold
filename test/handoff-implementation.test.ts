@@ -265,3 +265,31 @@ test('a missing write capability the handoff needs later stops before the start 
     assert.equal(out.confirmCalls, 0, op); noLaunch(herdr, gh);
   }
 });
+
+test('time spent on the preconditions does not use up the handoff step budget', async t => {
+  let clock = 0, slowed = false;
+  const gh = world(), herdr = new FakeHerdr();
+  gh.onCall = () => { if (!slowed) { slowed = true; clock += 70_000; } }; // slow readiness: runs past budgetMs before any step starts
+  const {h} = await harness(t, gh, herdr, {budgetMs: 60_000, now: () => clock});
+  const out = await h.invoke();
+  assert.ok(slowed);
+  assert.ok(!out.r.problems.some(p => p.code === 'CALL_BUDGET_EXHAUSTED'), JSON.stringify(out.r));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(herdr.tabCreates, 1);
+});
+
+test('a step that runs past the handoff budget still pauses and resumes with the same operationId', async t => {
+  let clock = 0;
+  const gh = world(), herdr = new FakeHerdr();
+  const create = herdr.tabCreate.bind(herdr);
+  herdr.tabCreate = async o => { clock += 70_000; return create(o); };
+  const {h} = await harness(t, gh, herdr, {budgetMs: 60_000, now: () => clock});
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  assert.ok(first.r.problems.some(p => p.code === 'CALL_BUDGET_EXHAUSTED'));
+  assert.equal(herdr.count('paneRun'), 0);
+  clock = 0; herdr.tabCreate = create;
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(herdr.tabCreates, 1);
+});
