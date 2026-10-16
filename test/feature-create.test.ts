@@ -97,6 +97,19 @@ for (const [label, change, path] of [
   });
 }
 
+test('a Feature whose rendered body exceeds the body limit is blocked on body before any GitHub write; one just under passes', async t => {
+  const gh = world();
+  const over = await (await harness(t, gh)).invoke(base(gh, {purpose: 'x'.repeat(33000)}));
+  assert.equal(over.r.status, 'blocked');
+  assert.ok(over.r.problems.some(x => x.code === 'LIMIT_EXCEEDED' && x.path === 'body'), JSON.stringify(over.r.problems));
+  assert.equal(gh.writes, 0, JSON.stringify(gh.calls.map(c => c.name)));
+  noSideEffects(gh);
+  const gh2 = world();
+  const ok = await (await harness(t, gh2)).invoke(base(gh2, {purpose: 'x'.repeat(31000)}));
+  assert.equal(ok.r.status, 'applied', JSON.stringify(ok.r.problems));
+  assert.equal(creates(gh2), 1);
+});
+
 // ---- editScope: the same judgement scaffold_waves_verify makes, before anything is written ------------
 
 for (const bad of ['', '  ', '../x', 'src/../**', '/', '/src/**', 'src\\x'] as const) {
