@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
@@ -398,4 +398,41 @@ test('a subagent child in a listed Verification session still cannot give the fi
   assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'));
   assert.equal(out.confirmCalls, 0);
   nothingChanged(gh, before);
+});
+
+const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'pi-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'pi-scaffold', f));
+const otherProfile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '別の指示文（架空）'}};
+
+test('a final acceptance recorded under another profile is asked again; Yes overwrites it, No keeps it and closes nothing', async t => {
+  const gh = world();
+  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  const parent = await harness(t, gh);
+  const refs = await writeEvidence(parent.agentDir);
+  assert.equal((await parent.invoke(params(gh, refs))).confirmCalls, 1);
+  gh.overrides.delete('gh_issue_edit_if_current');
+  const files = (await approvalFiles(parent.agentDir)).filter(f => f.includes('epic-completion')); assert.equal(files.length, 1);
+  const file = files[0]!; const before = await readFile(file, 'utf8');
+  const no = await harness(t, gh, {agentDir: parent.agentDir, sessionEntries: [otherProfile], confirm: false});
+  const declined = await no.invoke(params(gh, refs));
+  assert.equal(declined.r.status, 'cancelled'); assert.ok(declined.r.problems.some(p => p.code === 'DECLINED'));
+  assert.equal(declined.confirmCalls, 1); assert.equal(await readFile(file, 'utf8'), before); assert.equal(closes(gh), 0);
+  const yes = await harness(t, gh, {agentDir: parent.agentDir, sessionEntries: [otherProfile]});
+  const out = await yes.invoke(params(gh, refs));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems)); assert.equal(out.confirmCalls, 1);
+  assert.notEqual(JSON.parse(await readFile(file, 'utf8')).profileInstructionsDigest, JSON.parse(before).profileInstructionsDigest);
+});
+
+test('a corrupt final acceptance record stays blocked without asking', async t => {
+  const gh = world();
+  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  const parent = await harness(t, gh);
+  const refs = await writeEvidence(parent.agentDir);
+  await parent.invoke(params(gh, refs));
+  gh.overrides.delete('gh_issue_edit_if_current');
+  const file = (await approvalFiles(parent.agentDir)).find(f => f.includes('epic-completion')); assert.ok(file);
+  await writeFile(file, '{not json');
+  const h = await harness(t, gh, {agentDir: parent.agentDir, sessionEntries: [otherProfile]});
+  const out = await h.invoke(params(gh, refs));
+  assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'INVALID_JSON'), JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 0); assert.equal(closes(gh), 0);
 });

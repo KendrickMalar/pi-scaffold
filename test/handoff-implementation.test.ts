@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {rm} from 'node:fs/promises';
+import {readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
@@ -292,4 +292,38 @@ test('a step that runs past the handoff budget still pauses and resumes with the
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
   assert.equal(herdr.tabCreates, 1);
+});
+
+const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'pi-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'pi-scaffold', f));
+const otherProfile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '別の指示文（架空）'}};
+
+test('an approval of the same content recorded under another profile is asked again; Yes overwrites it, No keeps it', async t => {
+  const gh = world();
+  const {h: parent} = await harness(t, gh, new FakeHerdr(), {tools: ['gh_capabilities']});
+  assert.equal((await parent.invoke()).confirmCalls, 1);
+  const [file] = await approvalFiles(parent.agentDir); assert.ok(file);
+  const before = await readFile(file, 'utf8');
+  // No: nothing changes.
+  const {h: no, herdr: hn} = await harness(t, gh, new FakeHerdr(), {agentDir: parent.agentDir, sessionEntries: [otherProfile], confirm: false});
+  const declined = await no.invoke();
+  assert.equal(declined.r.status, 'cancelled'); assert.ok(declined.r.problems.some(p => p.code === 'DECLINED'), JSON.stringify(declined.r.problems));
+  assert.equal(declined.confirmCalls, 1); assert.equal(await readFile(file, 'utf8'), before); noLaunch(hn, gh);
+  // Yes: re-recorded under the new profile, and the handoff proceeds.
+  const {h: yes} = await harness(t, gh, new FakeHerdr(), {agentDir: parent.agentDir, sessionEntries: [otherProfile], tools: ['gh_capabilities']});
+  const out = await yes.invoke();
+  // The approval step passed; the launch then stops only because the fixture lacks the stage tools.
+  assert.ok(out.r.problems.some(p => p.code === 'REQUIRED_TOOL_MISSING'), JSON.stringify(out.r.problems)); assert.equal(out.confirmCalls, 1);
+  assert.notEqual(JSON.parse(await readFile(file, 'utf8')).profileInstructionsDigest, JSON.parse(before).profileInstructionsDigest);
+});
+
+test('a corrupt approval record stays blocked without asking', async t => {
+  const gh = world();
+  const {h: parent} = await harness(t, gh, new FakeHerdr(), {tools: ['gh_capabilities']});
+  await parent.invoke();
+  const [file] = await approvalFiles(parent.agentDir); assert.ok(file);
+  await writeFile(file, '{not json');
+  const {h, herdr} = await harness(t, gh, new FakeHerdr(), {agentDir: parent.agentDir, sessionEntries: [otherProfile]});
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'INVALID_JSON'), JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 0); noLaunch(herdr, gh);
 });

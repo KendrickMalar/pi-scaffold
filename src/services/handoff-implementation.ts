@@ -2,7 +2,7 @@
 // Waves must be complete and consistent, and the parent TUI must approve starting implementation for exactly that state
 // (headless sessions may only reference an existing start approval). Transport is #5's driver; only the Epic's Stage moves.
 import {decodeMutationInput, problem, type ApprovalRef, type Decoded, type EpicDocV1, type GateResult, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult} from '../core/contracts.js';
-import {approvalViewDigest, withAgentApproval} from '../core/approvals.js';
+import {approvalNeedsConfirmation, approvalViewDigest, withAgentApproval} from '../core/approvals.js';
 import {blobKey, checkDesignReady, startApprovalView} from '../core/design-gate.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
@@ -70,7 +70,7 @@ export async function handoffImplementation(input: MutationInput, call: ToolCall
     const existing = await call.approvals.requireContentApproval('implementation-start', doc.workflowId, approvalViewDigest('implementation-start', ready.view), context.value);
     if (existing.ok) approval = existing.value;
     else {
-      if (!existing.problems.every(p => p.code === 'APPROVAL_MISSING')) return blocked(existing.problems);
+      if (!approvalNeedsConfirmation(existing.problems)) return blocked(existing.problems);
       const confirmed = await call.approvals.confirmContent('implementation-start', doc.workflowId, ready.view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, doc.workflowId)});
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
       approval = confirmed.data;
