@@ -99,6 +99,7 @@ export function parseIssueBody(body: string): Decoded<ParsedBody> {
   if (!lf.startsWith(MANAGED_START + '\n') || detailsAt < 0 || !inner.endsWith(DETAILS_CLOSE)) return failed([invalid('Managed block structure is not recognized.')]);
   const visible = inner.slice(0, detailsAt);
   const jsonText = inner.slice(detailsAt + 1 + DETAILS_OPEN.length, inner.length - DETAILS_CLOSE.length);
+  // Kept for clarity: the JSON is also bound by bodyBytes (the whole-body check is the binding limit).
   if (Buffer.byteLength(jsonText) > LIMITS.jsonBytes) return failed([problem('LIMIT_EXCEEDED', 'json', `Managed JSON exceeds ${LIMITS.jsonBytes} bytes.`)]);
   let parsed: unknown;
   try { parsed = parseStrictJson(jsonText); } catch (error) {
@@ -153,6 +154,7 @@ export function patchDoc(snapshot: IssueSnapshot, nextDoc: ScaffoldDocV1): Decod
   const decoded = decodeScaffoldDoc(next);
   if (!decoded.ok) return failed(decoded.problems.map(p => ({...p, path: 'doc.' + p.path})));
   const json = canonicalDocJson(next);
+  // Kept for clarity: the JSON is also bound by bodyBytes (the whole-body check is the binding limit).
   if (Buffer.byteLength(json) > LIMITS.jsonBytes) return failed([problem('LIMIT_EXCEEDED', 'json', `Managed JSON exceeds ${LIMITS.jsonBytes} bytes.`)]);
   const body = current.value.before + renderEpicBlock(next) + current.value.after;
   if (Buffer.byteLength(body) > LIMITS.bodyBytes) return failed([problem('LIMIT_EXCEEDED', 'body', `Body would exceed ${LIMITS.bodyBytes} bytes.`)]);

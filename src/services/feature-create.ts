@@ -153,6 +153,7 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
   let block: string;
   try { block = renderFeatureBlock(doc); } catch (e) { return blocked([problem('INVALID_DOCUMENT', 'doc', (e as Error).message)]); }
   if (Buffer.byteLength(canonicalDocJson(doc)) > LIMITS.jsonBytes) return blocked([problem('LIMIT_EXCEEDED', 'json', `Managed JSON exceeds ${LIMITS.jsonBytes} bytes.`)]);
+  if (Buffer.byteLength(block) > LIMITS.bodyBytes - 1024) return blocked([problem('LIMIT_EXCEEDED', 'body', 'The Feature body would exceed the Issue body limit.')]);
   const dir = join(ctx.workflowStateRoot, 'features', input.operationId);
   const draftPath = join(dir, 'draft.json');
   const snapshot = await buildTemplateSnapshot('feature', input.bindings, join(dir, 'template'), call.namespaceRoot);
