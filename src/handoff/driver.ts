@@ -4,7 +4,7 @@
 import {randomBytes} from 'node:crypto';
 import {join} from 'node:path';
 import {
-  problem, type EpicDocV1, type GateResult, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult, type Stage,
+  LIMITS, problem, type EpicDocV1, type GateResult, type IssueSnapshot, type MutationInput, type Problem, type ScaffoldResult, type Stage,
 } from '../core/contracts.js';
 import {patchDoc} from '../core/body-codec.js';
 import {sha256Text, taggedDigest} from '../core/digests.js';
@@ -126,7 +126,9 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const resourceRefs = [...(extras.resourceRefs ?? []), ...pinnedDocRefs(doc)];
   const payloadDigest = taggedDigest('handoff', {input, requiredTools, ...(resourceRefs.length ? {resourceRefs} : {})});
   const result = await withOperation({operation, repo: input.repo, workflowId: doc.workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
-    const budget = () => { if (call.overBudget()) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Call budget used; progress is recorded. Call again with the same operationId.')]); };
+    // The step budget starts here: time spent on the preconditions above (readiness, approvals) must not use it up, or a slow readiness would pause every call before `prepared`.
+    const opDeadline = call.now() + (call.runtime.budgetMs ?? LIMITS.callTimeoutMs);
+    const budget = () => { if (call.now() >= opDeadline) run.pause([problem('CALL_BUDGET_EXHAUSTED', '', 'Call budget used; progress is recorded. Call again with the same operationId.')]); };
     const checkBinding = async () => {
       run.checkpoint();
       let now: {workspaceId: string; paneId: string};
@@ -164,7 +166,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     run.note('tab-ids', tab);
     // pane-run: the fixed launch command in the created root pane only.
     const waitReceipt = async (phase: ReceiptPhase) => {
-      const deadline = Math.min(call.now() + (call.runtime.waitMs ?? 60_000), call.deadline);
+      const deadline = Math.min(call.now() + (call.runtime.waitMs ?? 60_000), opDeadline);
       for (;;) {
         const r = await readReceipt(dir, phase, call.namespaceRoot);
         if (r) {
