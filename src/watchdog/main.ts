@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {createGhEpicReader, createHerdrFleet} from './herdr-fleet.js';
 import {readSessionTail} from '../watch/session-tail.js';
 import {runOnce, type WatchdogDeps} from './run.js';
+import {readChildRuns} from './children.js';
 import type {StateRoot} from './discover.js';
 import type {AgentKind} from './types.js';
 
@@ -44,6 +45,13 @@ function userTempDir(): string | undefined {
   try { return execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], {encoding: 'utf8', timeout: 5000}).trim() || undefined; } catch { return undefined; }
 }
 
+/** SCAFFOLD_WATCHDOG_SUBAGENT_RUNS, else pi-subagents' own place: <TMPDIR>/pi-subagents-uid-<uid>/async-subagent-runs. */
+export function childRunsDir(env: NodeJS.ProcessEnv, darwinTemp: () => string | undefined = userTempDir): string | undefined {
+  if (env.SCAFFOLD_WATCHDOG_SUBAGENT_RUNS) return env.SCAFFOLD_WATCHDOG_SUBAGENT_RUNS;
+  const tmp = reconcileEnv(env, darwinTemp).TMPDIR;
+  return tmp && process.getuid ? join(tmp, `pi-subagents-uid-${process.getuid()}`, 'async-subagent-runs') : undefined;
+}
+
 function runCommand(path: string): Promise<string> {
   return new Promise((resolve, reject) => execFile(path, [], {env: reconcileEnv(process.env), timeout: 120_000, maxBuffer: 4 * 1024 * 1024}, (error, stdout, stderr) => {
     if (error) reject(new Error(`${path} failed: ${String(stderr).trim().slice(0, 300) || error.message}`)); else resolve(String(stdout));
@@ -53,6 +61,7 @@ function runCommand(path: string): Promise<string> {
 export function depsFromEnv(env: NodeJS.ProcessEnv, argv: string[]): WatchdogDeps {
   const home = env.HOME ?? homedir();
   const reconcile = env.SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE;
+  const runs = childRunsDir(env);
   return {
     roots: resolveRoots(env, home),
     fleet: createHerdrFleet({bin: env.SCAFFOLD_WATCHDOG_HERDR ?? 'herdr'}),
@@ -63,6 +72,7 @@ export function depsFromEnv(env: NodeJS.ProcessEnv, argv: string[]): WatchdogDep
     now: Date.now,
     dryRun: argv.includes('--dry-run'),
     ...(reconcile ? {reconcile: () => runCommand(reconcile)} : {}),
+    ...(runs ? {childRuns: () => readChildRuns(runs)} : {}),
     diskFree: async () => { const s = await statfs(home); return s.bavail * s.bsize; },
     plan: {...(env.SCAFFOLD_WATCHDOG_CLAUDE_COMMAND ? {claudeCommand: env.SCAFFOLD_WATCHDOG_CLAUDE_COMMAND} : {})},
   };

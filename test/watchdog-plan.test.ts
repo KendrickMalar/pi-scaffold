@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {IDLE_GRACE_MS, MAX_NUDGES_PER_STAGE, MAX_NUDGES_PER_STOP, MAX_RELAUNCH, NUDGE_PROMPT, NUDGE_RETRY_MS, RELAUNCH_GAP_MS, planTarget} from '../src/watchdog/plan.js';
-import {initialTargetState, type PaneObservation, type Target, type TargetObservation, type TargetState} from '../src/watchdog/types.js';
+import {CHILD_STALE_MS, childDonePrompt, IDLE_GRACE_MS, MAX_NUDGES_PER_STAGE, MAX_NUDGES_PER_STOP, MAX_RELAUNCH, NUDGE_PROMPT, NUDGE_RETRY_MS, RELAUNCH_GAP_MS, planTarget} from '../src/watchdog/plan.js';
+import {initialTargetState, type ChildRun, type PaneObservation, type Target, type TargetObservation, type TargetState} from '../src/watchdog/types.js';
 import {CONTINUE_PROMPT, RETRY_DELAYS_MS} from '../src/watch/decide.js';
 import type {TailResult} from '../src/watch/session-tail.js';
 
@@ -20,12 +20,48 @@ function run(t: Target, steps: {obs: TargetObservation; now: number}[], start: T
 const prompts = (a: {type: string}[]) => a.filter(x => x.type === 'prompt') as Extract<ReturnType<typeof planTarget>['actions'][number], {type: 'prompt'}>[];
 
 test('a stage whose Epic moved on or closed is retired and never prompted', () => {
-  for (const epic of [{stageLabel: 'Stage: Verification', closed: false}, {stageLabel: 'Stage: Implementation', closed: true}, {stageLabel: 'Stage: Completed', closed: false}]) {
+  for (const [epic, reason] of [[{stageLabel: 'Stage: Verification', closed: false}, 'later'], [{stageLabel: 'Stage: Implementation', closed: true}, 'closed'], [{stageLabel: 'Stage: Completed', closed: false}, 'later'], [{stageLabel: 'Stage: BasicDesign', closed: true}, 'closed']] as const) {
     const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: IDLE_GRACE_MS * 10}]);
     assert.equal(prompts(r.actions).length, 0);
     assert.equal(r.state.retired, true);
+    assert.equal(r.state.retiredReason, reason);
     assert.deepEqual(r.actions.filter(a => a.type === 'log').map(a => (a as {event: string}).event), ['retired']);
   }
+});
+
+test('an Epic still labelled with an earlier stage has not started this one: watched, logged once, never retired', () => {
+  for (const stageLabel of ['Stage: BasicDesign', 'Stage: Specification', undefined]) {
+    const epic = stageLabel ? {stageLabel, closed: false} : {closed: false};
+    const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: 1}, {obs: obs(idle(), {epic}), now: IDLE_GRACE_MS}]);
+    assert.equal(r.state.retired, undefined);
+    assert.equal(r.actions.filter(a => a.type === 'log' && a.event === 'stage-not-yet').length, 1);
+    assert.equal(prompts(r.actions).length, 1, 'the pane is still looked after');
+  }
+});
+
+test('an unknown stage label never retires the stage', () => {
+  const epic = {stageLabel: 'Stage: Something', closed: false};
+  const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: 1}]);
+  assert.equal(r.state.retired, undefined);
+  assert.equal(r.actions.filter(a => a.type === 'log' && a.event === 'stage-unknown').length, 1);
+});
+
+test('a stage retired by the old rule (no reason) is judged again: back when the label is earlier, kept with a reason when later', () => {
+  const old = {...initialTargetState(), retired: true, nudges: 1};
+  const back = run(target(), [{obs: obs(idle(), {epic: {stageLabel: 'Stage: BasicDesign', closed: false}}), now: 0}], old);
+  assert.equal(back.state.retired, undefined);
+  assert.equal(back.state.nudges, 1);
+  assert.ok(back.actions.some(a => a.type === 'log' && a.event === 'unretired'));
+  const kept = run(target(), [{obs: obs(idle(), {epic: {stageLabel: 'Stage: Verification', closed: false}}), now: 0}], old);
+  assert.equal(kept.state.retired, true);
+  assert.equal(kept.state.retiredReason, 'later');
+  const unknown = run(target(), [{obs: obs(idle(), {epic: 'unknown'}), now: 0}], old);
+  assert.equal(unknown.state.retired, true);
+  assert.equal(unknown.state.retiredReason, undefined, 'judged again on a later tick');
+  const fixed = {...initialTargetState(), retired: true, retiredReason: 'later' as const};
+  const still = run(target(), [{obs: obs(idle()), now: 0}], fixed);
+  assert.equal(still.state.retired, true);
+  assert.equal(still.actions.length, 0);
 });
 
 test('an unreadable Epic is never acted on', () => {
@@ -134,4 +170,47 @@ test('a session path that is unsafe to type is never relaunched', () => {
 test('a missing pane is logged once', () => {
   const r = run(target(), [{obs: obs({kind: 'missing'}), now: 0}, {obs: obs({kind: 'missing'}), now: 1}]);
   assert.deepEqual(r.actions, [{type: 'log', event: 'missing'}]);
+});
+
+const child = (o: Partial<ChildRun> = {}): ChildRun => ({id: 'run-a', state: 'running', sessionId: SESSION_PATH, lastUpdate: 0, ...o});
+
+test('a parent whose own subagent run is still running is never prompted and the stage budget is kept', () => {
+  const live = [child({lastUpdate: IDLE_GRACE_MS * 3})];
+  const r = run(target(), [0, IDLE_GRACE_MS, IDLE_GRACE_MS * 2, IDLE_GRACE_MS * 3].map(now => ({obs: obs(idle({children: live})), now})));
+  assert.equal(prompts(r.actions).length, 0);
+  assert.equal(r.state.nudges, 0);
+  assert.deepEqual(r.actions.filter(a => a.type === 'log').map(a => [(a as {event: string}).event, (a as {detail?: string}).detail]), [['waiting-child', 'run-a']]);
+});
+
+test('a running child with an old status is still waited for while its runner pid lives', () => {
+  const r = run(target(), [0, CHILD_STALE_MS * 2].map(now => ({obs: obs(idle({children: [child({state: 'queued', pidAlive: true})]})), now})));
+  assert.equal(prompts(r.actions).length, 0);
+  assert.ok(r.actions.some(a => a.type === 'log' && a.event === 'waiting-child'));
+});
+
+test('a running child that stopped updating and whose pid died is not waited for', () => {
+  const stale = [child({lastUpdate: 0, pidAlive: false})];
+  const r = run(target(), [{obs: obs(idle({children: stale})), now: CHILD_STALE_MS}, {obs: obs(idle({children: stale})), now: CHILD_STALE_MS + IDLE_GRACE_MS}]);
+  assert.deepEqual(prompts(r.actions).map(p => p.text), [NUDGE_PROMPT]);
+});
+
+test('a child that finished after the parent last spoke gets a prompt naming it', () => {
+  const at = Date.parse('2026-10-18T07:30:00.000Z');
+  const done = [child({id: 'run-a', state: 'complete', endedAt: at - 60_000, lastUpdate: at - 60_000}), child({id: 'run-b', state: 'failed', endedAt: at, lastUpdate: at}), child({id: 'old', state: 'complete', endedAt: 50})];
+  const r = run(target(), [{obs: obs(idle({children: done, tail: stopped(100)})), now: at}, {obs: obs(idle({children: done, tail: stopped(100)})), now: at + IDLE_GRACE_MS}]);
+  const text = childDonePrompt(['run-a', 'run-b'], at);
+  assert.equal(text, 'scaffold-watchdog: 子 run run-a、run-b は 2026-10-18T07:30:00.000Z に完了済みです（完了の知らせが届いていない可能性）。保存された結果を読んで続けてください。');
+  assert.deepEqual(prompts(r.actions).map(p => ({text: p.text, reason: p.reason})), [{text, reason: 'nudge'}]);
+  assert.equal(r.state.nudges, 1);
+});
+
+test('children that all finished before the parent last spoke leave the plain prompt', () => {
+  const done = [child({state: 'complete', endedAt: 50, lastUpdate: 50})];
+  const r = run(target(), [{obs: obs(idle({children: done, tail: stopped(100)})), now: 0}, {obs: obs(idle({children: done, tail: stopped(100)})), now: IDLE_GRACE_MS}]);
+  assert.deepEqual(prompts(r.actions).map(p => p.text), [NUDGE_PROMPT]);
+});
+
+test('a parent with no children is prompted as before', () => {
+  const r = run(target(), [{obs: obs(idle({children: []})), now: 0}, {obs: obs(idle({children: []})), now: IDLE_GRACE_MS}]);
+  assert.deepEqual(prompts(r.actions).map(p => p.text), [NUDGE_PROMPT]);
 });

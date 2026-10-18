@@ -4,7 +4,8 @@ import {access, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runOnce, type WatchdogDeps} from '../src/watchdog/run.js';
-import {IDLE_GRACE_MS, NUDGE_PROMPT} from '../src/watchdog/plan.js';
+import {childDonePrompt, IDLE_GRACE_MS, NUDGE_PROMPT} from '../src/watchdog/plan.js';
+import {readChildRuns} from '../src/watchdog/children.js';
 import type {Fleet, PaneSnapshot} from '../src/watchdog/herdr-fleet.js';
 import type {TailResult} from '../src/watch/session-tail.js';
 
@@ -236,4 +237,66 @@ test('reconcile runs with the user temp dir, where Pi keeps pi-subagents runs, e
   assert.equal(reconcileEnv({PATH: '/bin'}, () => '/var/folders/x/T/').TMPDIR, '/var/folders/x/T/');
   assert.equal(reconcileEnv({TMPDIR: '/keep/'}, () => '/var/folders/x/T/').TMPDIR, '/keep/');
   assert.equal(reconcileEnv({PATH: '/bin'}, () => undefined).TMPDIR, undefined);
+});
+
+test('a stage the old rule retired while the Epic still had the earlier label is watched again', async t => {
+  const s = await setup(t);
+  await mkdir(join(s.root, 'state'), {recursive: true});
+  await writeFile(s.deps.statePath, JSON.stringify({version: 1, targets: {s1: {nudges: 0, stopNudges: 0, relaunches: 0, watch: {retryCount: 0, herdrFailures: 0}, retired: true}}}));
+  s.deps.epic = async () => ({stageLabel: 'Stage: BasicDesign', closed: false});
+  await runOnce(s.deps);
+  const events = (await s.logs()).map(l => l.event);
+  assert.ok(events.includes('unretired'));
+  assert.ok(events.includes('stage-not-yet'));
+  const saved = JSON.parse(await readFile(s.deps.statePath, 'utf8')) as {targets: Record<string, {retired?: boolean}>};
+  assert.equal(saved.targets.s1!.retired, undefined);
+});
+
+test('a stage retired with a reason is not read again', async t => {
+  const s = await setup(t);
+  await mkdir(join(s.root, 'state'), {recursive: true});
+  await writeFile(s.deps.statePath, JSON.stringify({version: 1, targets: {s1: {nudges: 0, stopNudges: 0, relaunches: 0, watch: {retryCount: 0, herdrFailures: 0}, retired: true, retiredReason: 'closed'}}}));
+  let reads = 0;
+  s.deps.epic = async () => { reads += 1; return {stageLabel: 'Stage: Implementation', closed: false}; };
+  await runOnce(s.deps);
+  assert.equal(reads, 0);
+});
+
+async function runsDir(root: string, runs: Record<string, unknown>[]): Promise<string> {
+  const dir = join(root, 'async-subagent-runs');
+  for (const r of runs) { await mkdir(join(dir, String(r.runId)), {recursive: true}); await writeFile(join(dir, String(r.runId), 'status.json'), JSON.stringify(r)); }
+  await mkdir(join(dir, 'broken'), {recursive: true}); await writeFile(join(dir, 'broken', 'status.json'), '{');
+  return dir;
+}
+
+test('a parent whose subagent run is running is not prompted; waiting-child is logged once', async t => {
+  const s = await setup(t);
+  const dir = await runsDir(s.root, [{runId: 'run-live', state: 'running', sessionId: SESSION, lastUpdate: s.clock.now + IDLE_GRACE_MS * 2, pid: 999_999_99}, {runId: 'other', state: 'complete', sessionId: '/x.jsonl', endedAt: s.clock.now + 5}]);
+  s.deps.childRuns = () => readChildRuns(dir);
+  await runOnce(s.deps);
+  s.clock.now += IDLE_GRACE_MS; await runOnce(s.deps);
+  s.clock.now += IDLE_GRACE_MS; await runOnce(s.deps);
+  assert.equal(s.fleet.sends().length, 0);
+  const waits = (await s.logs()).filter(l => l.event === 'waiting-child');
+  assert.equal(waits.length, 1);
+  assert.equal(waits[0]!.detail, 'run-live');
+});
+
+test('a parent whose subagent run finished but never heard of it is prompted with the run named', async t => {
+  const s = await setup(t);
+  const ended = s.clock.now - 60_000;
+  const dir = await runsDir(s.root, [{runId: 'run-done', state: 'complete', sessionId: SESSION, lastUpdate: ended, endedAt: ended}]);
+  s.deps.childRuns = () => readChildRuns(dir);
+  await runOnce(s.deps);
+  s.clock.now += IDLE_GRACE_MS; await runOnce(s.deps);
+  assert.deepEqual(s.fleet.sends(), [{command: 'agentPrompt', socket: '/s.sock', args: {paneId: 'w1:p2', text: childDonePrompt(['run-done'], ended)}}]);
+});
+
+test('readChildRuns reports a live runner pid and skips unreadable runs', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'watchdog-children-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const dir = await runsDir(root, [{runId: 'mine', state: 'running', sessionId: SESSION, lastUpdate: 1, pid: process.pid}, {runId: 'gone', state: 'running', sessionId: SESSION, pid: 2_147_483_000}]);
+  const runs = (await readChildRuns(dir)).sort((a, b) => a.id.localeCompare(b.id));
+  assert.deepEqual(runs.map(r => [r.id, r.pidAlive]), [['gone', false], ['mine', true]]);
+  assert.deepEqual(await readChildRuns(join(root, 'nope')), []);
 });
