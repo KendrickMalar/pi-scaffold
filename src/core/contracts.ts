@@ -22,6 +22,12 @@ export type Stage = typeof STAGES[number];
 /** Stages whose parent agent decides and records content approvals itself when the owner policy lists them (no questions to the human). */
 export const AGENT_DECISION_STAGES = ['implementation', 'verification'] as const;
 export type AgentDecisionStage = typeof AGENT_DECISION_STAGES[number];
+/** Approvals the parent agent records itself, without a dialog, when the owner policy lists them in `agentApprovals`. */
+export const AGENT_APPROVAL_KINDS = ['specification', 'implementation-start', 'epic-completion', 'handoff-abandon', 'specification-revision'] as const;
+export type AgentApprovalKind = typeof AGENT_APPROVAL_KINDS[number];
+/** Stages whose sessions may never ask the human (owner policy `questionBlockedStages`); only specification asks. */
+export const QUESTION_BLOCKED_STAGES = ['setup', 'basic-design', 'implementation', 'verification'] as const;
+export type QuestionBlockedStage = typeof QUESTION_BLOCKED_STAGES[number];
 export const HANDOFF_PHASES = ['prepared', 'tab-created', 'receiver-ready', 'stage-committed', 'prompt-sent', 'turn-started'] as const;
 export type HandoffPhase = typeof HANDOFF_PHASES[number];
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -66,6 +72,8 @@ export interface HandoffState { nonceSha256: Sha256; sourceStage: Stage; targetS
 export interface ModelBinding { model: string; thinking: ThinkingLevel; reason: string }
 export interface OwnedEvidenceRef { relativePath: string; sha256: Sha256 }
 
+/** One revision of an approved specification (scaffold_specification_revise). `revision` is the Epic revision it wrote. */
+export interface SpecRevision { revision: number; operationId: UUID; stage: Stage; reason: string; changedIds: string[]; affectedFeatures: number[]; approvalViewDigest: Sha256 }
 export interface EpicDocV1 {
   version: 1; kind: 'epic'; workflowId: UUID; revision: number; createOperationId: UUID; stage: Stage;
   purpose: string; originalRequest: OriginalRequest; background: string | null;
@@ -73,6 +81,8 @@ export interface EpicDocV1 {
   constraints: string[] | null; outOfScope: string[] | null;
   research: ResearchItem[]; decisions: Decision[];
   design: DesignRef | null; dependencyPlan: DependencyPlan | null; wavePlan: WavePlan | null; handoff: HandoffState | null;
+  /** Absent until the first revision (older Epics never carry it). */
+  specRevisions?: SpecRevision[];
 }
 export type FeatureRole = 'coding-manager' | 'coder' | 'tester';
 export interface FeatureDocV1 {
@@ -113,9 +123,12 @@ export interface RepoContext {
   accountBinding: Sha256 | null; profileId: string | null; profileInstructionsDigest: Sha256 | null;
 }
 export interface CallScope { sessionId: string; leafId: string; generation: number; signal: AbortSignal; isCurrent(): boolean }
-/** `approvedBy`/`stage` are present only for approvals the parent agent recorded itself in an agent-decision stage. */
-export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256; approvedBy?: 'agent'; stage?: AgentDecisionStage }
-export type ApprovalKind = 'specification' | 'implementation-start' | 'epic-completion';
+/**
+ * `approvedBy` is present only for approvals the parent agent recorded itself: with `stage` in an agent-decision stage
+ * (old `agentDecisionStages`), or with `basis: 'policy'` for a kind the owner policy lists in `agentApprovals`.
+ */
+export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256; approvedBy?: 'agent'; stage?: AgentDecisionStage; basis?: 'policy' }
+export type ApprovalKind = 'specification' | 'implementation-start' | 'epic-completion' | 'specification-revision';
 export interface OwnedArtifactRef { path: string; sha256: Sha256; operationId: UUID }
 export type OwnedPacketRef = OwnedArtifactRef;
 
@@ -307,6 +320,14 @@ function handoff(r: Reader, v: unknown, p: string): HandoffState {
   const o = r.object(v, p, ['nonceSha256', 'sourceStage', 'targetStage', 'phase', 'operationId']) ?? {};
   return {nonceSha256: r.pattern(o.nonceSha256, join(p, 'nonceSha256'), isSha256, 'sha256'), sourceStage: r.literal(o.sourceStage, join(p, 'sourceStage'), STAGES), targetStage: r.literal(o.targetStage, join(p, 'targetStage'), STAGES), phase: r.literal(o.phase, join(p, 'phase'), HANDOFF_PHASES), operationId: r.pattern(o.operationId, join(p, 'operationId'), isUuid, 'UUID')};
 }
+export function specRevision(r: Reader, v: unknown, p: string): SpecRevision {
+  const o = r.object(v, p, ['revision', 'operationId', 'stage', 'reason', 'changedIds', 'affectedFeatures', 'approvalViewDigest']) ?? {};
+  return {
+    revision: r.int(o.revision, join(p, 'revision')), operationId: r.pattern(o.operationId, join(p, 'operationId'), isUuid, 'UUID'), stage: r.literal(o.stage, join(p, 'stage'), STAGES),
+    reason: r.text(o.reason, join(p, 'reason')), changedIds: r.texts(o.changedIds, join(p, 'changedIds')),
+    affectedFeatures: r.array(o.affectedFeatures, join(p, 'affectedFeatures'), (x, q) => r.int(x, q)), approvalViewDigest: r.pattern(o.approvalViewDigest, join(p, 'approvalViewDigest'), isSha256, 'sha256'),
+  };
+}
 export function decodeModelBinding(r: Reader, v: unknown, p: string): ModelBinding {
   const o = r.object(v, p, ['model', 'thinking', 'reason']) ?? {};
   return {model: r.pattern(o.model, join(p, 'model'), x => typeof x === 'string' && MODEL_RE.test(x), 'provider/id'), thinking: r.literal(o.thinking, join(p, 'thinking'), THINKING_LEVELS), reason: r.text(o.reason, join(p, 'reason'))};
@@ -339,6 +360,7 @@ function epic(r: Reader, o: Rec): EpicDocV1 {
     dependencyPlan: o.dependencyPlan === null ? null : dependencyPlan(r, o.dependencyPlan, 'dependencyPlan'),
     wavePlan: o.wavePlan === null ? null : wavePlan(r, o.wavePlan, 'wavePlan'),
     handoff: o.handoff === null ? null : handoff(r, o.handoff, 'handoff'),
+    ...(o.specRevisions !== undefined ? {specRevisions: r.array(o.specRevisions, 'specRevisions', (v, p) => specRevision(r, v, p))} : {}),
   };
   r.unique(doc.questions.map(q => q.questionId), 'questions', 'questionId');
   r.unique(doc.requirements.map(q => q.id), 'requirements', 'id');
@@ -390,7 +412,7 @@ export function decodeScaffoldDoc(value: unknown): Decoded<ScaffoldDocV1> {
   const kind = value.kind;
   const keys = kind === 'epic' ? EPIC_KEYS : kind === 'feature' ? FEATURE_KEYS : kind === 'task' ? TASK_KEYS : undefined;
   if (!keys) { r.add('INVALID_VALUE', 'kind', 'Expected epic, feature or task.'); return r.result(undefined as never); }
-  const o = r.object(value, '', keys)!;
+  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions'] : [])!;
   const doc = kind === 'epic' ? epic(r, o) : kind === 'feature' ? feature(r, o) : task(r, o);
   return r.result(doc);
 }

@@ -2,11 +2,11 @@
 // from the tool context; tests fill it with fakes. Factories only build objects; nothing starts here.
 import {homedir} from 'node:os';
 import {realpath} from 'node:fs/promises';
-import {LIMITS, failed, problem, type AgentDecisionStage, type CallScope, type Decoded, type RepoContext} from './contracts.js';
+import {LIMITS, failed, problem, type AgentApprovalKind, type AgentDecisionStage, type CallScope, type Decoded, type RepoContext} from './contracts.js';
 import {RuntimeScope} from './lifecycle.js';
 import {OperationJournal} from './journal.js';
-import {ApprovalStore, type ApprovalUi} from './approvals.js';
-import {loadOwnerPolicy, type OwnerPolicy} from './model-bindings.js';
+import {ApprovalStore, type AgentApprovalOptions, type ApprovalUi} from './approvals.js';
+import {loadOwnerPolicy, repoAgentApproves, type OwnerPolicy} from './model-bindings.js';
 import {resolveAgentDecisionStage, type AcceptedHandoff} from './agent-decision.js';
 import {deriveRepoContext, resolveAgentDir, resolveScaffoldDir} from './repo-context.js';
 import {PiGhBridge, type ToolExecutor} from '../ports/pi-gh.js';
@@ -95,6 +95,23 @@ export class ToolCall {
     if (this.env.approvalUi.child || this.environment().PI_SUBAGENT_CHILD || !this.runtime.handoff) return undefined;
     const policy = await this.policy();
     return resolveAgentDecisionStage(this.runtime.handoff, policy.ok ? policy.value : undefined, {sessionId: this.scope.sessionId, repo, workflowId});
+  }
+  private isChild(): boolean { return !!(this.env.approvalUi.child || this.environment().PI_SUBAGENT_CHILD); }
+  /**
+   * How this call may record an approval of `kind` without a human: `policy` when the owner policy lists the kind in
+   * agentApprovals, otherwise the older agent-decision stage of this session. Empty (= ask the human) for a subagent child.
+   */
+  async approvalOptions(repo: string, workflowId: string, kind: AgentApprovalKind): Promise<AgentApprovalOptions> {
+    if (this.isChild()) return {};
+    const policy = await this.policy();
+    if (repoAgentApproves(policy.ok ? policy.value : undefined, repo, kind)) return {policy: true};
+    const agentStage = await this.agentDecisionStage(repo, workflowId);
+    return agentStage ? {agentStage} : {};
+  }
+  /** True when the parent agent may decide `kind` itself (owner policy or an agent-decision stage); never a child. */
+  async agentMayDecide(repo: string, workflowId: string, kind: AgentApprovalKind): Promise<boolean> {
+    const o = await this.approvalOptions(repo, workflowId, kind);
+    return !!(o.policy || o.agentStage);
   }
   environment(): Record<string, string | undefined> { return this.runtime.environment ? this.runtime.environment() : process.env; }
   herdr(): HerdrPort { const env = this.environment(); return this.runtime.herdr ? this.runtime.herdr() : createHerdrCli({...(env.HERDR_BIN_PATH ? {bin: env.HERDR_BIN_PATH} : {}), ...(env.HERDR_SOCKET_PATH ? {socketPath: env.HERDR_SOCKET_PATH} : {}), caller: env}); }

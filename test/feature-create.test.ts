@@ -204,11 +204,43 @@ for (const [label, ref, code] of [
   });
 }
 
-test('without a valid specification approval nothing is created', async t => {
+test('without a valid specification approval nothing is created headless; declining in the TUI creates nothing', async t => {
+  for (const extra of [{interactive: false}, {confirm: false}] as Scenario[]) {
+    const gh = world();
+    const out = await (await harness(t, gh, extra, false)).invoke();
+    assert.notEqual(out.r.status, 'applied', JSON.stringify(extra));
+    assert.ok(out.r.problems.some(x => x.code === 'SPECIFICATION_NOT_APPROVED'), JSON.stringify(out.r.problems));
+    noSideEffects(gh);
+  }
+});
+
+const otherProfile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '直した指示文（架空）'}};
+
+test('after the Profile instructions changed, the parent TUI approves the specification again and the Feature is created', async t => {
   const gh = world();
+  const first = await harness(t, gh);
+  const h = await harness(t, gh, {agentDir: first.agentDir, sessionEntries: [otherProfile]}, false);
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 1, 'asked again once');
+  assert.equal(creates(gh), 1);
+});
+
+test('with agentApprovals specification the parent re-approves itself headless (no dialog) and records basis policy', async t => {
+  const gh = world();
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {...policy.repos['example/demo']!, agentApprovals: ['specification']}}};
+  const h = await harness(t, gh, {policy: aiPolicy, interactive: false}, false);
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 0);
+  assert.equal(creates(gh), 1);
+});
+
+test('an incomplete specification is not re-approved; nothing is created', async t => {
+  const gh = world(epicDoc(d => { d.outOfScope = null; }));
   const out = await (await harness(t, gh, {}, false)).invoke();
   assert.equal(out.r.status, 'blocked');
-  assert.ok(out.r.problems.some(x => x.code === 'SPECIFICATION_NOT_APPROVED'), JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 0);
   noSideEffects(gh);
 });
 

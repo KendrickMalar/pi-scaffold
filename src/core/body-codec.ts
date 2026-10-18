@@ -1,9 +1,9 @@
 // Parses and regenerates the managed block inside an Issue body. Bytes outside the block are kept verbatim.
 import {
   LIMITS, decodeScaffoldDoc, failed, okValue, problem, isRepoRef, isPositiveInt,
-  type Decoded, type IssueSnapshot, type PreparedIssueEdit, type Problem, type ScaffoldDocV1, type EpicDocV1,
+  type Decoded, type IssueSnapshot, type PreparedIssueEdit, type Problem, type ScaffoldDocV1, type EpicDocV1, type FeatureDocV1,
 } from './contracts.js';
-import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, renderFeatureVisible, canonicalDocJson} from './epic-render.js';
+import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, renderFeatureVisible, renderFeatureBlock, canonicalDocJson} from './epic-render.js';
 import {sha256Text, labelsSha256} from './digests.js';
 
 export interface ParsedBody { before: string; after: string; block: string; doc: ScaffoldDocV1; projectionChecked: boolean }
@@ -138,25 +138,25 @@ export function buildSnapshot(raw: RawIssue): Decoded<IssueSnapshot> {
   });
 }
 
-/** Regenerates the whole managed block for `nextDoc` (revision+1) and keeps the outside bytes. */
+/** Regenerates the whole managed block for `nextDoc` (revision+1) and keeps the outside bytes. Epic and Feature documents only. */
 export function patchDoc(snapshot: IssueSnapshot, nextDoc: ScaffoldDocV1): Decoded<PreparedIssueEdit> {
   if (sha256Text(snapshot.body) !== snapshot.bodySha256) return failed([problem('STALE_SNAPSHOT', 'body', 'Snapshot body does not match its hash.')]);
   const current = parseIssueBody(snapshot.body);
   if (!current.ok) return current;
   const prev = current.value.doc;
-  if (prev.kind !== 'epic' || nextDoc.kind !== 'epic') return failed([problem('UNSUPPORTED_KIND', 'doc.kind', 'Only Epic documents have a defined visible template in this version.')]);
+  if (prev.kind === 'task' || nextDoc.kind !== prev.kind) return failed([problem('UNSUPPORTED_KIND', 'doc.kind', 'Only Epic and Feature documents have a defined visible template in this version, and the kind never changes.')]);
   const identity: Problem[] = [];
   if (nextDoc.workflowId !== prev.workflowId) identity.push(problem('IDENTITY_CHANGED', 'doc.workflowId', 'workflowId cannot change.'));
   if (nextDoc.createOperationId !== prev.createOperationId) identity.push(problem('IDENTITY_CHANGED', 'doc.createOperationId', 'createOperationId cannot change.'));
   if (nextDoc.revision !== prev.revision) identity.push(problem('STALE_REVISION', 'doc.revision', 'Pass the current revision; patchDoc increments it.'));
   if (identity.length) return failed(identity);
-  const next: EpicDocV1 = {...nextDoc, revision: prev.revision + 1};
+  const next = {...nextDoc, revision: prev.revision + 1} as EpicDocV1 | FeatureDocV1;
   const decoded = decodeScaffoldDoc(next);
   if (!decoded.ok) return failed(decoded.problems.map(p => ({...p, path: 'doc.' + p.path})));
   const json = canonicalDocJson(next);
   // Kept for clarity: the JSON is also bound by bodyBytes (the whole-body check is the binding limit).
   if (Buffer.byteLength(json) > LIMITS.jsonBytes) return failed([problem('LIMIT_EXCEEDED', 'json', `Managed JSON exceeds ${LIMITS.jsonBytes} bytes.`)]);
-  const body = current.value.before + renderEpicBlock(next) + current.value.after;
+  const body = current.value.before + (next.kind === 'epic' ? renderEpicBlock(next) : renderFeatureBlock(next)) + current.value.after;
   if (Buffer.byteLength(body) > LIMITS.bodyBytes) return failed([problem('LIMIT_EXCEEDED', 'body', `Body would exceed ${LIMITS.bodyBytes} bytes.`)]);
   return okValue({version: 1, repo: snapshot.repo, operation: 'issue-edit-if-current', issue: snapshot.number, body, expectedBodySha256: snapshot.bodySha256});
 }

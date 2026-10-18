@@ -16,11 +16,11 @@ type Handler = (event: unknown, ctx: unknown) => unknown;
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const profile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '開発用（架空）'}};
 
-async function boot(t: {after(fn: () => Promise<void>): void}, opts: {stages: string[]; targetStage: Stage; withPacket?: boolean}) {
+async function boot(t: {after(fn: () => Promise<void>): void}, opts: {stages: string[]; targetStage: Stage; withPacket?: boolean; field?: 'agentDecisionStages' | 'questionBlockedStages'}) {
   const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-ext-'));
   const agentDir = await realpath(dir).then(d => join(d, 'agent')), cwd = join(dir, 'repo');
   await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700}); await mkdir(cwd);
-  await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentDecisionStages: opts.stages}}}), {mode: 0o600});
+  await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], [opts.field ?? 'agentDecisionStages']: opts.stages}}}), {mode: 0o600});
   const snapshot = readProfileSnapshot([profile]).snapshot!;
   const packet: HandoffPacketV1 = {
     version: 1, nonce: 'c'.repeat(64), workflowId: WORKFLOW_ID, repo: 'example/demo', epicIssue: 10, sourceStage: 'basic-design', targetStage: opts.targetStage,
@@ -72,11 +72,15 @@ test('extension: an unlisted stage, a basic-design packet or no packet leaves qu
   assert.equal(await (await boot(t, {stages: ['implementation'], targetStage: 'implementation', withPacket: false})).toolCall('ask_user'), undefined);
 });
 
-test('extension: in a listed Implementation session, a 【事前作業】 request passes and a decision question is still blocked', async t => {
+test('extension: a 【事前作業】 request is blocked too', async t => {
   const {toolCall} = await boot(t, {stages: ['implementation'], targetStage: 'implementation'});
-  assert.equal(await toolCall('ask_user', 'stage-session', {question: '【事前作業】Studio にログインしてください。終わったら「完了」を選んでください。', options: ['完了']}), undefined);
-  assert.equal(await toolCall('AskUserQuestion', 'stage-session', {questions: [{question: '【事前作業】画面収録を許可してください。', header: '事前作業', options: [{label: '完了'}], multiSelect: false}]}), undefined);
-  const r = await toolCall('ask_user', 'stage-session', {question: 'A案とB案のどちらにしますか？'});
+  const r = await toolCall('ask_user', 'stage-session', {question: '【事前作業】Studio にログインしてください。終わったら「完了」を選んでください。', options: ['完了']});
   assert.equal(r?.block, true);
-  assert.match(r!.reason, /【事前作業】/);
+  assert.doesNotMatch(r!.reason, /【事前作業】/);
+});
+
+test('extension: questionBlockedStages blocks questions in an accepted Basic design session', async t => {
+  const {toolCall} = await boot(t, {stages: ['basic-design', 'implementation'], targetStage: 'basic-design', field: 'questionBlockedStages'});
+  assert.equal((await toolCall('ask_user'))?.block, true);
+  assert.equal((await toolCall('AskUserQuestion'))?.block, true);
 });

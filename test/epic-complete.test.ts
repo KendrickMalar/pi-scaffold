@@ -436,3 +436,14 @@ test('a corrupt final acceptance record stays blocked without asking', async t =
   assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'INVALID_JSON'), JSON.stringify(out.r.problems));
   assert.equal(out.confirmCalls, 0); assert.equal(closes(gh), 0);
 });
+
+test('with agentApprovals epic-completion the parent gives the final acceptance itself without any packet (no dialog, headless ok)', async t => {
+  const gh = world();
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentApprovals: ['epic-completion']}}};
+  const h = await harness(t, gh, {interactive: false, policy: aiPolicy});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal(out.confirmCalls, 0);
+  const d = out.r.data as {agentApproval?: {kind: string; basis?: string}};
+  assert.deepEqual([d.agentApproval?.kind, d.agentApproval?.basis], ['epic-completion', 'policy']);
+});

@@ -23,8 +23,12 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
   const problems: Problem[] = [];
   if (await real(input.cwd) !== await real(packet.cwd)) problems.push(problem('RECEIVER_CWD_MISMATCH', 'cwd', `This session runs in ${input.cwd}, not ${packet.cwd}.`));
   const profile = readProfileSnapshot(input.sessionEntries);
-  if (!profile.snapshot || profile.snapshot.id !== packet.profileId || profile.snapshot.instructionsDigest !== packet.profileInstructionsDigest)
-    problems.push(problem('RECEIVER_PROFILE_MISMATCH', 'profile', 'This session does not run the same pi-profile Profile and instructions as the sender.'));
+  // The same Profile is required. Its instructions may be newer than the sender's (the Profile text was updated between
+  // stages): the session is accepted and both digests are recorded in the receipt instead.
+  if (!profile.snapshot || profile.snapshot.id !== packet.profileId)
+    problems.push(problem('RECEIVER_PROFILE_MISMATCH', 'profile', 'This session does not run the same pi-profile Profile as the sender.'));
+  const changed = profile.snapshot && profile.snapshot.instructionsDigest !== packet.profileInstructionsDigest
+    ? {senderInstructionsDigest: packet.profileInstructionsDigest, receiverInstructionsDigest: profile.snapshot.instructionsDigest} : {};
   const authMode = repoPolicyFor(input.policy, packet.repo)?.authMode;
   const binding = authMode === 'file-backed' ? taggedDigest('account-binding', {agentDir: await real(input.agentDir), authMode}) : null;
   if (binding !== packet.accountBinding) problems.push(problem('RECEIVER_ACCOUNT_MISMATCH', 'account', 'This session does not use the same file-backed authentication configuration.'));
@@ -35,7 +39,7 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
   const dir = dirname(input.packetPath);
   const existing = await readReceipt(dir, 'receiver-ready', root);
   if (existing && existing.sessionId !== input.sessionId) return failed([problem('RECEIVER_ALREADY_CLAIMED', 'session', 'Another session already accepted this packet.')]);
-  if (!existing) await writeReceipt(dir, {version: 1, phase: 'receiver-ready', nonceSha256: nonceSha256(packet.nonce), packetSha256: sha256, sessionId: input.sessionId, at: new Date().toISOString()}, root);
+  if (!existing) await writeReceipt(dir, {version: 1, phase: 'receiver-ready', nonceSha256: nonceSha256(packet.nonce), packetSha256: sha256, sessionId: input.sessionId, at: new Date().toISOString(), ...changed}, root);
   return okValue({packet, packetSha256: sha256});
 }
 

@@ -2,16 +2,18 @@
 // Only provider/id/thinking are handled; no model descriptors, auth.json or settings.json are read or changed.
 import {join} from 'node:path';
 import {resolveScaffoldDir} from './scaffold-dir.js';
-import {StrictReader, AGENT_DECISION_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentDecisionStage, type Decoded, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
+import {StrictReader, AGENT_APPROVAL_KINDS, AGENT_DECISION_STAGES, QUESTION_BLOCKED_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentApprovalKind, type AgentDecisionStage, type Decoded, type QuestionBlockedStage, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
 import {OwnedFileError, readOwnedJson} from './files.js';
 
 export const FEATURE_ROLES: readonly FeatureRole[] = ['coding-manager', 'coder', 'tester'];
 export interface PolicyModel { model: string; thinking: ThinkingLevel; tier: 'basic' | 'upper'; roles: FeatureRole[] }
 /**
- * `agentDecisionStages`: stages (implementation/verification only) in which the parent agent must not ask the human;
- * it decides within the approved spec/design and records content approvals itself. Absent means none (`[]`).
+ * `agentApprovals`: approvals the parent agent records itself (no dialog, any mode); never a subagent child.
+ * `questionBlockedStages`: stages whose sessions never ask the human (only specification asks).
+ * `agentDecisionStages` (older form, still read): implementation/verification sessions that neither ask nor wait for a
+ * human approval. Absent fields mean none (`[]`).
  */
-export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[]; agentDecisionStages?: AgentDecisionStage[] }
+export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[]; agentDecisionStages?: AgentDecisionStage[]; agentApprovals?: AgentApprovalKind[]; questionBlockedStages?: QuestionBlockedStage[] }
 export interface OwnerPolicy { version: 1; repos: Record<string, RepoPolicy> }
 
 /** A policy key is OWNER/REPO, or OWNER/* for every repository of exactly that owner. No other wildcard exists. */
@@ -23,6 +25,23 @@ export function repoPolicyFor(policy: OwnerPolicy | undefined, repo: string): Re
   const owner = repo.split('/')[0]!.toLowerCase();
   const key = Object.keys(policy.repos).find(k => k.endsWith('/*') && k.slice(0, -2).toLowerCase() === owner);
   return key === undefined ? undefined : policy.repos[key];
+}
+/** True when the owner policy lets the parent agent record this kind of approval itself. */
+export function repoAgentApproves(policy: OwnerPolicy | undefined, repo: string, kind: AgentApprovalKind): boolean {
+  return (repoPolicyFor(policy, repo)?.agentApprovals ?? []).includes(kind);
+}
+/** Stages whose sessions never ask the human: questionBlockedStages plus the older agentDecisionStages. */
+export function repoQuestionBlockedStages(policy: OwnerPolicy | undefined, repo: string): QuestionBlockedStage[] {
+  const p = repoPolicyFor(policy, repo);
+  return [...new Set([...(p?.questionBlockedStages ?? []), ...(p?.agentDecisionStages ?? [])])];
+}
+
+/** An optional list of distinct allowed values (undefined when absent). */
+function uniqueList<T extends string>(r: StrictReader, value: unknown, path: string, allowed: readonly T[]): T[] | undefined {
+  if (value === undefined) return undefined;
+  const values = r.array(value, path, (s, q) => r.literal(s, q, allowed));
+  if (Array.isArray(value) && value.length !== new Set(value).size) r.add('DUPLICATE_VALUE', path, 'Each value may appear once.');
+  return values;
 }
 
 export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
@@ -36,7 +55,7 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   else for (const [repo, v] of Object.entries(raw)) {
     const p = `repos.${repo}`;
     if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
-    const e = r.object(v, p, ['authMode', 'models'], ['agentDecisionStages']) ?? {};
+    const e = r.object(v, p, ['authMode', 'models'], ['agentDecisionStages', 'agentApprovals', 'questionBlockedStages']) ?? {};
     const authMode = r.literal(e.authMode, `${p}.authMode`, ['file-backed'] as const);
     const models = r.array(e.models, `${p}.models`, (m, q) => {
       const x = r.object(m, q, ['model', 'thinking', 'tier', 'roles']) ?? {};
@@ -46,21 +65,65 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
         roles: r.array(x.roles, `${q}.roles`, (role, rp) => r.literal(role, rp, FEATURE_ROLES)),
       };
     });
-    const stages = e.agentDecisionStages === undefined ? undefined : r.array(e.agentDecisionStages, `${p}.agentDecisionStages`, (s, q) => r.literal(s, q, AGENT_DECISION_STAGES));
-    if (Array.isArray(e.agentDecisionStages) && e.agentDecisionStages.length !== new Set(e.agentDecisionStages).size) r.add('DUPLICATE_VALUE', `${p}.agentDecisionStages`, 'Each stage may appear once.');
-    repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {})};
+    const set = <T extends string>(key: string, allowed: readonly T[]) => uniqueList(r, e[key], `${p}.${key}`, allowed);
+    const stages = set('agentDecisionStages', AGENT_DECISION_STAGES), approvals = set('agentApprovals', AGENT_APPROVAL_KINDS), blocked = set('questionBlockedStages', QUESTION_BLOCKED_STAGES);
+    repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {}), ...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
   }
   return r.result({version: 1, repos});
 }
 
+/**
+ * The agent policy sidecar (<scaffoldDir>/policy.agent.json): `agentApprovals` and `questionBlockedStages` per policy key.
+ * It lives beside policy.json so that policy.json keeps the older form, which earlier pi-scaffold versions still accept;
+ * only this version reads the sidecar. An entry adds to the policy.json entry of exactly the same key and nothing else.
+ */
+export interface AgentPolicySidecar { version: 1; repos: Record<string, Pick<RepoPolicy, 'agentApprovals' | 'questionBlockedStages'>> }
+export function decodeAgentPolicy(value: unknown): Decoded<AgentPolicySidecar> {
+  const r = new StrictReader();
+  const o = r.object(value, '', ['version', 'repos']);
+  if (!o) return r.result(undefined as never);
+  r.literal(o.version, 'version', [1] as const, 'UNKNOWN_VERSION');
+  const repos: AgentPolicySidecar['repos'] = {};
+  const raw = o.repos;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) r.add('INVALID_TYPE', 'repos', 'Expected an object keyed by OWNER/REPO or OWNER/*.');
+  else for (const [repo, v] of Object.entries(raw)) {
+    const p = `repos.${repo}`;
+    if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
+    const e = r.object(v, p, [], ['agentApprovals', 'questionBlockedStages']) ?? {};
+    const approvals = uniqueList(r, e.agentApprovals, `${p}.agentApprovals`, AGENT_APPROVAL_KINDS), blocked = uniqueList(r, e.questionBlockedStages, `${p}.questionBlockedStages`, QUESTION_BLOCKED_STAGES);
+    repos[repo] = {...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
+  }
+  return r.result({version: 1, repos});
+}
+const union = <T>(a: readonly T[] | undefined, b: readonly T[] | undefined): T[] | undefined => a || b ? [...new Set([...(a ?? []), ...(b ?? [])])] : undefined;
+/** policy.json plus the sidecar, merged per identical key (lists are united). */
+export function mergeAgentPolicy(policy: OwnerPolicy, sidecar: AgentPolicySidecar | undefined): OwnerPolicy {
+  if (!sidecar) return policy;
+  const repos: Record<string, RepoPolicy> = {};
+  for (const [key, entry] of Object.entries(policy.repos)) {
+    const extra = Object.hasOwn(sidecar.repos, key) ? sidecar.repos[key]! : {};
+    const approvals = union(entry.agentApprovals, extra.agentApprovals), blocked = union(entry.questionBlockedStages, extra.questionBlockedStages);
+    repos[key] = {...entry, ...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
+  }
+  return {version: 1, repos};
+}
+
 export async function loadOwnerPolicy(agentDir: string, scaffoldDir?: string): Promise<Decoded<OwnerPolicy | undefined>> {
+  let root: string;
+  const read = async (name: string) => readOwnedJson(join(root, name), {root, maxBytes: 64 * 1024});
   try {
-    const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
-    return decodeOwnerPolicy(await readOwnedJson(join(root, 'policy.json'), {root, maxBytes: 64 * 1024}));
+    root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
+    const policy = decodeOwnerPolicy(await read('policy.json'));
+    if (!policy.ok) return policy;
+    let sidecar: Decoded<AgentPolicySidecar> | undefined;
+    try { sidecar = decodeAgentPolicy(await read('policy.agent.json')); }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw Object.assign(e as Error, {file: 'policy.agent.json'}); }
+    if (sidecar && !sidecar.ok) return failed(sidecar.problems.map(p => ({...p, path: `policy.agent.json${p.path ? '.' + p.path : ''}`})));
+    return okValue(mergeAgentPolicy(policy.value, sidecar?.value));
   }
   catch (e) {
-    if (e instanceof OwnedFileError && e.code === 'NOT_FOUND') return okValue(undefined);
-    return failed([problem(e instanceof OwnedFileError ? e.code : 'POLICY_INVALID', 'policy.json', (e as Error).message)]);
+    if (e instanceof OwnedFileError && e.code === 'NOT_FOUND' && !(e as {file?: string}).file) return okValue(undefined);
+    return failed([problem(e instanceof OwnedFileError ? e.code : 'POLICY_INVALID', (e as {file?: string}).file ?? 'policy.json', (e as Error).message)]);
   }
 }
 

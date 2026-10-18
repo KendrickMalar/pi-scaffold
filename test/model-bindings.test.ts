@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, writeFile, chmod, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, repoPolicyFor, type OwnerPolicy} from '../src/core/model-bindings.js';
+import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, repoAgentApproves, repoPolicyFor, repoQuestionBlockedStages, type OwnerPolicy} from '../src/core/model-bindings.js';
 import {featureDoc} from './helpers/docs.js';
 
 const policy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [
@@ -105,4 +105,69 @@ test('agentDecisionStages: optional, only implementation/verification, strictly 
     assert.equal(r.ok, false, JSON.stringify(bad));
     assert.ok(!r.ok && r.problems.every(p => p.path.startsWith('repos.example/demo.agentDecisionStages')), JSON.stringify(!r.ok && r.problems));
   }
+});
+
+test('agentApprovals and questionBlockedStages: optional, strictly decoded, beside the old agentDecisionStages', () => {
+  const entry = (extra: Record<string, unknown>) => ({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], ...extra}}});
+  const kinds = ['specification', 'implementation-start', 'epic-completion', 'handoff-abandon', 'specification-revision'];
+  const stages = ['setup', 'basic-design', 'implementation', 'verification'];
+  const full = decodeOwnerPolicy(entry({agentApprovals: kinds, questionBlockedStages: stages}));
+  assert.ok(full.ok, JSON.stringify(!full.ok && full.problems));
+  assert.deepEqual(full.value.repos['example/demo']!.agentApprovals, kinds);
+  assert.deepEqual(full.value.repos['example/demo']!.questionBlockedStages, stages);
+  for (const k of kinds) assert.equal(repoAgentApproves(full.value, 'example/demo', k as never), true, k);
+  assert.deepEqual(repoQuestionBlockedStages(full.value, 'example/demo'), stages);
+  const none = decodeOwnerPolicy(entry({}));
+  assert.ok(none.ok);
+  assert.equal(repoAgentApproves(none.value, 'example/demo', 'specification'), false, 'absent means none');
+  assert.deepEqual(repoQuestionBlockedStages(none.value, 'example/demo'), []);
+  assert.equal(repoAgentApproves(undefined, 'example/demo', 'specification'), false, 'no policy');
+  // The old field still counts for question blocking; it never turns on policy approvals by kind.
+  const old = decodeOwnerPolicy(entry({agentDecisionStages: ['implementation', 'verification']}));
+  assert.ok(old.ok);
+  assert.deepEqual(repoQuestionBlockedStages(old.value, 'example/demo'), ['implementation', 'verification']);
+  assert.equal(repoAgentApproves(old.value, 'example/demo', 'epic-completion'), false);
+  const both = decodeOwnerPolicy(entry({agentDecisionStages: ['verification'], questionBlockedStages: ['basic-design', 'verification']}));
+  assert.ok(both.ok);
+  assert.deepEqual(repoQuestionBlockedStages(both.value, 'example/demo'), ['basic-design', 'verification'], 'union without duplicates');
+  for (const [key, bad] of [['agentApprovals', ['approve-all']], ['agentApprovals', ['specification', 'specification']], ['agentApprovals', 'specification'],
+    ['questionBlockedStages', ['specification']], ['questionBlockedStages', ['completed']], ['questionBlockedStages', ['setup', 'setup']], ['questionBlockedStages', null]] as const) {
+    const r = decodeOwnerPolicy(entry({[key]: bad}));
+    assert.equal(r.ok, false, `${key} ${JSON.stringify(bad)}`);
+    assert.ok(!r.ok && r.problems.every(p => p.path.startsWith(`repos.example/demo.${key}`)), JSON.stringify(!r.ok && r.problems));
+  }
+});
+
+// ---- the agent policy sidecar (policy.agent.json) ---------------------------------------------------
+async function scaffoldDirWith(t: {after(fn: () => Promise<void>): void}, files: Record<string, unknown>) {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-sidecar-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const agentDir = join(dir, 'agent'), root = join(agentDir, 'pi-scaffold');
+  await mkdir(root, {recursive: true, mode: 0o700});
+  for (const [name, v] of Object.entries(files)) await writeFile(join(root, name), typeof v === 'string' ? v : JSON.stringify(v), {mode: 0o600});
+  return agentDir;
+}
+const OLD = {version: 1, repos: {'example/*': {authMode: 'file-backed', models: [], agentDecisionStages: ['implementation', 'verification']}}};
+
+test('policy.agent.json adds agentApprovals and questionBlockedStages to the matching entry of the old-form policy.json', async t => {
+  const agentDir = await scaffoldDirWith(t, {'policy.json': OLD, 'policy.agent.json': {version: 1, repos: {'example/*': {agentApprovals: ['specification', 'epic-completion'], questionBlockedStages: ['basic-design']}, 'other/*': {agentApprovals: ['specification']}}}});
+  const r = await loadOwnerPolicy(agentDir);
+  assert.ok(r.ok && r.value, JSON.stringify(r));
+  const e = repoPolicyFor(r.value, 'example/demo')!;
+  assert.deepEqual(e.agentApprovals, ['specification', 'epic-completion']);
+  assert.deepEqual(repoQuestionBlockedStages(r.value, 'example/demo'), ['basic-design', 'implementation', 'verification']);
+  assert.equal(repoAgentApproves(r.value, 'example/demo', 'epic-completion'), true);
+  assert.equal(repoPolicyFor(r.value, 'other/demo'), undefined, 'a sidecar entry without a policy.json entry adds nothing');
+});
+
+test('without policy.agent.json the old-form policy works as before; a broken sidecar fails like a broken policy', async t => {
+  const plain = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.json': OLD}));
+  assert.ok(plain.ok && plain.value);
+  assert.equal(repoAgentApproves(plain.value, 'example/demo', 'specification'), false);
+  for (const bad of ['{broken', {version: 2, repos: {}}, {version: 1, repos: {'example/*': {agentApprovals: ['everything']}}}, {version: 1, repos: {'example/*': {authMode: 'file-backed'}}}]) {
+    const r = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.json': OLD, 'policy.agent.json': bad}));
+    assert.equal(r.ok, false, JSON.stringify(bad));
+  }
+  const noBase = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.agent.json': {version: 1, repos: {'example/*': {agentApprovals: ['specification']}}}}));
+  assert.ok(noBase.ok && noBase.value === undefined, 'no policy.json still means no policy');
 });

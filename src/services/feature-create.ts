@@ -11,10 +11,10 @@ import {parseIssueBody} from '../core/body-codec.js';
 import {canonicalJson, sha256Bytes, taggedDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
-import {approvalViewDigest} from '../core/approvals.js';
+import {approvalNeedsConfirmation, approvalViewDigest} from '../core/approvals.js';
 import {checkFeatureBindings, FEATURE_ROLES} from '../core/model-bindings.js';
 import {editScopeProblems} from '../core/wave-plan.js';
-import {specificationApprovalView} from '../core/specification-gate.js';
+import {checkSpecificationReady, specificationApprovalView} from '../core/specification-gate.js';
 import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/template-snapshot.js';
 import type {ToolCall} from '../core/runtime.js';
 import {decodeGithubIssue, readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
@@ -59,7 +59,7 @@ export function decodeFeatureCreateInput(value: unknown): Decoded<FeatureCreateI
 }
 
 /** Feature ACs must stay inside the Epic: every REQ exists there, and an Epic AC ID keeps its exact content. */
-function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem[] {
+export function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem[] {
   const reqs = new Set(epic.requirements.map(r => r.id));
   const problems: Problem[] = [];
   criteria.forEach((c, i) => {
@@ -116,8 +116,18 @@ export async function createFeature(input: FeatureCreateInput, call: ToolCall): 
     if (epicSnap.value.bodySha256 !== input.expectedBodySha256) pre.push(problem('STALE_BODY', 'expectedBodySha256', 'The Epic body changed; read it again.'));
     if (epic.revision !== input.expectedRevision) pre.push(problem('STALE_REVISION', 'expectedRevision', `The Epic is at revision ${epic.revision}.`));
     if (pre.length) return blocked(pre);
-    const approval = await call.approvals.requireContentApproval('specification', epic.workflowId, approvalViewDigest('specification', specificationApprovalView(epic)), ctx);
-    if (!approval.ok) return blocked([problem('SPECIFICATION_NOT_APPROVED', 'specification', 'The current specification has no valid parent approval (it changed, or was never approved).'), ...approval.problems]);
+    // No usable approval of the current specification (never given, or given under other Profile instructions): approve it
+    // again here — by the parent agent when the owner policy says so, otherwise in the parent TUI — but only while it is complete.
+    const view = specificationApprovalView(epic);
+    const notApproved = (more: Problem[]) => [problem('SPECIFICATION_NOT_APPROVED', 'specification', 'The current specification has no valid parent approval (it changed, or was never approved).'), ...more];
+    const approval = await call.approvals.requireContentApproval('specification', epic.workflowId, approvalViewDigest('specification', view), ctx);
+    if (!approval.ok) {
+      if (!approvalNeedsConfirmation(approval.problems)) return blocked(notApproved(approval.problems));
+      const ready = checkSpecificationReady(epic);
+      if (ready.status !== 'validated') return blocked(notApproved(ready.problems));
+      const confirmed = await call.approvals.confirmContent('specification', epic.workflowId, view, ctx, call.env.approvalUi, call.scope, await call.approvalOptions(input.repo, epic.workflowId, 'specification'));
+      if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: notApproved(confirmed.problems)};
+    }
     const policy = await call.policy();
     if (!policy.ok) return blocked(policy.problems);
     const checks = [

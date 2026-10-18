@@ -39,14 +39,16 @@ Epicは `setup → specification → basic-design → implementation → verific
 | specification | `scaffold_specification_update` | ヒアリングで確定した事実・要件・合格基準・決定を、安定IDのpatchとして反映する（削除・再採番はしない）。足りない項目は`missingFields`で返す |
 | specification | `scaffold_research_begin` | 調査項目の担当（claim）を取り、調査指示（brief）を返す。調査の実行やモデル呼び出しはしない |
 | specification | `scaffold_research_resolve` | 根拠（https URL、またはハッシュ付きの手元ファイル）のある結果を反映する。結果をREQ/AC/Dへ自動で昇格しない |
-| specification→basic-design | `scaffold_handoff_basic_design` | 仕様がそろっていることを確認し、**親TUIで仕様の内容承認**を得てから引き継ぐ |
+| specification→basic-design | `scaffold_handoff_basic_design` | 仕様がそろっていることを確認し、**仕様の内容承認**を得てから引き継ぐ |
 | basic-design | `scaffold_feature_create` | Featureを1件作る。pi-ghのtaskテンプレートで作成し、Epicのnative sub-issueとして接続する。`editScope`はリポジトリ相対のディレクトリ・ファイル・glob（例: `src`、`src/a.ts`、`src/**/*.ts`、`{a,b}`、`[ab]`、`?`）。ルート（`.`、`./`、`**`）も書ける。空・絶対パス・`..`・バックスラッシュ・制御文字/ゼロ幅文字・末尾がドットか空白の区切りは、GitHubに書く前に`UNKNOWN_SCOPE`で止まる |
 | basic-design | `scaffold_dependencies_apply` | Feature間の依存を検査し（循環・未知・自己辺、判定できない`editScope`）、足りない依存だけを追加する。計画と固定IDのMermaid図をEpicに保存する。`design`（設計書のpath/sha256/コミット。手元のgitで確認）を渡すと、Epicの基本設計の参照も同じ更新で保存する（実装工程への引き継ぎに必要）。結果の`dependencyDigest`は、Wave計画に入れる値 |
 | basic-design | `scaffold_waves_verify` | （読み取りのみ）Wave・依存順・同じWave内の編集競合・ラベルを検証する。globの重なりは、互いに重ならないと示せない限り重なりとみなす（例: `src/**/*.ts`と`src/**/*.css`は並行可、`src/**`と`src/a.ts`・ルートと何でもは競合）。共有のmanifest/lockfile・state（migrations、workflows、schema）は、ディレクトリと同じくglobに合う実在ファイルと、globの固定部分（`db/migrations/**`）や末尾の名前（`**/package.json`）で判定する。合格しない場合も、Wave計画に入れる`dependencyDigest`と`featureSetDigest`を`data`に返す。依存計画が未保存なら`dependencyDigest`はnullで、`DEPENDENCY_PLAN_UNSET`を返す |
 | basic-design | `scaffold_waves_apply` | 検証を通ったWave計画をFeatureのラベルへ反映し、計画をEpicに保存する。計画の2つのdigestは、先に`scaffold_waves_verify`を呼んで得る |
-| basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**親TUIで実装開始の指示**を得てから引き継ぐ |
+| basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**実装開始の指示**を得てから引き継ぐ |
 | implementation→verification | `scaffold_handoff_verification` | 統合コミットと、FeatureごとのAC別の証拠（レポート・ログのハッシュ）を固定して引き継ぐ。Epicは閉じない |
-| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**親TUIで最終受け入れ**を得てから、本文・Stage・closeを反映する（owner policyの`agentDecisionStages`に`verification`があれば、親エージェントが自分で記録する。後述）。指定があればProjectをDoneにする |
+| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**最終受け入れ**を得てから、本文・Stage・closeを反映する（owner policyの`agentApprovals`に`epic-completion`があれば、親エージェントが自分で記録する。後述）。指定があればProjectをDoneにする |
+| basic-design・implementation・verification | `scaffold_specification_revise` | 承認済みの仕様を改訂する（意図を変えるときだけ）。patchは`scaffold_specification_update`と同じ形で、理由を必ず付ける。改訂後も仕様がそろっていること。調査結果は戻さない。**仕様の改訂**の承認を得てから、Epicの`specRevisions`に記録し、変わったREQ/ACを合格基準に持つFeatureだけに`Blocked`を付ける。Stageは動かさない |
+| basic-design・implementation・verification | `scaffold_feature_revise` | Featureを1件、改訂後の仕様に合わせる（合格基準と、任意で設計の参照）。Featureの`expectedRevision`・`expectedBodySha256`を渡す。仕様の改訂で止まったFeatureなら`Blocked`を外す（ほかの理由の`Blocked`は残す） |
 
 完了条件は次のとおりです。
 - 要件がすべて合格基準でカバーされ、証拠が合格している
@@ -54,13 +56,17 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 ## 共通の約束
 
-- **承認は親TUIでのみ記録します**（例外は次の「エージェント判断工程」）。対象は、仕様の内容承認・実装開始の指示・最終受け入れの3つです。どれも、確認画面で見せた内容のdigestに結び付けます。内容が変われば失効し、headlessや子セッションでは新しく作れません。Issue本文の`approved: true`や決定ログは承認として扱いません。
-- **エージェント判断工程（`agentDecisionStages`）**：人間に質問してよいのは基本設計までです。owner policyの対象リポジトリに`agentDecisionStages`（`"implementation"`・`"verification"`のみ）を書くと、その工程のセッションでは親エージェントが人間に何も聞かず、承認済みの仕様・設計の範囲で自分で判断し、判断をIssueと最終報告に記録します。
-  - 工程は、このセッションが受け付けた引き継ぎpacketの`targetStage`で決まります。packetを受け付けていないセッション（手で起動したPiなど）、別のセッション、packetと違うリポジトリ・workflowへの呼び出しでは、これまでどおりです。
-  - その工程で起きる内容承認（検証工程の最終受け入れなど）は、確認画面を出さずに親エージェントが記録します。headlessの親でも記録できます（人間がいない前提のため）。記録には`approvedBy: "agent"`と`stage`が入り、ツール結果の`data.agentApproval`（`kind`・`stage`・`viewDigest`）で分かります。これらの項目が無い既存の記録も、引き続き有効です。
-  - 止まっている引き継ぎの放棄（`HANDOFF_IN_PROGRESS`）も、確認画面なしで親エージェントが行います。結果の`data.agentAbandoned`に放棄したoperationIdが入ります。
-  - 子セッション（subagent）は、どの工程でも承認を記録できません。
-  - 実際のPiでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止め、自分で判断して記録するよう伝えます。ただし、すべての質問文の先頭が`【事前作業】`の呼び出し（人にしかできない事前作業の依頼）は通します（`ask_user`は`question`、`AskUserQuestion`は`questions[].question`を見ます）。判断を求める質問は止めます。`tool_call`を出さないホスト（Claude Code上のclaude-scaffoldなど）ではこの遮断は効きませんが、承認の扱いは同じです。
+- **承認**の対象は、仕様の内容承認・実装開始の指示・最終受け入れ・仕様の改訂の4つです。どれも、見せた内容のdigestに結び付けます。内容が変われば失効します。Issue本文の`approved: true`や決定ログは承認として扱いません。
+  - owner policyの`agentApprovals`に種類が書いてあれば、確認画面を出さずに親エージェントが記録します（headlessでも可）。記録には`approvedBy: "agent"`と`basis: "policy"`が入り、ツール結果の`data.agentApproval`（`kind`・`basis`・`viewDigest`）で分かります。この記録は、Profileの指示文のdigestを照合しません（記録には残します）。指示文を直しても、承認はやり直しになりません。
+  - 書いていない種類は、親TUIの確認画面で人が答えたときだけ記録します。headlessでは新しく作れません。
+  - 子セッション（subagent）は、どの場合も承認を記録できません。
+  - `scaffold_feature_create`は、今の仕様に使える承認が無いとき（指示文が変わった人の承認など）、仕様がそろっていれば承認をやり直します（policyなら親エージェント、そうでなければ確認画面）。
+  - 止まっている引き継ぎの放棄（`HANDOFF_IN_PROGRESS`）は、`agentApprovals`に`handoff-abandon`があれば確認画面なしで親エージェントが行います。結果の`data.agentAbandoned`に放棄したoperationIdが入ります。
+- **質問の遮断（`questionBlockedStages`）**：人間に質問してよいのは仕様策定の工程だけです。owner policyの`questionBlockedStages`（`"setup"`・`"basic-design"`・`"implementation"`・`"verification"`）に入った工程のセッションでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止めます。例外はありません（以前の`【事前作業】`の例外は廃止）。
+  - 工程は、このセッションが受け付けた引き継ぎpacketの`targetStage`で決まります。packetを受け付けていないセッション（setupの元のセッションや、手で起動したPiなど）、別のセッション、packetと違うリポジトリ・workflowでは止めません。
+  - 止められたら、承認済みの仕様・設計の意図の範囲で自分で決めて記録します。意図を変える必要があれば`scaffold_specification_revise`を使います。
+  - `tool_call`を出さないホスト（Claude Code上のclaude-scaffoldなど）では、この遮断はホスト側（claude-scaffoldのフック）が同じpolicyで行います。
+- **旧形式の`agentDecisionStages`**（`"implementation"`・`"verification"`）も読みます。書いた工程は質問を止め、その工程のセッションでの承認と放棄を親エージェントが記録します（記録は`approvedBy: "agent"`と`stage`）。以前の記録も有効です。
 - **operationId**：書き込みのあるツールは、手順ごとにjournalへ記録します。同じoperationIdでの再実行は、続きから再開するか`noop`を返します。別の内容で同じoperationIdを使うと止まります。結果が分からない書き込みは、GitHubを読み直して照合してから進め、むやみに再送しません。
 - **結果のstatus**：`validated` `prepared` `applied` `noop` `blocked` `partial` `unknown` `cancelled` の8種類です。
   - `partial`と`unknown`は`resumeToken`（＝operationId）付きで返します。同じoperationIdで再開してください。
@@ -88,11 +94,21 @@ Epicは `setup → specification → basic-design → implementation → verific
   - Herdr 0.9.1（protocol 22）
   - pi-profileの`developer` Profile
   - owner policy（`<scaffoldDir>/policy.json`、未指定時は `<agentDir>/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
-  - 各リポジトリのエントリには、任意で`agentDecisionStages`を書けます。値は`"implementation"`と`"verification"`だけの配列で、重複や他の値（`"basic-design"`など）はpolicyのエラーです。書かなければ`[]`と同じで、動作は変わりません。
+  - 各リポジトリのエントリには、任意で`agentDecisionStages`（旧形式：`"implementation"`・`"verification"`）を書けます。
+  - AI承認と質問の遮断は、同じディレクトリの**別ファイル`policy.agent.json`**に書きます。policy.jsonを旧形式のまま保つので、この版より前のpi-scaffoldが動いているセッションも壊れません（前の版はこのファイルを読みません）。policy.jsonと同じキーのエントリにだけ足され、無ければ旧形式だけで動きます。壊れていればpolicyのエラーです。
+    - `agentApprovals`：`"specification"`・`"implementation-start"`・`"epic-completion"`・`"handoff-abandon"`・`"specification-revision"`
+    - `questionBlockedStages`：`"setup"`・`"basic-design"`・`"implementation"`・`"verification"`（`"specification"`は書けません）
+    - どちらもpolicy.jsonに直接書くこともできますが、その場合は前の版が読めなくなります。
 
 ```json
+// policy.json（旧形式のまま）
 {"version": 1, "repos": {"OWNER/*": {"authMode": "file-backed", "models": [], "agentDecisionStages": ["implementation", "verification"]}}}
+// policy.agent.json
+{"version": 1, "repos": {"OWNER/*": {
+  "agentApprovals": ["specification", "implementation-start", "epic-completion", "handoff-abandon", "specification-revision"],
+  "questionBlockedStages": ["setup", "basic-design", "implementation", "verification"]}}}
 ```
+- 引き継ぎの受け手は、送り手と同じProfile（id）で起動していれば受け付けます。Profileの指示文が送り手の開始後に変わっていても止めず、受領（`ready.json`）に両方のdigestを残し、結果の`data.profileChanged`で知らせます。cwd・アカウント・必要なツール・固定した文書の検査はそのままです。
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
 新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。

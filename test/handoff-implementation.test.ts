@@ -327,3 +327,27 @@ test('a corrupt approval record stays blocked without asking', async t => {
   assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'INVALID_JSON'), JSON.stringify(out.r.problems));
   assert.equal(out.confirmCalls, 0); noLaunch(herdr, gh);
 });
+
+test('with agentApprovals implementation-start the parent records the start itself (no dialog, headless ok)', async t => {
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {...policy.repos['example/demo']!, agentApprovals: ['implementation-start']}}};
+  for (const interactive of [true, false]) {
+    const gh = world();
+    const {h, herdr} = await harness(t, gh, new FakeHerdr(), {interactive, policy: aiPolicy});
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+    assert.equal(out.confirmCalls, 0);
+    const note = (out.r.data as {agentApproval?: {kind: string; basis?: string}}).agentApproval;
+    assert.deepEqual([note?.kind, note?.basis], ['implementation-start', 'policy']);
+    assert.equal(herdr.tabCreates, 1);
+  }
+});
+
+test('agentApprovals for another kind does not approve the start', async t => {
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {...policy.repos['example/demo']!, agentApprovals: ['specification', 'epic-completion']}}};
+  const gh = world();
+  const {h, herdr} = await harness(t, gh, new FakeHerdr(), {interactive: false, policy: aiPolicy});
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'));
+  noLaunch(herdr, gh);
+});

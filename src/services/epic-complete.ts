@@ -114,7 +114,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     else {
       if (!approvalNeedsConfirmation(existing.problems)) return blocked(existing.problems);
       if (call.environment().PI_SUBAGENT_CHILD) return blocked([problem('APPROVAL_UI_REQUIRED', 'epic-completion', 'A subagent child cannot give the final acceptance.')]);
-      const confirmed = await call.approvals.confirmContent('epic-completion', epic.workflowId, view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, epic.workflowId)});
+      const confirmed = await call.approvals.confirmContent('epic-completion', epic.workflowId, view, context.value, call.env.approvalUi, call.scope, await call.approvalOptions(input.repo, epic.workflowId, 'epic-completion'));
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
       approval = confirmed.data;
     }

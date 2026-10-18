@@ -177,12 +177,20 @@ test('patchDoc refuses identity changes and invalid next docs', () => {
   }
 });
 
-test('feature docs are checked against their visible projection (#10) and still cannot be patched as an Epic', () => {
+test('feature docs are checked against their visible projection (#10), patched as Features only, never as an Epic', () => {
   const feature = buildSnapshot({...raw('前置き\n' + renderFeatureBlock(featureDoc())), labels: ['Type: Scaffold', 'Scope: Feature']});
   assert.ok(feature.ok, JSON.stringify(feature.ok ? [] : feature.problems));
   assert.equal(feature.value.doc.kind, 'feature');
   assert.equal(feature.value.projectionChecked, true);
-  assert.ok(codes(problemsOf(patchDoc(feature.value, featureDoc()))).includes('UNSUPPORTED_KIND'));
+  assert.ok(codes(problemsOf(patchDoc(feature.value, initialDoc()))).includes('UNSUPPORTED_KIND'));
+  const changed = {...featureDoc(), criteria: [{id: 'AC001', requirementIds: ['REQ001'], verification: '改訂した検証', expectedResult: '改訂した結果'}]};
+  const edit = patchDoc(feature.value, changed);
+  assert.ok(edit.ok, JSON.stringify(!edit.ok && edit.problems));
+  assert.ok(edit.value.body.startsWith('前置き\n'), 'outside bytes are kept');
+  const reread = buildSnapshot({...raw(edit.value.body), labels: ['Type: Scaffold', 'Scope: Feature']});
+  assert.ok(reread.ok);
+  assert.equal(reread.value.doc.revision, featureDoc().revision + 1);
+  assert.equal((reread.value.doc as typeof changed).criteria[0]!.verification, '改訂した検証');
   const handWritten = buildSnapshot({...raw(composeManagedBlock('## 目的\n手書きの表示\n', featureDoc())), labels: ['Type: Scaffold', 'Scope: Feature']});
   assert.ok(!handWritten.ok && codes(handWritten.problems).includes('DOC_PROJECTION_MISMATCH'));
 });
@@ -203,4 +211,18 @@ test('CRLF bodies (web editor saves) parse and keep outside bytes', () => {
   const edit = patchDoc(snap.value, structuredClone(snap.value.doc) as EpicDocV1); assert.ok(edit.ok);
   assert.ok(edit.value.body.startsWith('メモ\r\n\r\n') && edit.value.body.endsWith('\r\n追記\r\n'));
   assert.equal(parseIssueBody(edit.value.body).ok, true);
+});
+
+test('specRevisions: absent keeps an old Epic body byte-identical; present is decoded, rendered and round-trips', () => {
+  const doc = initialDoc();
+  assert.ok(!renderEpicBlock(doc).includes('仕様の改訂'));
+  const revised = {...doc, specRevisions: [{revision: 4, operationId: '44444444-4444-4444-8444-444444444444', stage: 'implementation' as const, reason: '架空の理由', changedIds: ['REQ001', 'AC001'], affectedFeatures: [11], approvalViewDigest: 'a'.repeat(64)}]};
+  const body = renderEpicBlock(revised);
+  assert.match(body, /## 仕様の改訂/);
+  assert.match(body, /\| r4 \| implementation \| REQ001, AC001 \| #11 \| 架空の理由 \|/);
+  const snap = buildSnapshot(raw(body));
+  assert.ok(snap.ok, JSON.stringify(!snap.ok && snap.problems));
+  assert.deepEqual((snap.value.doc as typeof revised).specRevisions, revised.specRevisions);
+  const bad = buildSnapshot(raw(renderEpicBlock(doc).replace('"handoff": null', '"handoff": null,\n  "specRevisions": [{"revision": 1}]')));
+  assert.equal(bad.ok, false);
 });
