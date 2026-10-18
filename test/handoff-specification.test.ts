@@ -502,3 +502,20 @@ test('the same Profile instructions on both sides report no profileChanged', asy
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.equal((out.r.data as {profileChanged?: unknown}).profileChanged, undefined);
 });
+
+for (const op of ['gh_issue_edit_if_current', 'gh_issue_labels_if_current'] as const) test(`a stage commit (${op}) that landed but returned unknown is reconciled on resume and not resent`, async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir);
+  const real = gh.execute;
+  gh.overrides.set(op, async args => { gh.overrides.delete(op); await real(op, args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const input = params(gh);
+  assert.equal((await h.invoke(input)).r.status, 'unknown');
+  const before = gh.count(op);
+  const resumed = await h.invoke(input);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.count(op), before, `${op} is not sent again`);
+  assert.equal(herdr.tabCreates, 1);
+  assert.deepEqual(gh.issues.get(10)!.labels.sort(), ['Scope: Epic', 'Stage: Specification', 'Type: Scaffold']);
+});

@@ -82,7 +82,8 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     // Checked on every call, not only as part of a stage transition.
     if (snap.value.labels.includes('Blocked')) pre.push(problem('BLOCKED', 'labels', 'The Epic is Blocked.'));
     const stageLabels = snap.value.labels.filter(l => l.startsWith('Stage: '));
-    const labelsDone = !!record?.steps.some(s => s.name === 'epic-labels' && s.phase === 'done');
+    // A label change this operation sent (done, or uncertain and reconciled below) may already show Stage: Completed.
+    const labelsDone = !!record?.steps.some(s => s.name === 'epic-labels' && s.phase !== 'failed');
     const okLabels = labelsDone ? [['Stage: Completed'], ['Stage: Verification']] : [['Stage: Verification']];
     if (!okLabels.some(o => JSON.stringify(o) === JSON.stringify(stageLabels))) pre.push(problem('STAGE_LABEL_MISMATCH', 'labels', `Stage labels [${stageLabels.join(', ')}] do not match a verification Epic.`));
     if (snap.value.state === 'closed' && snap.value.stateReason !== undefined && snap.value.stateReason !== 'completed' && !closedByUs) pre.push(problem('CLOSED_NOT_COMPLETED', 'epicIssue', `The Epic was closed as ${snap.value.stateReason ?? 'unknown'}; it is not marked completed here (reopen it yourself first if that was a mistake).`));
@@ -128,9 +129,12 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     payloadDigest: taggedDigest('epic-complete', payload), journal, scope: call.scope,
   }, async run => {
     const refs = (run.done('refs') as {remoteMainRef: string} | undefined) ?? (run.note('refs', {remoteMainRef: gate!.remoteMainRef}), {remoteMainRef: gate!.remoteMainRef!});
+    // A change an earlier run sent without a confirmed outcome goes through run.write (its reconcile reads GitHub)
+    // even when GitHub already shows it; skipping it would leave the operation uncertain on every resume.
+    const pending = (step: string) => run.record.steps.some(s => s.name === step && (s.phase === 'requested' || s.phase === 'unknown'));
     // 1. Body (B1): stage completed.
     let current = await reread(run.stop);
-    if ((current.doc as EpicDocV1).stage !== 'completed') {
+    if ((current.doc as EpicDocV1).stage !== 'completed' || pending('epic-body')) {
       const edit = patchDoc(current, {...(current.doc as EpicDocV1), stage: 'completed'});
       if (!edit.ok) return run.stop(edit.problems);
       const path = join(dir, 'body.json');
@@ -142,7 +146,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       current = await reread(run.stop);
     }
     // 2. Labels (B2): Stage: Verification → Stage: Completed only.
-    if (!current.labels.includes('Stage: Completed') || current.labels.includes('Stage: Verification')) {
+    if (!current.labels.includes('Stage: Completed') || current.labels.includes('Stage: Verification') || pending('epic-labels')) {
       const plan = prepareLabelEdit(current, {type: 'Scaffold', scope: 'Epic', stage: 'completed'});
       if (!plan.ok) return run.stop(plan.problems);
       const path = join(dir, 'labels.json');
@@ -172,7 +176,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     let projectUpdated = false;
     if (input.project) {
       run.checkpoint();
-      if (!projectDone((await readProject()).items)) {
+      if (!projectDone((await readProject()).items) || pending('project')) {
         const path = join(dir, 'project.json');
         await writeOwnedFile(path, JSON.stringify({version: 1, repo: input.repo, operation: 'project-field-update', projectId: input.project.projectId, itemId: input.project.itemId, fieldId: input.project.statusFieldId, value: {singleSelectOptionId: input.project.doneOptionId}}), {root: call.namespaceRoot});
         await run.write('project', () => call.bridge.call('gh_project_field_update', {changePath: path}, () => true as const, call.scope), {

@@ -145,13 +145,17 @@ export async function applyWaves(input: WavesApplyInput, call: ToolCall): Promis
       const fresh = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
       if (!fresh.ok) return run.stop(fresh.problems);
       const doc = fresh.value.doc as EpicDocV1;
+      const savedNow = canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) === canonicalJson(plan);
+      // An earlier save of ours with an uncertain outcome that GitHub already shows is settled by reconcile below; the
+      // body then differs from what this operation first saw only because of that save, so it is not "moved".
+      const ownSave = savedNow && run.record.steps.some(s => s.name === 'epic-body' && (s.phase === 'requested' || s.phase === 'unknown'));
       const moved: Problem[] = [];
       if (fresh.value.bodySha256 !== seen.bodySha256) moved.push(problem('EPIC_MOVED', 'epicIssue', 'The Epic body was changed by someone else meanwhile; the plan is not written over it.'));
       else if (fresh.value.state !== 'open' || doc.stage !== 'basic-design' || fresh.value.labels.includes('Blocked')) moved.push(problem('EPIC_MOVED', 'epicIssue', 'The Epic changed state meanwhile (closed, stage or Blocked); the plan is not saved.'));
       if (canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) !== canonicalJson(seen.plan === null ? null : canonicalWavePlan(seen.plan)) && canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) !== canonicalJson(plan)) moved.push(problem('PLAN_CHANGED', 'wavePlan', 'Another Wave plan was saved meanwhile; it is not overwritten.'));
       if (canonicalJson(doc.dependencyPlan) !== canonicalJson(epic.dependencyPlan)) moved.push(problem('DEPENDENCIES_CHANGED', 'dependencyPlan', 'The dependency plan changed meanwhile.'));
-      if (moved.length) return run.stop(moved);
-      if (canonicalJson(doc.wavePlan === null ? null : canonicalWavePlan(doc.wavePlan)) !== canonicalJson(plan)) {
+      if (moved.length && !ownSave) return run.stop(moved);
+      if (!savedNow || ownSave) {
         const edit = patchDoc(fresh.value, {...doc, wavePlan: plan});
         if (!edit.ok) return run.stop(edit.problems);
         const expected = edit.value;

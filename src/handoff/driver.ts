@@ -227,8 +227,11 @@ async function commitStage(run: OperationRun, call: ToolCall, input: HandoffInpu
   const reread = async () => { const r = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope); if (!r.ok) run.stop(r.problems); return (r as {ok: true; value: IssueSnapshot}).value; };
   const committed = (s: IssueSnapshot) => committedBy(s, input) && (s.doc as EpicDocV1).handoff?.nonceSha256 === nonceSha;
   const bodyStep = run.record.steps.find(st => st.name === 'stage-body');
+  // A change an earlier run sent without a confirmed outcome goes through run.write (its reconcile reads GitHub) even
+  // when GitHub already shows it; skipping it would leave the handoff uncertain on every resume.
+  const pending = (step: string) => run.record.steps.some(st => st.name === step && (st.phase === 'requested' || st.phase === 'unknown'));
   let current = await reread();
-  if (bodyStep?.phase !== 'done' && !committed(current)) {
+  if (bodyStep?.phase !== 'done' && (!committed(current) || pending('stage-body'))) {
     // Re-check everything against the caller's input right before writing (stale body, stage, Blocked, gate).
     if (!bodyStep || bodyStep.phase === 'failed') { const p = await readyForCommit(current, input, gate); if (p.length) run.stop(p); }
     const doc = current.doc as EpicDocV1;
@@ -246,7 +249,7 @@ async function commitStage(run: OperationRun, call: ToolCall, input: HandoffInpu
   if (!committed(current)) run.stop([problem('STAGE_NOT_COMMITTED', 'epic', 'The Epic body does not show this operation\'s committed stage.')]);
   const plan = prepareLabelEdit(current, {type: 'Scaffold', scope: 'Epic', stage: input.nextStage});
   if (!plan.ok) return run.stop(plan.problems);
-  if (!plan.value.add.length && !plan.value.remove.length) return;
+  if (!plan.value.add.length && !plan.value.remove.length && !pending('stage-labels')) return;
   const labelsPath = join(dir, 'stage-labels.json');
   const before = current.labels;
   await run.write('stage-labels', async () => {

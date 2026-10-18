@@ -292,3 +292,17 @@ test('a concurrent Epic body edit (even outside the managed block) stops the sav
   assert.ok(out.r.problems.some(p => p.code === 'EPIC_MOVED'), JSON.stringify(out.r.problems));
   assert.equal(epicDoc(gh).wavePlan, null);
 });
+
+test('an Epic save that landed but returned unknown is reconciled on resume and not resent', async t => {
+  const gh = world();
+  const real = gh.execute;
+  gh.overrides.set('gh_issue_edit_if_current', async args => { gh.overrides.delete('gh_issue_edit_if_current'); await real('gh_issue_edit_if_current', args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+  const h = await harness(t, gh);
+  const p = params(gh);
+  assert.equal((await h.invoke(p)).r.status, 'unknown');
+  const edits = gh.count('gh_issue_edit_if_current');
+  const resumed = await h.invoke(p);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.count('gh_issue_edit_if_current'), edits, 'the Epic body is not edited again');
+  assert.deepEqual(canonicalWavePlan(epicDoc(gh).wavePlan!), canonicalWavePlan(plan(TARGET)));
+});
