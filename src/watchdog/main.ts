@@ -1,6 +1,6 @@
 // scaffold-watchdog entry: reads its settings from argv and the environment, then runs one tick (--once, for
 // launchd) or one tick a minute. See README "scaffold-watchdog".
-import {execFile} from 'node:child_process';
+import {execFile, execFileSync} from 'node:child_process';
 import {existsSync, readdirSync} from 'node:fs';
 import {statfs} from 'node:fs/promises';
 import {homedir} from 'node:os';
@@ -34,8 +34,18 @@ export function resolveRoots(env: NodeJS.ProcessEnv, home: string): StateRoot[] 
   return roots;
 }
 
+/** pi-subagents keeps runs under os.tmpdir(); launchd may start us without the TMPDIR Pi sessions see. */
+export function reconcileEnv(env: NodeJS.ProcessEnv, darwinTemp: () => string | undefined = userTempDir): NodeJS.ProcessEnv {
+  if (env.TMPDIR) return env;
+  const dir = darwinTemp();
+  return dir ? {...env, TMPDIR: dir} : env;
+}
+function userTempDir(): string | undefined {
+  try { return execFileSync('getconf', ['DARWIN_USER_TEMP_DIR'], {encoding: 'utf8', timeout: 5000}).trim() || undefined; } catch { return undefined; }
+}
+
 function runCommand(path: string): Promise<string> {
-  return new Promise((resolve, reject) => execFile(path, [], {timeout: 120_000, maxBuffer: 4 * 1024 * 1024}, (error, stdout, stderr) => {
+  return new Promise((resolve, reject) => execFile(path, [], {env: reconcileEnv(process.env), timeout: 120_000, maxBuffer: 4 * 1024 * 1024}, (error, stdout, stderr) => {
     if (error) reject(new Error(`${path} failed: ${String(stderr).trim().slice(0, 300) || error.message}`)); else resolve(String(stdout));
   }));
 }

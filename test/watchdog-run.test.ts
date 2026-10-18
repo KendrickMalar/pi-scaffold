@@ -129,3 +129,10 @@ test('roots: explicit list, or every Pi agent dir and the Claude scaffold dir th
   for (const d of ['.pi/agent/pi-scaffold', '.pi/agent-muu/pi-scaffold', '.pi/agent-rbx', '.claude/scaffold/pi-scaffold']) await mkdir(join(home, d), {recursive: true});
   assert.deepEqual(resolveRoots({}, home), [{agent: 'pi', dir: join(home, '.pi/agent/pi-scaffold')}, {agent: 'pi', dir: join(home, '.pi/agent-muu/pi-scaffold')}, {agent: 'claude', dir: join(home, '.claude/scaffold/pi-scaffold')}]);
 });
+
+test('reconcile runs with the user temp dir, where Pi keeps pi-subagents runs, even when launchd sets no TMPDIR', async () => {
+  const {reconcileEnv} = await import('../src/watchdog/main.js');
+  assert.equal(reconcileEnv({PATH: '/bin'}, () => '/var/folders/x/T/').TMPDIR, '/var/folders/x/T/');
+  assert.equal(reconcileEnv({TMPDIR: '/keep/'}, () => '/var/folders/x/T/').TMPDIR, '/keep/');
+  assert.equal(reconcileEnv({PATH: '/bin'}, () => undefined).TMPDIR, undefined);
+});
