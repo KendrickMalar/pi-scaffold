@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// Recovers stopped scaffold stage sessions in Herdr. Usage: scaffold-watchdog [--once] [--dry-run]
+import {main} from '../dist/src/watchdog/main.js';
+main(process.argv.slice(2), process.env).then(code => { process.exitCode = code; }, error => { console.error(`scaffold-watchdog: ${error?.message ?? error}`); process.exitCode = 1; });
