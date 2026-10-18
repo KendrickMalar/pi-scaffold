@@ -132,6 +132,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 - 見る対象: 各 scaffold dir の handoff 記録（`state/*/*/handoff/*/packet.json` と `ready.json`）。Pi（`~/.pi/agent*/pi-scaffold`）と Claude（`~/.claude/scaffold/pi-scaffold`）の両方です。14日より古い handoff は見ません
 - ペインの特定: 全 herdr セッション（`herdr session list --json`）の `pane list` で、セッションが一致するペインを探します
+- 起動し直した会話への結び直し: 記録上の会話が見つからず、全セッションが読めたときは、後継の会話を探します。候補は、同じ種別（pi/Claude）で cwd が packet と同じ、他の工程や親が持っていない、handoff より後に作られた会話です（作成時刻は Pi のファイル名か UUIDv7 から）。引き継ぎのタブ（label `scaffold-<nonceSha256 の先頭12桁>`）にあるものを優先します。1つなら以後それを追い、`rebound`（`from`・`to`・ペイン）をログに出します。複数なら `rebind-ambiguous` を出して何もしません
 - 完了の判定: `gh issue view` で Epic の Stage ラベルを読みます。工程と違うか、閉じていれば、その工程は二度と触りません。読めないときは何もしません
 
 | 状況 | 処理 |
@@ -142,7 +143,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 | 仕様策定の idle、Esc での中断、回復しないエラー、ペイン消失 | ログだけ |
 | pi-subagents の runner が死んだ run | `SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE` のスクリプトを毎回呼ぶ（failed にして結果ファイルで親へ届く） |
 
-送る直前に、ペインの revision・状態・セッションが観測時と同じかを確かめます。違えば送りません。`--dry-run` は判断をログに書くだけです。
+送る直前に、ペインの revision・状態・セッションが観測時と同じかを確かめます。違えば送りません。`--dry-run` は判断をログに書くだけです。常駐の state ファイルは読むだけで書かず、自分の記憶は隣の `<state>.dry-run` に置きます。
 
 環境変数: `SCAFFOLD_WATCHDOG_ROOTS`（`pi=/abs,claude=/abs`）、`SCAFFOLD_WATCHDOG_STATE`、`SCAFFOLD_WATCHDOG_LOG`、`SCAFFOLD_WATCHDOG_HERDR`、`SCAFFOLD_WATCHDOG_GH`、`SCAFFOLD_WATCHDOG_CLAUDE_COMMAND`、`SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE`。
 

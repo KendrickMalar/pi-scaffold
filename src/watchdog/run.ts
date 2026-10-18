@@ -3,7 +3,7 @@
 import {appendFile, mkdir, readFile, rename, rmdir, stat, writeFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {discoverTargets, type StateRoot} from './discover.js';
-import {matchPane, sessionMatches, type Fleet, type PaneSnapshot} from './herdr-fleet.js';
+import {findSuccessor, matchPane, sessionMatches, type Fleet, type PaneSnapshot} from './herdr-fleet.js';
 import {planTarget, type PlanOptions} from './plan.js';
 import {initialTargetState, type EpicObservation, type PaneObservation, type Target, type TargetState, type WatchdogAction} from './types.js';
 import type {TailResult} from '../watch/session-tail.js';
@@ -16,6 +16,10 @@ export interface WatchdogDeps {
   statePath: string;
   logPath: string;
   now(): number;
+  /**
+   * Decides and logs only: nothing is typed. The live state file is read but never written; the dry run keeps its
+   * own memory beside it (`<statePath>.dry-run`), so it can share a machine with the running watchdog.
+   */
   dryRun?: boolean;
   /** Runs pi-subagents' stale-run reconcile; returns its stdout. */
   reconcile?(): Promise<string>;
@@ -55,7 +59,7 @@ async function lock(path: string, now: number): Promise<boolean> {
 const parseOutput = (text: string): unknown => { try { return JSON.parse(text); } catch { return text.trim().slice(0, 2000); } };
 
 export async function runOnce(deps: WatchdogDeps): Promise<'ran' | 'locked'> {
-  const lockPath = `${deps.statePath}.lock`;
+  const lockPath = `${statePathOf(deps)}.lock`;
   if (!await lock(lockPath, deps.now())) return 'locked';
   await mkdir(dirname(deps.logPath), {recursive: true});
   const lines: string[] = [];
@@ -71,6 +75,9 @@ export async function runOnce(deps: WatchdogDeps): Promise<'ran' | 'locked'> {
   return 'ran';
 }
 
+const statePathOf = (deps: WatchdogDeps) => deps.dryRun ? `${deps.statePath}.dry-run` : deps.statePath;
+const exists = (path: string) => stat(path).then(() => true, () => false);
+
 type Log = (event: string, fields?: Record<string, unknown>) => void;
 
 async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
@@ -81,7 +88,8 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
     catch (e) { log('subagents-reconcile-error', {error: (e as Error).message}); }
   }
 
-  const saved = await loadState(deps.statePath);
+  const own = statePathOf(deps);
+  const saved = deps.dryRun && !await exists(own) ? await loadState(deps.statePath) : await loadState(own);
   const targets = await discoverTargets(deps.roots, now);
   const active = targets.filter(t => !saved[t.key]?.retired);
   const next: Record<string, TargetState> = {};
@@ -89,28 +97,46 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
 
   const panes: PaneSnapshot[] = [];
   const readable = new Set<string>();
+  /** A successor is looked for only when every Herdr session was read: an unread one may still hold the original. */
+  let sawAll = false;
   if (active.length) {
     let sockets: string[] = [];
-    try { sockets = await deps.fleet.sockets(); } catch (e) { log('herdr-error', {error: (e as Error).message}); }
+    try { sockets = await deps.fleet.sockets(); sawAll = true; } catch (e) { log('herdr-error', {error: (e as Error).message}); }
     for (const socket of sockets) {
       try { panes.push(...await deps.fleet.panes(socket)); readable.add(socket); }
-      catch (e) { log('herdr-error', {socket, error: (e as Error).message}); }
+      catch (e) { sawAll = false; log('herdr-error', {socket, error: (e as Error).message}); }
     }
   }
+  /** Conversations some target already stands for; never taken over as another target's successor. */
+  const claimed = new Set<string>(targets.map(t => t.sessionId));
+  for (const t of targets) { const id = next[t.key]?.rebound?.sessionId; if (id) claimed.add(id); }
 
   const epics = new Map<string, Promise<EpicObservation>>();
   for (const target of active) {
-    const state = next[target.key] ?? initialTargetState();
+    let state = next[target.key] ?? initialTargetState();
     const epicKey = `${target.repo}#${target.epicIssue}`;
     if (!epics.has(epicKey)) epics.set(epicKey, deps.epic(target.repo, target.epicIssue));
     const epic = await epics.get(epicKey)!;
-    const pane = await observePane(deps, target, state, panes, readable);
+    // The stage is tracked under the conversation it was last rebound to; `key` stays the handoff's.
+    let tracked: Target = state.rebound ? {...target, sessionId: state.rebound.sessionId} : target;
+    let pane: PaneObservation | undefined;
+    if (sawAll && !matchPane(tracked, panes)) {
+      const found = findSuccessor(tracked, panes, claimed);
+      if (found.kind === 'one') {
+        log('rebound', {...whoOf(target), from: tracked.sessionId, to: found.sessionId, paneId: found.pane.paneId, socket: found.pane.socket});
+        state = {...state, rebound: {sessionId: found.sessionId, at: now}};
+        delete state.loggedKey;
+        claimed.add(found.sessionId);
+        tracked = {...target, sessionId: found.sessionId};
+      } else if (found.kind === 'ambiguous') pane = {kind: 'ambiguous', paneIds: found.panes.map(p => `${p.socket}#${p.paneId}`)};
+    }
+    pane ??= await observePane(deps, tracked, state, panes, readable);
     const ownerAlive = !!target.ownerSessionId && panes.some(p => p.agent === 'pi' && sessionMatches('pi', p.sessionValue, target.ownerSessionId!));
-    const r = planTarget(target, {epic, pane, ownerAlive}, state, now, deps.plan);
+    const r = planTarget(tracked, {epic, pane, ownerAlive}, state, now, deps.plan);
     next[target.key] = r.next;
-    for (const action of r.actions) await act(deps, target, action, log);
+    for (const action of r.actions) await act(deps, tracked, action, log);
   }
-  await saveState(deps.statePath, next);
+  await saveState(own, next);
 }
 
 async function observePane(deps: WatchdogDeps, target: Target, state: TargetState, panes: PaneSnapshot[], readable: Set<string>): Promise<PaneObservation> {
@@ -134,8 +160,10 @@ async function current(deps: WatchdogDeps, socket: string, paneId: string): Prom
   try { return (await deps.fleet.panes(socket)).find(p => p.paneId === paneId); } catch { return undefined; }
 }
 
+const whoOf = (target: Target) => ({target: target.key, agent: target.agent, repo: target.repo, epic: target.epicIssue, stage: target.targetStage});
+
 async function act(deps: WatchdogDeps, target: Target, action: WatchdogAction, log: Log): Promise<void> {
-  const who = {target: target.key, agent: target.agent, repo: target.repo, epic: target.epicIssue, stage: target.targetStage};
+  const who = {...whoOf(target), ...(target.sessionId !== target.key ? {session: target.sessionId} : {})};
   if (action.type === 'log') { log(action.event, {...who, ...(action.detail !== undefined ? {detail: action.detail} : {})}); return; }
   if (deps.dryRun) { log('dry-run', {...who, action: action.type, paneId: action.paneId, socket: action.socket}); return; }
   if (action.type === 'prompt') {

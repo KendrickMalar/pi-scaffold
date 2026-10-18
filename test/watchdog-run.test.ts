@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {access, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {runOnce, type WatchdogDeps} from '../src/watchdog/run.js';
@@ -29,13 +29,13 @@ class FakeFleet implements Fleet {
   sends() { return this.calls.filter(c => c.command === 'agentPrompt' || c.command === 'paneRun'); }
 }
 
-async function setup(t: {after(fn: () => Promise<void>): void}) {
+async function setup(t: {after(fn: () => Promise<void>): void}, readyExtra: Record<string, unknown> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'watchdog-run-'));
   t.after(() => rm(root, {recursive: true, force: true}));
   const dir = join(root, 'pi-scaffold'), op = join(dir, 'state', 'h', 'wf', 'handoff', 'op1');
   await mkdir(op, {recursive: true});
   await writeFile(join(op, 'packet.json'), JSON.stringify({repo: 'example/demo', epicIssue: 7, targetStage: 'implementation', cwd: '/repo'}));
-  await writeFile(join(op, 'ready.json'), JSON.stringify({phase: 'receiver-ready', sessionId: 's1', at: '2026-10-18T00:00:00.000Z'}));
+  await writeFile(join(op, 'ready.json'), JSON.stringify({phase: 'receiver-ready', sessionId: 's1', at: '2026-10-18T00:00:00.000Z', ...readyExtra}));
   const fleet = new FakeFleet();
   fleet.panesBySocket.set('/s.sock', [{socket: '/s.sock', paneId: 'w1:p2', agent: 'pi', status: 'idle', sessionValue: SESSION, revision: 5}]);
   const clock = {now: Date.parse('2026-10-18T01:00:00.000Z')};
@@ -92,6 +92,56 @@ test('dry run decides and logs but never types', async t => {
   await runOnce(s.deps);
   assert.equal(s.fleet.sends().length, 0);
   assert.ok((await s.logs()).some(l => l.event === 'dry-run' && l.action === 'prompt'));
+});
+
+test('dry run starts from the live state but never writes it or takes its lock', async t => {
+  const s = await setup(t);
+  await runOnce(s.deps);
+  const live = await readFile(s.deps.statePath, 'utf8');
+  await mkdir(`${s.deps.statePath}.lock`);
+  s.deps.dryRun = true;
+  s.clock.now += IDLE_GRACE_MS;
+  assert.equal(await runOnce(s.deps), 'ran');
+  assert.equal(await readFile(s.deps.statePath, 'utf8'), live);
+  assert.ok((await s.logs()).some(l => l.event === 'dry-run' && l.action === 'prompt'), 'the grace period counted from the live state');
+  await access(`${s.deps.statePath}.dry-run`);
+});
+
+const NONCE = 'ab'.repeat(32), TAG = 'scaffold-abababababab';
+const LATER = '/sessions/--repo--/2026-10-18T00-30-00-000Z_s2.jsonl';
+
+test('a stage relaunched in its handoff tab as another conversation is rebound, logged, then nudged there', async t => {
+  const s = await setup(t, {nonceSha256: NONCE});
+  s.fleet.panesBySocket.set('/s.sock', [
+    {socket: '/s.sock', paneId: 'w1:pD', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabId: 'w1:tA', tabLabel: TAG},
+  ]);
+  await runOnce(s.deps);
+  const rebound = (await s.logs()).find(l => l.event === 'rebound')!;
+  assert.equal(rebound.from, 's1'); assert.equal(rebound.to, 's2'); assert.equal(rebound.paneId, 'w1:pD'); assert.equal(rebound.socket, '/s.sock');
+  assert.equal(s.fleet.sends().length, 0);
+  s.clock.now += IDLE_GRACE_MS;
+  await runOnce(s.deps);
+  assert.deepEqual(s.fleet.sends(), [{command: 'agentPrompt', socket: '/s.sock', args: {paneId: 'w1:pD', text: NUDGE_PROMPT}}]);
+  const events = (await s.logs()).map(l => l.event);
+  assert.equal(events.filter(e => e === 'rebound').length, 1, 'rebinding is remembered, not repeated');
+  assert.ok(!events.includes('missing'));
+  const saved = JSON.parse(await readFile(s.deps.statePath, 'utf8'));
+  assert.equal(saved.targets.s1.rebound.sessionId, 's2');
+});
+
+test('two later conversations in the same cwd and no tagged tab: rebind-ambiguous, nothing typed', async t => {
+  const s = await setup(t, {nonceSha256: NONCE});
+  s.fleet.panesBySocket.set('/s.sock', [
+    {socket: '/s.sock', paneId: 'w1:pD', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo'},
+    {socket: '/s.sock', paneId: 'w1:pE', agent: 'pi', status: 'idle', sessionValue: '/sessions/--repo--/2026-10-18T00-40-00-000Z_s3.jsonl', revision: 2, cwd: '/repo'},
+  ]);
+  await runOnce(s.deps);
+  s.clock.now += IDLE_GRACE_MS;
+  await runOnce(s.deps);
+  assert.equal(s.fleet.sends().length, 0);
+  const logs = await s.logs();
+  assert.equal(logs.filter(l => l.event === 'rebind-ambiguous').length, 1);
+  assert.ok(!logs.some(l => l.event === 'rebound'));
 });
 
 test('the pi-subagents reconcile hook runs every tick and its output is logged', async t => {
