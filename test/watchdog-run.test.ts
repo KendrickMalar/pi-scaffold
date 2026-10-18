@@ -144,6 +144,25 @@ test('two later conversations in the same cwd and no tagged tab: rebind-ambiguou
   assert.ok(!logs.some(l => l.event === 'rebound'));
 });
 
+test('the session that handed off another stage in the same cwd is never taken as a successor', async t => {
+  const s = await setup(t, {nonceSha256: NONCE});
+  // A later handoff (another Epic, same cwd) whose sender runs in an untagged tab: seen on 2026-10-18 for launchd-manager.
+  const op2 = join(s.root, 'pi-scaffold', 'state', 'h', 'wf2', 'handoff', 'op2');
+  await mkdir(op2, {recursive: true});
+  await writeFile(join(op2, 'packet.json'), JSON.stringify({repo: 'example/demo', epicIssue: 9, targetStage: 'specification', cwd: '/repo'}));
+  await writeFile(join(op2, 'ready.json'), JSON.stringify({phase: 'receiver-ready', sessionId: 's4', at: '2026-10-18T00:31:00.000Z'}));
+  await writeFile(join(s.root, 'pi-scaffold', 'state', 'watches.json'), JSON.stringify({version: 1, watches: [{entry: {targetSessionId: 's4', ownerSessionId: 's2'}}]}));
+  s.fleet.panesBySocket.set('/s.sock', [
+    {socket: '/s.sock', paneId: 'w1:p2', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabLabel: '1'},
+    {socket: '/s.sock', paneId: 'w1:p3', agent: 'pi', status: 'idle', sessionValue: '/sessions/--repo--/2026-10-18T00-31-00-000Z_s4.jsonl', revision: 2, cwd: '/repo', tabLabel: 'scaffold-other'},
+  ]);
+  s.deps.epic = async (_repo, issue) => ({stageLabel: issue === 7 ? 'Stage: Implementation' : 'Stage: Specification', closed: false});
+  await runOnce(s.deps);
+  const logs = await s.logs();
+  assert.ok(!logs.some(l => l.event === 'rebound'));
+  assert.ok(logs.some(l => l.event === 'missing' && l.target === 's1'));
+});
+
 test('the pi-subagents reconcile hook runs every tick and its output is logged', async t => {
   const s = await setup(t);
   s.deps.reconcile = async () => '{"checked":2,"repaired":[]}';

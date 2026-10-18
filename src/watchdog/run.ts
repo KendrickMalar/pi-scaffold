@@ -107,8 +107,8 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
       catch (e) { sawAll = false; log('herdr-error', {socket, error: (e as Error).message}); }
     }
   }
-  /** Conversations some target already stands for; never taken over as another target's successor. */
-  const claimed = new Set<string>(targets.map(t => t.sessionId));
+  /** Conversations some target or its sender already stands for; never taken over as another target's successor. */
+  const claimed = new Set<string>(targets.flatMap(t => t.ownerSessionId ? [t.sessionId, t.ownerSessionId] : [t.sessionId]));
   for (const t of targets) { const id = next[t.key]?.rebound?.sessionId; if (id) claimed.add(id); }
 
   const epics = new Map<string, Promise<EpicObservation>>();
