@@ -386,3 +386,36 @@ test('a blocked dependencies_apply returns no digest', async t => {
   assert.equal(out.r.status, 'blocked');
   assert.equal((out.r.data as {dependencyDigest?: string} | undefined)?.dependencyDigest, undefined);
 });
+
+// ---- a change that landed but returned unknown is settled on resume from GitHub, not left uncertain ----
+
+const landedButUnknown = (gh: FakePiGh, name: string) => {
+  const real = gh.execute;
+  gh.overrides.set(name, async args => { gh.overrides.delete(name); await real(name, args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
+};
+
+test('a Project add that landed but returned unknown is reconciled on resume and not resent', async t => {
+  const gh = world();
+  landedButUnknown(gh, 'gh_project_add_issue');
+  const h = await harness(t, gh);
+  const p = params(gh, undefined, {projectId: PROJECT});
+  assert.equal((await h.invoke(p)).r.status, 'unknown');
+  const sent = gh.count('gh_project_add_issue');
+  const resumed = await h.invoke(p);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.count('gh_project_add_issue'), sent + 2, 'only the two remaining Features are added');
+  assert.deepEqual([...gh.projects.get(PROJECT)!].sort(), [11, 12, 13]);
+  assert.equal((await h.invoke(p)).r.status, 'noop', 'the operation is completed');
+});
+
+test('an Epic save that landed but returned unknown is reconciled on resume and not resent', async t => {
+  const gh = world();
+  landedButUnknown(gh, 'gh_issue_edit_if_current');
+  const h = await harness(t, gh);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const edits = gh.count('gh_issue_edit_if_current');
+  const resumed = await h.invoke();
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(gh.count('gh_issue_edit_if_current'), edits, 'the Epic body is not edited again');
+  assert.deepEqual(docOf(gh).dependencyPlan, plan([[11, 12], [12, 13]]));
+});

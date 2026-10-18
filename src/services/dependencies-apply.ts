@@ -161,11 +161,14 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     }
     // Added = edges this operation created (pi-gh reports an already-present edge as noop, which records no data).
     const added = plannedEdges.filter(e => run.record.steps.some(s => s.name === `edge:${e.from}->${e.to}` && s.phase === 'done' && s.data === true));
+    // A change an earlier run sent without a confirmed outcome must be settled through run.write (its reconcile reads
+    // GitHub), even when GitHub already shows it; skipping it would leave the operation uncertain forever.
+    const pending = (step: string) => run.record.steps.some(s => s.name === step && (s.phase === 'requested' || s.phase === 'unknown'));
     let projectItems: number[] = [];
     if (input.projectId) {
       for (const n of issues) {
-        if (projectBefore!.includes(n)) continue;
         const step = `project:#${n}`;
+        if (projectBefore!.includes(n) && !pending(step)) continue;
         if (run.done(step) !== undefined) continue;
         const changePath = join(dir, `project-${n}.json`);
         await writeOwnedFile(changePath, JSON.stringify({version: 1, repo: input.repo, operation: 'project-add-issue', issue: n, projectId: input.projectId}), {root: call.namespaceRoot});
@@ -200,7 +203,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
       else if (JSON.stringify(now.value.features.map(f => f.number).sort((a, b) => a - b)) !== JSON.stringify(input.plan.nodes.map(n => n.issue).sort((a, b) => a - b))) moved.push(problem('FEATURE_SET_CHANGED', 'plan.nodes', 'The Epic\'s Features changed meanwhile; the plan no longer covers exactly them.'));
       if (moved.length) return run.stop(moved);
       const changePath = join(dir, 'epic-body.json');
-      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan) || !designDone(doc)) {
+      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan) || !designDone(doc) || pending('epic-body')) {
         const edit = patchDoc(fresh.value, {...doc, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {})});
         if (!edit.ok) return run.stop(edit.problems);
         const expected = edit.value;
