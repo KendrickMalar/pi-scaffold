@@ -18,6 +18,9 @@ export interface Target {
   ownerSessionId?: string;
 }
 
+/** One pi-subagents async run (its status.json). `sessionId` is the owning conversation's session file. */
+export interface ChildRun { id: string; state: string; sessionId: string; lastUpdate?: number; endedAt?: number; pidAlive?: boolean }
+
 export type EpicObservation = 'unknown' | {stageLabel?: string; closed: boolean};
 export type PaneObservation =
   | {kind: 'missing'}
@@ -29,7 +32,9 @@ export type PaneObservation =
   | {kind: 'replaced'; socket: string; paneId: string}
   /** The pane the target was last seen in is back at its shell prompt. */
   | {kind: 'shell'; socket: string; paneId: string}
-  | {kind: 'agent'; socket: string; paneId: string; status: string; revision: number; sessionPath?: string; tail?: TailResult};
+  | {kind: 'agent'; socket: string; paneId: string; status: string; revision: number; sessionPath?: string; tail?: TailResult;
+    /** Pi only, read when idle/done: the async subagent runs this conversation started. */
+    children?: ChildRun[]};
 
 export interface TargetObservation { epic: EpicObservation; pane: PaneObservation; ownerAlive: boolean }
 

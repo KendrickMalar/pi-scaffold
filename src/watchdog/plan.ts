@@ -3,7 +3,7 @@
 import {decide, type WatchEntry} from '../watch/decide.js';
 import {STAGE_LABELS, stageLabelName} from '../core/label-policy.js';
 import {STAGES} from '../core/contracts.js';
-import type {Target, TargetObservation, TargetState, WatchdogAction} from './types.js';
+import type {ChildRun, Target, TargetObservation, TargetState, WatchdogAction} from './types.js';
 
 export const IDLE_GRACE_MS = 300_000;
 export const NUDGE_RETRY_MS = 900_000;
@@ -12,6 +12,10 @@ export const MAX_NUDGES_PER_STAGE = 8;
 export const MAX_RELAUNCH = 3;
 export const RELAUNCH_GAP_MS = 300_000;
 export const NUDGE_PROMPT = 'scaffold-watchdog: 工程が完了していないまま止まっています。人に質問できるのは仕様策定の工程だけです。意図の範囲内なら自分で決めて記録し、直前の作業を続けてください。';
+/** A running child whose status.json is older than this counts as running only while its runner pid lives. */
+export const CHILD_STALE_MS = 600_000;
+const RUNNING_STATES = new Set(['running', 'queued']);
+export const childDonePrompt = (ids: string[], at: number): string => `scaffold-watchdog: 子 run ${ids.join('、')} は ${new Date(at).toISOString()} に完了済みです（完了の知らせが届いていない可能性）。保存された結果を読んで続けてください。`;
 /** Values typed into a shell must not need quoting beyond plain single quotes. */
 const SAFE_SHELL_VALUE = /^[A-Za-z0-9._\/:@+-]+$/;
 
@@ -75,7 +79,13 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
         break;
       }
       if (tail?.kind === 'stopped' && tail.reason === 'aborted') { logOnce(`aborted:${tail.at}`, 'aborted'); break; }
-      nudge(target, s, tail ? `t:${tail.at}` : `r:${pane.revision}`, pane, now, actions, logOnce);
+      const children = pane.children ?? [];
+      const live = children.filter(c => childRunning(c, now)).map(c => c.id).sort();
+      // The parent is waiting on its own subagent: not a stop, and it does not use up the stage's prompts.
+      if (live.length) { logOnce(`waiting-child:${live.join(',')}`, 'waiting-child', live.join(',')); break; }
+      const done = tail ? children.filter(c => !RUNNING_STATES.has(c.state) && endOf(c) > tail.at).sort((a, b) => endOf(a) - endOf(b) || a.id.localeCompare(b.id)) : [];
+      const text = done.length ? childDonePrompt(done.map(c => c.id), endOf(done[done.length - 1]!)) : NUDGE_PROMPT;
+      nudge(target, s, tail ? `t:${tail.at}` : `r:${pane.revision}`, pane, now, actions, logOnce, text);
       break;
     }
   }
@@ -90,6 +100,13 @@ function stagePosition(stageLabel: string | undefined): number | undefined {
   return i < 0 ? undefined : i;
 }
 
+const endOf = (c: ChildRun): number => c.endedAt ?? c.lastUpdate ?? Number.NEGATIVE_INFINITY;
+/** Running or queued, and either recently updated or its runner is alive. A stale dead one waits for reconcile. */
+function childRunning(c: ChildRun, now: number): boolean {
+  if (!RUNNING_STATES.has(c.state)) return false;
+  return (c.lastUpdate !== undefined && now - c.lastUpdate < CHILD_STALE_MS) || c.pidAlive === true;
+}
+
 function transient(target: Target, s: TargetState, tail: {at: number; message: string; transient: boolean; kind: 'error'}, pane: {socket: string; paneId: string; revision: number}, now: number, actions: WatchdogAction[], log: (e: string, d?: string) => void): void {
   const entry: WatchEntry = {ownerSessionId: target.ownerSessionId ?? '', paneId: pane.paneId, tabId: '', workspaceId: '', targetSessionId: target.sessionId, cwd: target.cwd, repo: target.repo, epicIssue: target.epicIssue, targetStage: target.targetStage, addedAt: ''};
   const r = decide(entry, s.watch, {kind: 'idle', tail, sessionConfirmed: true}, now);
@@ -100,7 +117,7 @@ function transient(target: Target, s: TargetState, tail: {at: number; message: s
   }
 }
 
-function nudge(target: Target, s: TargetState, stopKey: string, pane: {socket: string; paneId: string; revision: number}, now: number, actions: WatchdogAction[], logOnce: (k: string, e: string, d?: string) => void): void {
+function nudge(target: Target, s: TargetState, stopKey: string, pane: {socket: string; paneId: string; revision: number}, now: number, actions: WatchdogAction[], logOnce: (k: string, e: string, d?: string) => void, text: string): void {
   if (target.targetStage === 'specification') { logOnce('awaiting-human', 'awaiting-human'); return; }
   if (now - (s.revisionChangedAt ?? now) < IDLE_GRACE_MS) return;
   if (s.nudges >= MAX_NUDGES_PER_STAGE) { logOnce('stage-exhausted', 'stage-exhausted'); return; }
@@ -108,5 +125,5 @@ function nudge(target: Target, s: TargetState, stopKey: string, pane: {socket: s
   if (s.stopNudges >= MAX_NUDGES_PER_STOP) { logOnce(`nudge-exhausted:${stopKey}`, 'nudge-exhausted'); return; }
   if (s.lastNudgeAt !== undefined && now - s.lastNudgeAt < NUDGE_RETRY_MS) return;
   s.nudges += 1; s.stopNudges += 1; s.lastNudgeAt = now; delete s.loggedKey;
-  actions.push({type: 'prompt', socket: pane.socket, paneId: pane.paneId, text: NUDGE_PROMPT, revision: pane.revision, reason: 'nudge'});
+  actions.push({type: 'prompt', socket: pane.socket, paneId: pane.paneId, text, revision: pane.revision, reason: 'nudge'});
 }

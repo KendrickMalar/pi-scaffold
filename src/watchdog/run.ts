@@ -5,7 +5,7 @@ import {dirname} from 'node:path';
 import {discoverTargets, type StateRoot} from './discover.js';
 import {findSuccessor, matchPane, sessionMatches, type Fleet, type PaneSnapshot} from './herdr-fleet.js';
 import {planTarget, type PlanOptions} from './plan.js';
-import {initialTargetState, type EpicObservation, type PaneObservation, type Target, type TargetState, type WatchdogAction} from './types.js';
+import {initialTargetState, type ChildRun, type EpicObservation, type PaneObservation, type Target, type TargetState, type WatchdogAction} from './types.js';
 import type {TailResult} from '../watch/session-tail.js';
 
 export interface WatchdogDeps {
@@ -26,6 +26,8 @@ export interface WatchdogDeps {
   /** Free bytes on the home volume. */
   diskFree?(): Promise<number | undefined>;
   plan?: PlanOptions;
+  /** Every pi-subagents async run; read at most once a tick. */
+  childRuns?(): Promise<ChildRun[]>;
 }
 
 /** A lock older than this belongs to a run that died; it is taken over. */
@@ -112,6 +114,8 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
   const claimed = new Set<string>(targets.flatMap(t => t.ownerSessionId ? [t.sessionId, t.ownerSessionId] : [t.sessionId]));
   for (const t of targets) { const id = next[t.key]?.rebound?.sessionId; if (id) claimed.add(id); }
 
+  let childRuns: Promise<ChildRun[]> | undefined;
+  const children = (): Promise<ChildRun[]> => childRuns ??= (deps.childRuns?.() ?? Promise.resolve([])).catch((e: Error) => { log('subagents-read-error', {error: e.message}); return []; });
   const epics = new Map<string, Promise<EpicObservation>>();
   for (const target of active) {
     let state = next[target.key] ?? initialTargetState();
@@ -128,7 +132,7 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
       claimed.add(found.sessionId);
       tracked = {...target, sessionId: found.sessionId};
     }
-    let pane = await observePane(deps, tracked, state, panes, readable);
+    let pane = await observePane(deps, tracked, state, panes, readable, children);
     // An undecided successor only replaces "gone"; a pane back at its shell is still relaunched.
     if (pane.kind === 'missing' || pane.kind === 'replaced') {
       if (found.kind === 'ambiguous') pane = {kind: 'ambiguous', paneIds: found.panes.map(p => `${p.socket}#${p.paneId}`)};
@@ -142,12 +146,15 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
   await saveState(own, next);
 }
 
-async function observePane(deps: WatchdogDeps, target: Target, state: TargetState, panes: PaneSnapshot[], readable: Set<string>): Promise<PaneObservation> {
+async function observePane(deps: WatchdogDeps, target: Target, state: TargetState, panes: PaneSnapshot[], readable: Set<string>, children: () => Promise<ChildRun[]>): Promise<PaneObservation> {
   const hit = matchPane(target, panes);
   if (hit) {
     const idle = hit.status === 'idle' || hit.status === 'done';
-    const tail = idle && target.agent === 'pi' && hit.sessionValue ? await deps.readTail(hit.sessionValue) : undefined;
-    return {kind: 'agent', socket: hit.socket, paneId: hit.paneId, status: hit.status ?? 'unknown', revision: hit.revision, ...(target.agent === 'pi' && hit.sessionValue ? {sessionPath: hit.sessionValue} : {}), ...(tail ? {tail} : {})};
+    const session = idle && target.agent === 'pi' ? hit.sessionValue : undefined;
+    const tail = session ? await deps.readTail(session) : undefined;
+    // Claude's children are Agent-tool children, not pi-subagents runs: only Pi parents are matched.
+    const own = session ? (await children()).filter(c => c.sessionId === session) : undefined;
+    return {kind: 'agent', socket: hit.socket, paneId: hit.paneId, status: hit.status ?? 'unknown', revision: hit.revision, ...(target.agent === 'pi' && hit.sessionValue ? {sessionPath: hit.sessionValue} : {}), ...(tail ? {tail} : {}), ...(own ? {children: own} : {})};
   }
   const seen = state.lastSeen;
   if (!seen || !readable.has(seen.socket)) return {kind: 'missing'};

@@ -133,11 +133,13 @@ Epicは `setup → specification → basic-design → implementation → verific
 - 見る対象: 各 scaffold dir の handoff 記録（`state/*/*/handoff/*/packet.json` と `ready.json`）。Pi（`~/.pi/agent*/pi-scaffold`）と Claude（`~/.claude/scaffold/pi-scaffold`）の両方です。14日より古い handoff は見ません
 - ペインの特定: 全 herdr セッション（`herdr session list --json`）の `pane list` で、セッションが一致するペインを探します
 - 起動し直した会話への結び直し: 記録上の会話が見つからず、全セッションが読めたときは、後継の会話を探します。候補は、同じ種別（pi/Claude）で cwd が packet と同じ、他の工程や親が持っていない、handoff より後に作られた会話です（作成時刻は Pi のファイル名か UUIDv7 から）。結び直すのは引き継ぎのタブ（label `scaffold-<nonceSha256 の先頭12桁>`）にある会話だけです。1つなら以後それを追い、`rebound`（`from`・`to`・ペイン）をログに出します。複数なら `rebind-ambiguous` を出して何もしません。タブの外で cwd だけ一致する会話は、人が別の作業で開いたものかもしれないので結び直さず、`rebind-candidate-outside-tab`（会話 ID とペイン）を一度だけ出します
-- 完了の判定: `gh issue view` で Epic の Stage ラベルを読みます。工程と違うか、閉じていれば、その工程は二度と触りません。読めないときは何もしません
+- 完了の判定: `gh issue view` で Epic の Stage ラベルを読みます。閉じているか、ラベルが対象より後の工程なら、その工程は二度と触りません（`retired`）。前の工程のラベルのまま（引き継ぎ直後でラベルが追いついていない）なら監視を続け、`stage-not-yet` を一度だけ出します。工程でないラベルも外さず `stage-unknown` を出します。理由なしで `retired` になった古い state は再判定し、外れなければ `unretired` を出して戻します。読めないときは何もしません
 
 | 状況 | 処理 |
 |---|---|
 | 完了前の idle（仕様策定以外、質問待ちでない） | 5分動きがなければ「続けて」を送る。同じ停止に2回まで（15分おき）、工程あたり8回まで |
+| 上の idle で、その会話の pi-subagents の async run が動いている（running/queued で status.json が10分以内に更新、または runner の pid が生存） | 送らない。回数も使わない。`waiting-child`（run id）を状態が変わったときだけ出す |
+| 上の idle で、run が親の最後の発話より後に終わっている | 「続けて」の代わりに「子 run <id> は <時刻> に完了済みです…保存された結果を読んで続けてください」を送る（上限は同じ） |
 | 一時エラー | 親の pi が生きていれば親内の監視（`watch/watcher.ts`）に任せる。居なければ同じ `decide()` で再開する |
 | pi・Claude が消えてシェルだけ残った | `pi --session <path>`（shim 経由）または `claude --resume <id>` を打つ。3回まで、5分おき |
 | 仕様策定の idle、Esc での中断、回復しないエラー、ペイン消失 | ログだけ |
@@ -145,7 +147,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 送る直前に、ペインの revision・状態・セッションが観測時と同じかを確かめます。違えば送りません。`--dry-run` は判断をログに書くだけです。常駐の state ファイルは読むだけで書かず、自分の記憶は隣の `<state>.dry-run` に置きます。
 
-環境変数: `SCAFFOLD_WATCHDOG_ROOTS`（`pi=/abs,claude=/abs`）、`SCAFFOLD_WATCHDOG_STATE`、`SCAFFOLD_WATCHDOG_LOG`、`SCAFFOLD_WATCHDOG_HERDR`、`SCAFFOLD_WATCHDOG_GH`、`SCAFFOLD_WATCHDOG_CLAUDE_COMMAND`、`SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE`。
+環境変数: `SCAFFOLD_WATCHDOG_ROOTS`（`pi=/abs,claude=/abs`）、`SCAFFOLD_WATCHDOG_STATE`、`SCAFFOLD_WATCHDOG_LOG`、`SCAFFOLD_WATCHDOG_HERDR`、`SCAFFOLD_WATCHDOG_GH`、`SCAFFOLD_WATCHDOG_CLAUDE_COMMAND`、`SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE`、`SCAFFOLD_WATCHDOG_SUBAGENT_RUNS`（既定は `<TMPDIR>/pi-subagents-uid-<uid>/async-subagent-runs`。TMPDIR が無ければ `getconf DARWIN_USER_TEMP_DIR`）。run の持ち主は status.json の `sessionId`（親の会話ファイル）で決めます。Claude の工程は対象外です。
 
 ## 開発と検証
 
