@@ -1,7 +1,8 @@
 // Pure decision for one handed-off stage session: (target, what this tick saw, remembered state, now) → actions.
 // No I/O here; run.ts observes and acts. The transient-error retry reuses the stage watcher's decide().
 import {decide, type WatchEntry} from '../watch/decide.js';
-import {stageLabelName} from '../core/label-policy.js';
+import {STAGE_LABELS, stageLabelName} from '../core/label-policy.js';
+import {STAGES} from '../core/contracts.js';
 import type {Target, TargetObservation, TargetState, WatchdogAction} from './types.js';
 
 export const IDLE_GRACE_MS = 300_000;
@@ -22,15 +23,24 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
   const log = (event: string, detail?: string) => actions.push(detail === undefined ? {type: 'log', event} : {type: 'log', event, detail});
   /** Logs only when the situation changed since the last logged one, so a stuck pane does not fill the log. */
   const logOnce = (key: string, event: string, detail?: string) => { if (s.loggedKey === key) return; s.loggedKey = key; log(event, detail); };
-  if (s.retired) return {actions, next: s};
+  if (s.retired && s.retiredReason) return {actions, next: s};
 
   const epic = obs.epic;
   if (epic === 'unknown') { logOnce('epic-unknown', 'epic-unknown'); return {actions, next: s}; }
   const label = stageLabelName(target.targetStage);
-  if (epic.closed || epic.stageLabel !== label) {
-    s.retired = true;
-    log('retired', `Epic stage is ${epic.closed ? 'closed' : epic.stageLabel ?? 'unlabelled'}, not ${label}`);
+  const position = stagePosition(epic.stageLabel), own = STAGES.indexOf(target.targetStage);
+  // Only a closed Epic or a later stage ends this one. An earlier label means the handoff ran ahead of the label.
+  if (epic.closed || (position !== undefined && position > own)) {
+    const reason = epic.closed ? 'closed' : 'later';
+    if (!s.retired) log('retired', `Epic stage is ${epic.closed ? 'closed' : epic.stageLabel ?? 'unlabelled'}, not ${label}`);
+    s.retired = true; s.retiredReason = reason;
     return {actions, next: s};
+  }
+  if (s.retired) { delete s.retired; log('unretired', `Epic stage is ${epic.stageLabel ?? 'unlabelled'}, not later than ${label}`); }
+  if ((position === undefined || position < own) && s.stageLabelLogged !== (epic.stageLabel ?? '')) {
+    s.stageLabelLogged = epic.stageLabel ?? '';
+    if (position === undefined) log('stage-unknown', epic.stageLabel);
+    else log('stage-not-yet', `Epic stage is ${epic.stageLabel ?? 'unlabelled'}, ${label} has not started`);
   }
 
   const pane = obs.pane;
@@ -70,6 +80,14 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
     }
   }
   return {actions, next: s};
+}
+
+/** Index in STAGES of an Epic's stage label (none = setup); undefined for a label that is not a stage. */
+function stagePosition(stageLabel: string | undefined): number | undefined {
+  if (stageLabel === undefined) return STAGES.indexOf('setup');
+  if (!STAGE_LABELS.includes(stageLabel)) return undefined;
+  const i = STAGES.findIndex(st => stageLabelName(st) === stageLabel);
+  return i < 0 ? undefined : i;
 }
 
 function transient(target: Target, s: TargetState, tail: {at: number; message: string; transient: boolean; kind: 'error'}, pane: {socket: string; paneId: string; revision: number}, now: number, actions: WatchdogAction[], log: (e: string, d?: string) => void): void {

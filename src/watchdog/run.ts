@@ -91,7 +91,8 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
   const own = statePathOf(deps);
   const saved = deps.dryRun && !await exists(own) ? await loadState(deps.statePath) : await loadState(own);
   const targets = await discoverTargets(deps.roots, now);
-  const active = targets.filter(t => !saved[t.key]?.retired);
+  // A `retired` without a reason came from the old rule and is judged again.
+  const active = targets.filter(t => !(saved[t.key]?.retired && saved[t.key]?.retiredReason));
   const next: Record<string, TargetState> = {};
   for (const t of targets) if (saved[t.key]) next[t.key] = saved[t.key]!;
 

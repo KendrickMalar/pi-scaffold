@@ -237,3 +237,26 @@ test('reconcile runs with the user temp dir, where Pi keeps pi-subagents runs, e
   assert.equal(reconcileEnv({TMPDIR: '/keep/'}, () => '/var/folders/x/T/').TMPDIR, '/keep/');
   assert.equal(reconcileEnv({PATH: '/bin'}, () => undefined).TMPDIR, undefined);
 });
+
+test('a stage the old rule retired while the Epic still had the earlier label is watched again', async t => {
+  const s = await setup(t);
+  await mkdir(join(s.root, 'state'), {recursive: true});
+  await writeFile(s.deps.statePath, JSON.stringify({version: 1, targets: {s1: {nudges: 0, stopNudges: 0, relaunches: 0, watch: {retryCount: 0, herdrFailures: 0}, retired: true}}}));
+  s.deps.epic = async () => ({stageLabel: 'Stage: BasicDesign', closed: false});
+  await runOnce(s.deps);
+  const events = (await s.logs()).map(l => l.event);
+  assert.ok(events.includes('unretired'));
+  assert.ok(events.includes('stage-not-yet'));
+  const saved = JSON.parse(await readFile(s.deps.statePath, 'utf8')) as {targets: Record<string, {retired?: boolean}>};
+  assert.equal(saved.targets.s1!.retired, undefined);
+});
+
+test('a stage retired with a reason is not read again', async t => {
+  const s = await setup(t);
+  await mkdir(join(s.root, 'state'), {recursive: true});
+  await writeFile(s.deps.statePath, JSON.stringify({version: 1, targets: {s1: {nudges: 0, stopNudges: 0, relaunches: 0, watch: {retryCount: 0, herdrFailures: 0}, retired: true, retiredReason: 'closed'}}}));
+  let reads = 0;
+  s.deps.epic = async () => { reads += 1; return {stageLabel: 'Stage: Implementation', closed: false}; };
+  await runOnce(s.deps);
+  assert.equal(reads, 0);
+});

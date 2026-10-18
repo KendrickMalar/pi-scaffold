@@ -20,12 +20,48 @@ function run(t: Target, steps: {obs: TargetObservation; now: number}[], start: T
 const prompts = (a: {type: string}[]) => a.filter(x => x.type === 'prompt') as Extract<ReturnType<typeof planTarget>['actions'][number], {type: 'prompt'}>[];
 
 test('a stage whose Epic moved on or closed is retired and never prompted', () => {
-  for (const epic of [{stageLabel: 'Stage: Verification', closed: false}, {stageLabel: 'Stage: Implementation', closed: true}, {stageLabel: 'Stage: Completed', closed: false}]) {
+  for (const [epic, reason] of [[{stageLabel: 'Stage: Verification', closed: false}, 'later'], [{stageLabel: 'Stage: Implementation', closed: true}, 'closed'], [{stageLabel: 'Stage: Completed', closed: false}, 'later'], [{stageLabel: 'Stage: BasicDesign', closed: true}, 'closed']] as const) {
     const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: IDLE_GRACE_MS * 10}]);
     assert.equal(prompts(r.actions).length, 0);
     assert.equal(r.state.retired, true);
+    assert.equal(r.state.retiredReason, reason);
     assert.deepEqual(r.actions.filter(a => a.type === 'log').map(a => (a as {event: string}).event), ['retired']);
   }
+});
+
+test('an Epic still labelled with an earlier stage has not started this one: watched, logged once, never retired', () => {
+  for (const stageLabel of ['Stage: BasicDesign', 'Stage: Specification', undefined]) {
+    const epic = stageLabel ? {stageLabel, closed: false} : {closed: false};
+    const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: 1}, {obs: obs(idle(), {epic}), now: IDLE_GRACE_MS}]);
+    assert.equal(r.state.retired, undefined);
+    assert.equal(r.actions.filter(a => a.type === 'log' && a.event === 'stage-not-yet').length, 1);
+    assert.equal(prompts(r.actions).length, 1, 'the pane is still looked after');
+  }
+});
+
+test('an unknown stage label never retires the stage', () => {
+  const epic = {stageLabel: 'Stage: Something', closed: false};
+  const r = run(target(), [{obs: obs(idle(), {epic}), now: 0}, {obs: obs(idle(), {epic}), now: 1}]);
+  assert.equal(r.state.retired, undefined);
+  assert.equal(r.actions.filter(a => a.type === 'log' && a.event === 'stage-unknown').length, 1);
+});
+
+test('a stage retired by the old rule (no reason) is judged again: back when the label is earlier, kept with a reason when later', () => {
+  const old = {...initialTargetState(), retired: true, nudges: 1};
+  const back = run(target(), [{obs: obs(idle(), {epic: {stageLabel: 'Stage: BasicDesign', closed: false}}), now: 0}], old);
+  assert.equal(back.state.retired, undefined);
+  assert.equal(back.state.nudges, 1);
+  assert.ok(back.actions.some(a => a.type === 'log' && a.event === 'unretired'));
+  const kept = run(target(), [{obs: obs(idle(), {epic: {stageLabel: 'Stage: Verification', closed: false}}), now: 0}], old);
+  assert.equal(kept.state.retired, true);
+  assert.equal(kept.state.retiredReason, 'later');
+  const unknown = run(target(), [{obs: obs(idle(), {epic: 'unknown'}), now: 0}], old);
+  assert.equal(unknown.state.retired, true);
+  assert.equal(unknown.state.retiredReason, undefined, 'judged again on a later tick');
+  const fixed = {...initialTargetState(), retired: true, retiredReason: 'later' as const};
+  const still = run(target(), [{obs: obs(idle()), now: 0}], fixed);
+  assert.equal(still.state.retired, true);
+  assert.equal(still.actions.length, 0);
 });
 
 test('an unreadable Epic is never acted on', () => {

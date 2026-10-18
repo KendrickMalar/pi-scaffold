@@ -45,6 +45,10 @@ export interface TargetState {
   watch: WatchProgress;
   loggedKey?: string;
   retired?: boolean;
+  /** Why it was retired. A `retired` without one was written by the old rule and is judged again. */
+  retiredReason?: 'closed' | 'later';
+  /** The Epic label last logged as `stage-not-yet` / `stage-unknown` (`''` = unlabelled), so each is logged once. */
+  stageLabelLogged?: string;
 }
 export const initialTargetState = (): TargetState => ({nudges: 0, stopNudges: 0, relaunches: 0, watch: {retryCount: 0, herdrFailures: 0}});
 
