@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {stat, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
@@ -226,7 +227,8 @@ test('the receiver refuses packets that do not match its session', async t => {
   const base = {packetPath: rx.packetPath(), agentDir, cwd: '/synthetic/repo', sessionId: 'target-session', sessionEntries: [profile()], toolNames: TOOLS, policy};
   for (const [label, over, code] of [
     ['cwd', {cwd: '/elsewhere'}, 'RECEIVER_CWD_MISMATCH'],
-    ['profile', {sessionEntries: [profile('developer', '別の指示')]}, 'RECEIVER_PROFILE_MISMATCH'],
+    ['profile id', {sessionEntries: [profile('other', '開発用（架空）')]}, 'RECEIVER_PROFILE_MISMATCH'],
+    ['no profile', {sessionEntries: []}, 'RECEIVER_PROFILE_MISMATCH'],
     ['tools', {toolNames: ['gh_issue_get']}, 'REQUIRED_TOOL_MISSING'],
     ['account', {policy: {version: 1 as const, repos: {}}}, 'RECEIVER_ACCOUNT_MISMATCH'],
     ['outside root', {packetPath: '/tmp/packet.json'}, 'OUTSIDE_ROOT'],
@@ -472,4 +474,31 @@ test('with agentApprovals handoff-abandon the parent abandons a stuck handoff it
   assert.equal(fresh.r.status, 'applied', JSON.stringify(fresh.r.problems));
   assert.equal(fresh.confirmCalls, 0);
   assert.deepEqual((fresh.r.data as {agentAbandoned?: string[]}).agentAbandoned, [OPERATION_ID]);
+});
+
+test('a receiver whose Profile instructions changed since the sender started accepts and records both digests; the driver reports profileChanged', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir, {entries: [profile('developer', '直した指示（架空）')]});
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as {profileChanged?: {senderInstructionsDigest: string; receiverInstructionsDigest: string}};
+  assert.ok(d.profileChanged, 'profileChanged is reported');
+  assert.notEqual(d.profileChanged!.senderInstructionsDigest, d.profileChanged!.receiverInstructionsDigest);
+  const {readdir, readFile} = await import('node:fs/promises');
+  const files = (await readdir(join(agentDir, 'pi-scaffold'), {recursive: true}) as string[]).filter(f => f.endsWith('ready.json'));
+  assert.equal(files.length, 1);
+  const ready = JSON.parse(await readFile(join(agentDir, 'pi-scaffold', files[0]!), 'utf8')) as {senderInstructionsDigest?: string; receiverInstructionsDigest?: string};
+  assert.deepEqual([ready.senderInstructionsDigest, ready.receiverInstructionsDigest], [d.profileChanged!.senderInstructionsDigest, d.profileChanged!.receiverInstructionsDigest]);
+});
+
+test('the same Profile instructions on both sides report no profileChanged', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir);
+  const h = await harness(t, gh, herdr); agentDir = h.agentDir;
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal((out.r.data as {profileChanged?: unknown}).profileChanged, undefined);
 });

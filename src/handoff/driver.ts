@@ -22,7 +22,8 @@ import {handoffDir, nonceSha256, readReceipt, writePacket, type HandoffPacketV1,
 
 export interface HandoffInput extends MutationInput { expectedStage: Stage; nextStage: Stage }
 /** `agentAbandoned`: stuck handoffs the parent agent abandoned itself in an agent-decision stage (no dialog). */
-export interface HandoffData { nonceSha256: string; tabId: string; paneId: string; targetSessionId: string; phase: string; agentAbandoned?: string[] }
+/** `profileChanged`: the receiving session runs newer Profile instructions than this one (recorded, not refused). */
+export interface HandoffData { nonceSha256: string; tabId: string; paneId: string; targetSessionId: string; phase: string; agentAbandoned?: string[]; profileChanged?: {senderInstructionsDigest: string; receiverInstructionsDigest: string} }
 export type StageGate = (snapshot: IssueSnapshot) => Promise<GateResult>;
 /** pi-gh tools every Scaffold stage session needs, besides this package's own registered tools. */
 export const BASE_REQUIRED_TOOLS = ['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'];
@@ -192,7 +193,8 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     // receiver-ready: the new session confirmed cwd/profile/account/tools for this packet.
     const ready = await waitReceipt('receiver-ready');
     if (!ready) return run.pause([problem('RECEIVER_NOT_READY', 'receiver', 'The new session has not confirmed the packet yet; call again with the same operationId.')]);
-    run.note('receiver-ready', {sessionId: ready.sessionId});
+    const profileChanged = ready.senderInstructionsDigest && ready.receiverInstructionsDigest ? {senderInstructionsDigest: ready.senderInstructionsDigest, receiverInstructionsDigest: ready.receiverInstructionsDigest} : undefined;
+    run.note('receiver-ready', {sessionId: ready.sessionId, ...(profileChanged ? {profileChanged} : {})});
     budget();
     // stage-committed: conditional Epic body (stage + public handoff state) then conditional labels.
     await commitStage(run, call, input, gate, prepared.nonceSha256, dir);
@@ -206,7 +208,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     const started = await waitReceipt('turn-started');
     if (!started) return run.pause([problem('TURN_NOT_STARTED', 'receiver', 'The prompt was sent but the new session has not started its turn yet; call again with the same operationId.')]);
     if (started.sessionId !== ready.sessionId) return run.stop([problem('RECEIVER_SESSION_MISMATCH', 'receiver', 'A different session reported the start.')]);
-    return {status: 'applied', data: {nonceSha256: prepared.nonceSha256, tabId: tab.tabId, paneId: tab.paneId, targetSessionId: started.sessionId, phase: 'turn-started'}};
+    return {status: 'applied', data: {nonceSha256: prepared.nonceSha256, tabId: tab.tabId, paneId: tab.paneId, targetSessionId: started.sessionId, phase: 'turn-started', ...(profileChanged ? {profileChanged} : {})}};
   });
   if (result.status === 'applied' && call.runtime.watch) {
     const d = result.data as HandoffData;

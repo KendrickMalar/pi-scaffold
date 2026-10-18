@@ -94,16 +94,21 @@ Epicは `setup → specification → basic-design → implementation → verific
   - Herdr 0.9.1（protocol 22）
   - pi-profileの`developer` Profile
   - owner policy（`<scaffoldDir>/policy.json`、未指定時は `<agentDir>/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
-  - 各リポジトリのエントリには、任意で次を書けます。どれも重複や他の値はpolicyのエラーです。書かなければ`[]`と同じです。
+  - 各リポジトリのエントリには、任意で`agentDecisionStages`（旧形式：`"implementation"`・`"verification"`）を書けます。
+  - AI承認と質問の遮断は、同じディレクトリの**別ファイル`policy.agent.json`**に書きます。policy.jsonを旧形式のまま保つので、この版より前のpi-scaffoldが動いているセッションも壊れません（前の版はこのファイルを読みません）。policy.jsonと同じキーのエントリにだけ足され、無ければ旧形式だけで動きます。壊れていればpolicyのエラーです。
     - `agentApprovals`：`"specification"`・`"implementation-start"`・`"epic-completion"`・`"handoff-abandon"`・`"specification-revision"`
     - `questionBlockedStages`：`"setup"`・`"basic-design"`・`"implementation"`・`"verification"`（`"specification"`は書けません）
-    - `agentDecisionStages`（旧形式）：`"implementation"`・`"verification"`
+    - どちらもpolicy.jsonに直接書くこともできますが、その場合は前の版が読めなくなります。
 
 ```json
-{"version": 1, "repos": {"OWNER/*": {"authMode": "file-backed", "models": [],
+// policy.json（旧形式のまま）
+{"version": 1, "repos": {"OWNER/*": {"authMode": "file-backed", "models": [], "agentDecisionStages": ["implementation", "verification"]}}}
+// policy.agent.json
+{"version": 1, "repos": {"OWNER/*": {
   "agentApprovals": ["specification", "implementation-start", "epic-completion", "handoff-abandon", "specification-revision"],
   "questionBlockedStages": ["setup", "basic-design", "implementation", "verification"]}}}
 ```
+- 引き継ぎの受け手は、送り手と同じProfile（id）で起動していれば受け付けます。Profileの指示文が送り手の開始後に変わっていても止めず、受領（`ready.json`）に両方のdigestを残し、結果の`data.profileChanged`で知らせます。cwd・アカウント・必要なツール・固定した文書の検査はそのままです。
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
 新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。

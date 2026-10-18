@@ -36,6 +36,14 @@ export function repoQuestionBlockedStages(policy: OwnerPolicy | undefined, repo:
   return [...new Set([...(p?.questionBlockedStages ?? []), ...(p?.agentDecisionStages ?? [])])];
 }
 
+/** An optional list of distinct allowed values (undefined when absent). */
+function uniqueList<T extends string>(r: StrictReader, value: unknown, path: string, allowed: readonly T[]): T[] | undefined {
+  if (value === undefined) return undefined;
+  const values = r.array(value, path, (s, q) => r.literal(s, q, allowed));
+  if (Array.isArray(value) && value.length !== new Set(value).size) r.add('DUPLICATE_VALUE', path, 'Each value may appear once.');
+  return values;
+}
+
 export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   const r = new StrictReader();
   const o = r.object(value, '', ['version', 'repos']);
@@ -57,26 +65,65 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
         roles: r.array(x.roles, `${q}.roles`, (role, rp) => r.literal(role, rp, FEATURE_ROLES)),
       };
     });
-    const set = <T extends string>(key: string, allowed: readonly T[]): T[] | undefined => {
-      if (e[key] === undefined) return undefined;
-      const values = r.array(e[key], `${p}.${key}`, (s, q) => r.literal(s, q, allowed));
-      if (Array.isArray(e[key]) && (e[key] as unknown[]).length !== new Set(e[key] as unknown[]).size) r.add('DUPLICATE_VALUE', `${p}.${key}`, 'Each value may appear once.');
-      return values;
-    };
+    const set = <T extends string>(key: string, allowed: readonly T[]) => uniqueList(r, e[key], `${p}.${key}`, allowed);
     const stages = set('agentDecisionStages', AGENT_DECISION_STAGES), approvals = set('agentApprovals', AGENT_APPROVAL_KINDS), blocked = set('questionBlockedStages', QUESTION_BLOCKED_STAGES);
     repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {}), ...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
   }
   return r.result({version: 1, repos});
 }
 
+/**
+ * The agent policy sidecar (<scaffoldDir>/policy.agent.json): `agentApprovals` and `questionBlockedStages` per policy key.
+ * It lives beside policy.json so that policy.json keeps the older form, which earlier pi-scaffold versions still accept;
+ * only this version reads the sidecar. An entry adds to the policy.json entry of exactly the same key and nothing else.
+ */
+export interface AgentPolicySidecar { version: 1; repos: Record<string, Pick<RepoPolicy, 'agentApprovals' | 'questionBlockedStages'>> }
+export function decodeAgentPolicy(value: unknown): Decoded<AgentPolicySidecar> {
+  const r = new StrictReader();
+  const o = r.object(value, '', ['version', 'repos']);
+  if (!o) return r.result(undefined as never);
+  r.literal(o.version, 'version', [1] as const, 'UNKNOWN_VERSION');
+  const repos: AgentPolicySidecar['repos'] = {};
+  const raw = o.repos;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) r.add('INVALID_TYPE', 'repos', 'Expected an object keyed by OWNER/REPO or OWNER/*.');
+  else for (const [repo, v] of Object.entries(raw)) {
+    const p = `repos.${repo}`;
+    if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
+    const e = r.object(v, p, [], ['agentApprovals', 'questionBlockedStages']) ?? {};
+    const approvals = uniqueList(r, e.agentApprovals, `${p}.agentApprovals`, AGENT_APPROVAL_KINDS), blocked = uniqueList(r, e.questionBlockedStages, `${p}.questionBlockedStages`, QUESTION_BLOCKED_STAGES);
+    repos[repo] = {...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
+  }
+  return r.result({version: 1, repos});
+}
+const union = <T>(a: readonly T[] | undefined, b: readonly T[] | undefined): T[] | undefined => a || b ? [...new Set([...(a ?? []), ...(b ?? [])])] : undefined;
+/** policy.json plus the sidecar, merged per identical key (lists are united). */
+export function mergeAgentPolicy(policy: OwnerPolicy, sidecar: AgentPolicySidecar | undefined): OwnerPolicy {
+  if (!sidecar) return policy;
+  const repos: Record<string, RepoPolicy> = {};
+  for (const [key, entry] of Object.entries(policy.repos)) {
+    const extra = Object.hasOwn(sidecar.repos, key) ? sidecar.repos[key]! : {};
+    const approvals = union(entry.agentApprovals, extra.agentApprovals), blocked = union(entry.questionBlockedStages, extra.questionBlockedStages);
+    repos[key] = {...entry, ...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
+  }
+  return {version: 1, repos};
+}
+
 export async function loadOwnerPolicy(agentDir: string, scaffoldDir?: string): Promise<Decoded<OwnerPolicy | undefined>> {
+  let root: string;
+  const read = async (name: string) => readOwnedJson(join(root, name), {root, maxBytes: 64 * 1024});
   try {
-    const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
-    return decodeOwnerPolicy(await readOwnedJson(join(root, 'policy.json'), {root, maxBytes: 64 * 1024}));
+    root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
+    const policy = decodeOwnerPolicy(await read('policy.json'));
+    if (!policy.ok) return policy;
+    let sidecar: Decoded<AgentPolicySidecar> | undefined;
+    try { sidecar = decodeAgentPolicy(await read('policy.agent.json')); }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) throw Object.assign(e as Error, {file: 'policy.agent.json'}); }
+    if (sidecar && !sidecar.ok) return failed(sidecar.problems.map(p => ({...p, path: `policy.agent.json${p.path ? '.' + p.path : ''}`})));
+    return okValue(mergeAgentPolicy(policy.value, sidecar?.value));
   }
   catch (e) {
-    if (e instanceof OwnedFileError && e.code === 'NOT_FOUND') return okValue(undefined);
-    return failed([problem(e instanceof OwnedFileError ? e.code : 'POLICY_INVALID', 'policy.json', (e as Error).message)]);
+    if (e instanceof OwnedFileError && e.code === 'NOT_FOUND' && !(e as {file?: string}).file) return okValue(undefined);
+    return failed([problem(e instanceof OwnedFileError ? e.code : 'POLICY_INVALID', (e as {file?: string}).file ?? 'policy.json', (e as Error).message)]);
   }
 }
 

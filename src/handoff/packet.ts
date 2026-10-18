@@ -10,7 +10,8 @@ export interface HandoffPacketV1 {
   accountBinding: Sha256; requiredTools: string[]; resourceRefs: string[];
 }
 export type ReceiptPhase = 'receiver-ready' | 'turn-started';
-export interface HandoffReceiptFile { version: 1; phase: ReceiptPhase; nonceSha256: Sha256; packetSha256: Sha256; sessionId: string; at: string }
+/** `senderInstructionsDigest`/`receiverInstructionsDigest`: present when the receiving session runs newer Profile instructions than the sender. */
+export interface HandoffReceiptFile { version: 1; phase: ReceiptPhase; nonceSha256: Sha256; packetSha256: Sha256; sessionId: string; at: string; senderInstructionsDigest?: Sha256; receiverInstructionsDigest?: Sha256 }
 
 export const handoffDir = (workflowStateRoot: string, operationId: string) => join(workflowStateRoot, 'handoff', operationId);
 export const nonceSha256 = (nonce: string) => sha256Text(nonce);

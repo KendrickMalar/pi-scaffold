@@ -137,3 +137,37 @@ test('agentApprovals and questionBlockedStages: optional, strictly decoded, besi
     assert.ok(!r.ok && r.problems.every(p => p.path.startsWith(`repos.example/demo.${key}`)), JSON.stringify(!r.ok && r.problems));
   }
 });
+
+// ---- the agent policy sidecar (policy.agent.json) ---------------------------------------------------
+async function scaffoldDirWith(t: {after(fn: () => Promise<void>): void}, files: Record<string, unknown>) {
+  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-sidecar-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const agentDir = join(dir, 'agent'), root = join(agentDir, 'pi-scaffold');
+  await mkdir(root, {recursive: true, mode: 0o700});
+  for (const [name, v] of Object.entries(files)) await writeFile(join(root, name), typeof v === 'string' ? v : JSON.stringify(v), {mode: 0o600});
+  return agentDir;
+}
+const OLD = {version: 1, repos: {'example/*': {authMode: 'file-backed', models: [], agentDecisionStages: ['implementation', 'verification']}}};
+
+test('policy.agent.json adds agentApprovals and questionBlockedStages to the matching entry of the old-form policy.json', async t => {
+  const agentDir = await scaffoldDirWith(t, {'policy.json': OLD, 'policy.agent.json': {version: 1, repos: {'example/*': {agentApprovals: ['specification', 'epic-completion'], questionBlockedStages: ['basic-design']}, 'other/*': {agentApprovals: ['specification']}}}});
+  const r = await loadOwnerPolicy(agentDir);
+  assert.ok(r.ok && r.value, JSON.stringify(r));
+  const e = repoPolicyFor(r.value, 'example/demo')!;
+  assert.deepEqual(e.agentApprovals, ['specification', 'epic-completion']);
+  assert.deepEqual(repoQuestionBlockedStages(r.value, 'example/demo'), ['basic-design', 'implementation', 'verification']);
+  assert.equal(repoAgentApproves(r.value, 'example/demo', 'epic-completion'), true);
+  assert.equal(repoPolicyFor(r.value, 'other/demo'), undefined, 'a sidecar entry without a policy.json entry adds nothing');
+});
+
+test('without policy.agent.json the old-form policy works as before; a broken sidecar fails like a broken policy', async t => {
+  const plain = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.json': OLD}));
+  assert.ok(plain.ok && plain.value);
+  assert.equal(repoAgentApproves(plain.value, 'example/demo', 'specification'), false);
+  for (const bad of ['{broken', {version: 2, repos: {}}, {version: 1, repos: {'example/*': {agentApprovals: ['everything']}}}, {version: 1, repos: {'example/*': {authMode: 'file-backed'}}}]) {
+    const r = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.json': OLD, 'policy.agent.json': bad}));
+    assert.equal(r.ok, false, JSON.stringify(bad));
+  }
+  const noBase = await loadOwnerPolicy(await scaffoldDirWith(t, {'policy.agent.json': {version: 1, repos: {'example/*': {agentApprovals: ['specification']}}}}));
+  assert.ok(noBase.ok && noBase.value === undefined, 'no policy.json still means no policy');
+});
