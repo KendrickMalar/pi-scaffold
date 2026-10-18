@@ -4,7 +4,7 @@ import {execFile} from 'node:child_process';
 import {createHerdrCli, type HerdrPort} from '../handoff/herdr-client.js';
 import type {EpicObservation, Target} from './types.js';
 
-export interface PaneSnapshot { socket: string; paneId: string; agent?: string; status?: string; sessionValue?: string; revision: number }
+export interface PaneSnapshot { socket: string; paneId: string; agent?: string; status?: string; sessionValue?: string; revision: number; cwd?: string; tabId?: string; tabLabel?: string }
 export interface Fleet {
   sockets(): Promise<string[]>;
   panes(socket: string): Promise<PaneSnapshot[]>;
@@ -26,8 +26,16 @@ export function parsePaneList(socket: string, text: string): PaneSnapshot[] {
   if (!isRec(v) || !isRec(v.result) || !Array.isArray(v.result.panes)) throw new Error('herdr pane list returned unreadable output.');
   return v.result.panes.filter(isRec).filter(p => typeof p.pane_id === 'string' && typeof p.revision === 'number').map(p => {
     const session = isRec(p.agent_session) && typeof p.agent_session.value === 'string' ? p.agent_session.value : undefined;
-    return {socket, paneId: p.pane_id as string, ...(typeof p.agent === 'string' ? {agent: p.agent} : {}), ...(typeof p.agent_status === 'string' ? {status: p.agent_status} : {}), ...(session ? {sessionValue: session} : {}), revision: p.revision as number};
+    return {socket, paneId: p.pane_id as string, ...(typeof p.agent === 'string' ? {agent: p.agent} : {}), ...(typeof p.agent_status === 'string' ? {status: p.agent_status} : {}), ...(session ? {sessionValue: session} : {}), revision: p.revision as number, ...(typeof p.cwd === 'string' ? {cwd: p.cwd} : {}), ...(typeof p.tab_id === 'string' ? {tabId: p.tab_id} : {})};
   });
+}
+
+/** `herdr tab list`: tab id → label. Unreadable output is no labels, not an error: labels only rank successors. */
+export function parseTabList(text: string): Map<string, string> {
+  const v = parse(text), map = new Map<string, string>();
+  if (!isRec(v) || !isRec(v.result) || !Array.isArray(v.result.tabs)) return map;
+  for (const t of v.result.tabs) if (isRec(t) && typeof t.tab_id === 'string' && typeof t.label === 'string') map.set(t.tab_id, t.label);
+  return map;
 }
 
 /** Pi reports the session file path; Claude reports the session id. */
@@ -37,6 +45,47 @@ export function sessionMatches(agent: string | undefined, value: string | undefi
 }
 export function matchPane(target: Target, panes: PaneSnapshot[]): PaneSnapshot | undefined {
   return panes.find(p => p.agent === target.agent && sessionMatches(p.agent, p.sessionValue, target.sessionId));
+}
+
+/** The session id a pane reports: Pi's file is `<time>_<id>.jsonl`, Claude reports the id itself. */
+export function sessionIdOf(agent: string | undefined, value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return agent === 'pi' ? /_([^_/]+)\.jsonl$/.exec(value)?.[1] : value;
+}
+
+const PI_STAMP = /(?:^|\/)(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z_[^/]+\.jsonl$/;
+const UUID_V7 = /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/** When a conversation was created: Pi's file name, else a UUIDv7 id. Undefined when neither says. */
+export function sessionCreatedAt(agent: string | undefined, value: string | undefined): number | undefined {
+  const stamp = agent === 'pi' && value ? PI_STAMP.exec(value) : null;
+  if (stamp) { const t = Date.parse(`${stamp[1]}T${stamp[2]}:${stamp[3]}:${stamp[4]}.${stamp[5]}Z`); if (Number.isFinite(t)) return t; }
+  const v7 = UUID_V7.exec(sessionIdOf(agent, value) ?? '');
+  return v7 ? parseInt(`${v7[1]}${v7[2]}`, 16) : undefined;
+}
+
+export type Successor =
+  | {kind: 'none'} | {kind: 'one'; pane: PaneSnapshot; sessionId: string} | {kind: 'ambiguous'; panes: PaneSnapshot[]}
+  /** Later conversations in the same cwd, but none in the handoff tab: reported, never taken. */
+  | {kind: 'outside-tab'; candidates: {pane: PaneSnapshot; sessionId: string}[]};
+/**
+ * The conversation that took over a stage whose recorded one is gone: same agent and cwd, another conversation that
+ * no other target or the owner holds (`claimed`), started after the handoff, in the handoff's own tab. One is taken,
+ * several are never guessed. Candidates outside that tab are only reported: a person may have opened another
+ * conversation there for other work, and a "continue" typed into it does more harm than a missed stop.
+ * A conversation with no creation time counts only in the handoff tab.
+ */
+export function findSuccessor(target: Target, panes: PaneSnapshot[], claimed: ReadonlySet<string>): Successor {
+  const tagged = (p: PaneSnapshot) => target.tabTag !== undefined && p.tabLabel === target.tabTag;
+  const candidates = panes.flatMap(p => {
+    const id = sessionIdOf(p.agent, p.sessionValue);
+    if (p.agent !== target.agent || p.cwd !== target.cwd || !id || id === target.sessionId || id === target.ownerSessionId || claimed.has(id)) return [];
+    const created = sessionCreatedAt(p.agent, p.sessionValue);
+    return (created === undefined ? tagged(p) : created > target.handoffAt) ? [{pane: p, sessionId: id}] : [];
+  });
+  const inTab = candidates.filter(c => tagged(c.pane));
+  if (inTab.length === 1) return {kind: 'one', ...inTab[0]!};
+  if (inTab.length) return {kind: 'ambiguous', panes: inTab.map(c => c.pane)};
+  return candidates.length ? {kind: 'outside-tab', candidates} : {kind: 'none'};
 }
 
 /** `gh issue view --json state,labels`. More than one Stage label is never guessed. */
@@ -61,7 +110,12 @@ export function createHerdrFleet(options: {bin?: string; timeoutMs?: number} = {
   const ports = new Map<string, HerdrPort>();
   return {
     async sockets() { return parseSessionList(await exec(bin, ['session', 'list', '--json'], baseEnv(), timeoutMs)); },
-    async panes(socket) { return parsePaneList(socket, await exec(bin, ['pane', 'list'], {...baseEnv(), HERDR_SOCKET_PATH: socket}, timeoutMs)); },
+    async panes(socket) {
+      const env = {...baseEnv(), HERDR_SOCKET_PATH: socket};
+      const panes = parsePaneList(socket, await exec(bin, ['pane', 'list'], env, timeoutMs));
+      const labels = await exec(bin, ['tab', 'list'], env, timeoutMs).then(parseTabList, () => new Map<string, string>());
+      return panes.map(p => { const label = p.tabId ? labels.get(p.tabId) : undefined; return label ? {...p, tabLabel: label} : p; });
+    },
     port(socket) {
       let p = ports.get(socket);
       if (!p) { p = createHerdrCli({bin, socketPath: socket, timeoutMs}); ports.set(socket, p); }

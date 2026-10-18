@@ -6,7 +6,7 @@ import {CONTINUE_PROMPT, RETRY_DELAYS_MS} from '../src/watch/decide.js';
 import type {TailResult} from '../src/watch/session-tail.js';
 
 const SESSION_PATH = '/home/u/.pi/agent/sessions/--repo--/2026-10-18T00-00-00-000Z_s1.jsonl';
-const target = (o: Partial<Target> = {}): Target => ({key: 's1', agent: 'pi', repo: 'example/demo', epicIssue: 7, targetStage: 'implementation', cwd: '/repo', sessionId: 's1', ...o});
+const target = (o: Partial<Target> = {}): Target => ({key: 's1', agent: 'pi', repo: 'example/demo', epicIssue: 7, targetStage: 'implementation', cwd: '/repo', sessionId: 's1', handoffAt: 0, ...o});
 const stopped = (at = 100): TailResult => ({kind: 'stopped', reason: 'stop', at});
 const idle = (o: Partial<Extract<PaneObservation, {kind: 'agent'}>> = {}): PaneObservation => ({kind: 'agent', socket: '/s.sock', paneId: 'w1:p2', status: 'idle', revision: 5, sessionPath: SESSION_PATH, tail: stopped(), ...o});
 const obs = (pane: PaneObservation, o: Partial<TargetObservation> = {}): TargetObservation => ({epic: {stageLabel: 'Stage: Implementation', closed: false}, pane, ownerAlive: false, ...o});

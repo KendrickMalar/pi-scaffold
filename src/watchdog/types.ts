@@ -10,6 +10,10 @@ export type TargetStage = 'specification' | 'basic-design' | 'implementation' | 
 export interface Target {
   key: string; agent: AgentKind; repo: string; epicIssue: number; targetStage: TargetStage; cwd: string;
   sessionId: string;
+  /** When the receiver confirmed the handoff (ready.json `at`), ms. A successor conversation starts after it. */
+  handoffAt: number;
+  /** Label the sender gave the handoff tab: `scaffold-<first 12 of nonceSha256>`. */
+  tabTag?: string;
   /** Pi only: the session that handed off (watches.json); its in-process watcher handles transient errors. */
   ownerSessionId?: string;
 }
@@ -17,6 +21,10 @@ export interface Target {
 export type EpicObservation = 'unknown' | {stageLabel?: string; closed: boolean};
 export type PaneObservation =
   | {kind: 'missing'}
+  /** The recorded conversation is gone and more than one later conversation could have replaced it. */
+  | {kind: 'ambiguous'; paneIds: string[]}
+  /** The recorded conversation is gone; later ones exist in its cwd but not in the handoff tab (`<id> <socket>#<pane>`). */
+  | {kind: 'outside-tab'; candidates: string[]}
   /** The pane the target was last seen in now runs another session. */
   | {kind: 'replaced'; socket: string; paneId: string}
   /** The pane the target was last seen in is back at its shell prompt. */
@@ -27,6 +35,8 @@ export interface TargetObservation { epic: EpicObservation; pane: PaneObservatio
 
 export interface TargetState {
   lastSeen?: {socket: string; paneId: string; sessionPath?: string};
+  /** The stage was relaunched as another conversation; it is tracked under this id instead of the handoff's. */
+  rebound?: {sessionId: string; at: number};
   lastRevision?: number; revisionChangedAt?: number;
   /** "Continue" prompts sent in this stage, and for the current stop (`stopKey`). */
   nudges: number; stopKey?: string; stopNudges: number; lastNudgeAt?: number;

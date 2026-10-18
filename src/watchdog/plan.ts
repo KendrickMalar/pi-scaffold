@@ -36,6 +36,8 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
   const pane = obs.pane;
   switch (pane.kind) {
     case 'missing': logOnce('missing', 'missing'); break;
+    case 'outside-tab': logOnce(`outside-tab:${pane.candidates.join(',')}`, 'rebind-candidate-outside-tab', pane.candidates.join(', ')); break;
+    case 'ambiguous': logOnce(`ambiguous:${pane.paneIds.join(',')}`, 'rebind-ambiguous', pane.paneIds.join(',')); break;
     case 'replaced': logOnce(`replaced:${pane.socket}:${pane.paneId}`, 'replaced', `${pane.paneId} now runs another session`); break;
     case 'shell': {
       if (s.relaunches >= MAX_RELAUNCH) { logOnce('relaunch-exhausted', 'relaunch-exhausted'); break; }
