@@ -110,6 +110,26 @@ Epicは `setup → specification → basic-design → implementation → verific
 - **pi-scaffold**：工程ごとの個別ツール、専用テンプレート、工程の条件、実行ウェーブ、セッションの引き継ぎ。
 - **pi-gh**：汎用のGitHub操作、入力検証、承認、変更結果の確認。pi-scaffoldは`ctx.executeTool()`でpi-ghを呼び、`gh_capabilities`（contractVersion 1と必要な機能）を確認します。
 
+## scaffold-watchdog（止まった工程の自動回復）
+
+`bin/scaffold-watchdog` は、工程のペインが止まったときに人を介さず回復させる常駐です。launchd から1分ごとに `--once` で起動します（plist は dotfiles の `scripts/launchd/com.kendrickmalar.scaffold-watchdog.plist`）。通知はしません。処理はすべて `~/.local/state/scaffold-watchdog.log`（JSON Lines）に残し、毎回ディスクの空きも記録します。
+
+- 見る対象: 各 scaffold dir の handoff 記録（`state/*/*/handoff/*/packet.json` と `ready.json`）。Pi（`~/.pi/agent*/pi-scaffold`）と Claude（`~/.claude/scaffold/pi-scaffold`）の両方です。14日より古い handoff は見ません
+- ペインの特定: 全 herdr セッション（`herdr session list --json`）の `pane list` で、セッションが一致するペインを探します
+- 完了の判定: `gh issue view` で Epic の Stage ラベルを読みます。工程と違うか、閉じていれば、その工程は二度と触りません。読めないときは何もしません
+
+| 状況 | 処理 |
+|---|---|
+| 完了前の idle（仕様策定以外、質問待ちでない） | 5分動きがなければ「続けて」を送る。同じ停止に2回まで（15分おき）、工程あたり8回まで |
+| 一時エラー | 親の pi が生きていれば親内の監視（`watch/watcher.ts`）に任せる。居なければ同じ `decide()` で再開する |
+| pi・Claude が消えてシェルだけ残った | `pi --session <path>`（shim 経由）または `claude --resume <id>` を打つ。3回まで、5分おき |
+| 仕様策定の idle、Esc での中断、回復しないエラー、ペイン消失 | ログだけ |
+| pi-subagents の runner が死んだ run | `SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE` のスクリプトを毎回呼ぶ（failed にして結果ファイルで親へ届く） |
+
+送る直前に、ペインの revision・状態・セッションが観測時と同じかを確かめます。違えば送りません。`--dry-run` は判断をログに書くだけです。
+
+環境変数: `SCAFFOLD_WATCHDOG_ROOTS`（`pi=/abs,claude=/abs`）、`SCAFFOLD_WATCHDOG_STATE`、`SCAFFOLD_WATCHDOG_LOG`、`SCAFFOLD_WATCHDOG_HERDR`、`SCAFFOLD_WATCHDOG_GH`、`SCAFFOLD_WATCHDOG_CLAUDE_COMMAND`、`SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE`。
+
 ## 開発と検証
 
 ```sh

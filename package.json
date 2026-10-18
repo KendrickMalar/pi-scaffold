@@ -19,7 +19,11 @@
       "extensions/index.ts"
     ]
   },
+  "bin": {
+    "scaffold-watchdog": "bin/scaffold-watchdog"
+  },
   "files": [
+    "bin/scaffold-watchdog",
     "extensions/**/*.ts",
     "dist/src",
     "resources",

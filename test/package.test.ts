@@ -16,7 +16,7 @@ test('npm pack ships exactly the runtime: extensions, built core, resources — 
   const has = (p: string) => files.includes(p);
   for (const required of ['package.json', 'README.md', 'LICENSE', 'extensions/index.ts', 'extensions/register-tools.ts', 'extensions/tool-kit.ts',
     'resources/labels-v1.json', 'resources/skills/scaffold-stage/SKILL.md', 'resources/templates/scaffold-epic-v1.yml', 'resources/templates/scaffold-feature-v1.yml', 'resources/templates/scaffold-task-v1.yml',
-    'dist/src/core/runtime.js', 'dist/src/handoff/driver.js']) assert.ok(has(required), `missing ${required}`);
+    'dist/src/core/runtime.js', 'dist/src/handoff/driver.js', 'bin/scaffold-watchdog', 'dist/src/watchdog/main.js']) assert.ok(has(required), `missing ${required}`);
   // Every tool module and every dist file the extensions import is in the package.
   for (const f of readdirSync(join(root, 'extensions/tools'))) assert.ok(has(`extensions/tools/${f}`), `missing extensions/tools/${f}`);
   for (const f of files.filter(f => f.startsWith('extensions/'))) {
