@@ -77,6 +77,8 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
   const anyDone = () => record.steps.some(s => (s.phase === 'done' && !s.note) || s.phase === 'requested' || s.phase === 'unknown');
   const uncertain = () => record.steps.some(s => s.phase === 'requested' || s.phase === 'unknown');
   const save = () => spec.journal.save(record);
+  /** Steps this call passed to write(); a pending step outside it was never written nor reconciled here. */
+  const touched = new Set<string>();
   let inFlight = false;
   const run: OperationRun = {
     record, scope: spec.scope,
@@ -90,6 +92,7 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
       if (prev) prev.data = data; else record.steps.push({name: step, phase: 'done', data, note: true});
     },
     async write(step, fn, options = {}) {
+      touched.add(step);
       const prev = record.steps.find(s => s.name === step);
       if (prev?.phase === 'done') return prev.data as never;
       run.checkpoint();
@@ -115,10 +118,13 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
       throw new Stop(anyDone() ? 'partial' : 'blocked', outcome.problems);
     },
   };
-  const finish = async (requested: ScaffoldStatus, problems: Problem[], data?: unknown): Promise<ScaffoldResult<never>> => {
+  const finish = async (requested: ScaffoldStatus, problems: Problem[], data?: unknown, completed = false): Promise<ScaffoldResult<never>> => {
     // An unreconciled step keeps the operation unresolved; it is never downgraded to blocked/cancelled/applied.
     const status: ScaffoldStatus = uncertain() ? 'unknown' : requested;
     if (status !== requested) problems = [...problems, problem('RECONCILE_REQUIRED', '', 'A previous change of this operation has an uncertain outcome; inspect GitHub and resume with the same operationId.')];
+    // The work ran to the end but skipped a pending step: resuming would loop on unknown forever, so name the step.
+    if (status !== requested && completed) problems = [...problems, ...record.steps.filter(s => (s.phase === 'requested' || s.phase === 'unknown') && !touched.has(s.name))
+      .map(s => problem('STEP_NOT_RECONCILED', s.name, `Step ${s.name} has an uncertain outcome but this run neither resent nor reconciled it; resuming will not settle it (a bug in ${spec.operation}).`))];
     record.status = status;
     if (data !== undefined) record.result = data;
     await save();
@@ -128,7 +134,7 @@ export async function withOperation<T>(spec: OperationSpec, work: (run: Operatio
   };
   try {
     const result = await work(run);
-    return await finish(result.status, [], result.data);
+    return await finish(result.status, [], result.data, true);
   } catch (error) {
     if (error instanceof Stop) return finish(error.status, error.problems, error.data);
     if (inFlight) return finish('unknown', [problem('WRITE_INTERRUPTED', '', 'A change was requested but its outcome could not be confirmed; inspect GitHub before retrying.')]);
