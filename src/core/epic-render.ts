@@ -71,6 +71,10 @@ export function renderEpicVisible(doc: EpicDocV1): string {
     waves = byWave.size ? list([...byWave.entries()].sort(([a], [b]) => a - b).map(([w, issues]) => `Wave ${w}：${issues.map(i => '#' + i).join(', ')}`)) : '割り当てなし';
   }
   add('設計・実装への参照', ['### 基本設計\n' + design, '### 依存関係\n' + deps, '### Wave計画（基本設計時に記入）\n' + waves].join('\n\n'));
+  // Shown only once a revision exists, so Epics written before revisions keep their exact body.
+  if (doc.specRevisions?.length) add('仕様の改訂', table('| 版 | 工程 | 変わった項目 | 止めたFeature | 理由 |', doc.specRevisions.map(v => row([
+    `r${v.revision}`, v.stage, v.changedIds.length ? v.changedIds.map(cell).join(', ') : DASH, v.affectedFeatures.length ? v.affectedFeatures.map(n => '#' + n).join(', ') : 'なし', cell(v.reason),
+  ])), NONE_YET));
   return sections.join('\n\n') + '\n';
 }
 

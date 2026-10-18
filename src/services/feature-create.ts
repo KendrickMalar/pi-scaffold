@@ -59,7 +59,7 @@ export function decodeFeatureCreateInput(value: unknown): Decoded<FeatureCreateI
 }
 
 /** Feature ACs must stay inside the Epic: every REQ exists there, and an Epic AC ID keeps its exact content. */
-function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem[] {
+export function checkCriteria(epic: EpicDocV1, criteria: readonly Criterion[]): Problem[] {
   const reqs = new Set(epic.requirements.map(r => r.id));
   const problems: Problem[] = [];
   criteria.forEach((c, i) => {

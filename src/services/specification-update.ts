@@ -4,7 +4,7 @@
 import {join} from 'node:path';
 import {
   LIMITS, decodeMutationInput, problem, readCriterion, readDecision, readOriginalRequest, readQuestionFact, readRequirement,
-  type Decoded, type EpicDocV1, type IssueSnapshot, type MutationInput, type PreparedIssueEdit, type Problem, type ScaffoldResult,
+  type Decoded, type EpicDocV1, type FieldDecoders, type IssueSnapshot, type MutationInput, type PreparedIssueEdit, type Problem, type ScaffoldResult,
 } from '../core/contracts.js';
 import {patchDoc} from '../core/body-codec.js';
 import {canonicalJson, sha256Text, specBaseDigest, specificationDigest, taggedDigest} from '../core/digests.js';
@@ -18,17 +18,19 @@ export const SPECIFICATION_UPDATE = 'scaffold_specification_update';
 export type SpecificationUpdateInput = MutationInput & SpecificationPatch;
 export interface SpecificationUpdateData { revision: number; specDigest: string; missingFields: string[]; changedIds: string[]; researchReset: boolean }
 
+/** Field decoders of a specification patch (shared with scaffold_specification_revise). */
+export const SPECIFICATION_PATCH_FIELDS: FieldDecoders<SpecificationPatch> = {
+  originalRequest: {optional: true, decode: (r, v, p) => readOriginalRequest(r, v, p)},
+  background: {optional: true, decode: (r, v, p) => r.nullableText(v, p)},
+  facts: {decode: (r, v, p) => r.array(v, p, (x, q) => readQuestionFact(r, x, q), LIMITS.questions)},
+  requirements: {decode: (r, v, p) => r.array(v, p, (x, q) => readRequirement(r, x, q), LIMITS.requirements)},
+  criteria: {decode: (r, v, p) => r.array(v, p, (x, q) => readCriterion(r, x, q), LIMITS.criteria)},
+  constraints: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
+  outOfScope: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
+  decisions: {decode: (r, v, p) => r.array(v, p, (x, q) => readDecision(r, x, q), LIMITS.decisions)},
+};
 export function decodeSpecificationUpdateInput(value: unknown): Decoded<SpecificationUpdateInput> {
-  return decodeMutationInput<SpecificationPatch>(value, {
-    originalRequest: {optional: true, decode: (r, v, p) => readOriginalRequest(r, v, p)},
-    background: {optional: true, decode: (r, v, p) => r.nullableText(v, p)},
-    facts: {decode: (r, v, p) => r.array(v, p, (x, q) => readQuestionFact(r, x, q), LIMITS.questions)},
-    requirements: {decode: (r, v, p) => r.array(v, p, (x, q) => readRequirement(r, x, q), LIMITS.requirements)},
-    criteria: {decode: (r, v, p) => r.array(v, p, (x, q) => readCriterion(r, x, q), LIMITS.criteria)},
-    constraints: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
-    outOfScope: {optional: true, decode: (r, v, p) => r.nullableArray(v, p, (x, q) => r.text(x, q))},
-    decisions: {decode: (r, v, p) => r.array(v, p, (x, q) => readDecision(r, x, q), LIMITS.decisions)},
-  });
+  return decodeMutationInput<SpecificationPatch>(value, SPECIFICATION_PATCH_FIELDS);
 }
 
 /** Specification may only be edited in its own stage; later stages stop for an explicit revision. */
@@ -37,7 +39,7 @@ function preflight(snapshot: IssueSnapshot, input: SpecificationUpdateInput): Pr
   const problems: Problem[] = [];
   if (snapshot.state !== 'open') problems.push(problem('ISSUE_CLOSED', 'epicIssue', 'The Epic is closed.'));
   if (doc.stage === 'setup') problems.push(problem('STAGE_MISMATCH', 'stage', 'The specification session has not started (stage is setup); hand off with scaffold_handoff_specification first.'));
-  else if (doc.stage !== 'specification') problems.push(problem('NEEDS_REVISION', 'stage', `The Epic is in ${doc.stage}; the specification is not rewritten here. Stop and ask the parent to revise it explicitly.`));
+  else if (doc.stage !== 'specification') problems.push(problem('NEEDS_REVISION', 'stage', `The Epic is in ${doc.stage}; the approved specification is not rewritten here. Revise it with scaffold_specification_revise (it records the revision approval and blocks the affected Features).`));
   if (snapshot.bodySha256 !== input.expectedBodySha256) problems.push(problem('STALE_BODY', 'expectedBodySha256', 'The Epic body changed since it was read; read it again.'));
   if (doc.revision !== input.expectedRevision) problems.push(problem('STALE_REVISION', 'expectedRevision', `The Epic is at revision ${doc.revision}.`));
   return problems;

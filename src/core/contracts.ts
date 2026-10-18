@@ -72,6 +72,8 @@ export interface HandoffState { nonceSha256: Sha256; sourceStage: Stage; targetS
 export interface ModelBinding { model: string; thinking: ThinkingLevel; reason: string }
 export interface OwnedEvidenceRef { relativePath: string; sha256: Sha256 }
 
+/** One revision of an approved specification (scaffold_specification_revise). `revision` is the Epic revision it wrote. */
+export interface SpecRevision { revision: number; operationId: UUID; stage: Stage; reason: string; changedIds: string[]; affectedFeatures: number[]; approvalViewDigest: Sha256 }
 export interface EpicDocV1 {
   version: 1; kind: 'epic'; workflowId: UUID; revision: number; createOperationId: UUID; stage: Stage;
   purpose: string; originalRequest: OriginalRequest; background: string | null;
@@ -79,6 +81,8 @@ export interface EpicDocV1 {
   constraints: string[] | null; outOfScope: string[] | null;
   research: ResearchItem[]; decisions: Decision[];
   design: DesignRef | null; dependencyPlan: DependencyPlan | null; wavePlan: WavePlan | null; handoff: HandoffState | null;
+  /** Absent until the first revision (older Epics never carry it). */
+  specRevisions?: SpecRevision[];
 }
 export type FeatureRole = 'coding-manager' | 'coder' | 'tester';
 export interface FeatureDocV1 {
@@ -316,6 +320,14 @@ function handoff(r: Reader, v: unknown, p: string): HandoffState {
   const o = r.object(v, p, ['nonceSha256', 'sourceStage', 'targetStage', 'phase', 'operationId']) ?? {};
   return {nonceSha256: r.pattern(o.nonceSha256, join(p, 'nonceSha256'), isSha256, 'sha256'), sourceStage: r.literal(o.sourceStage, join(p, 'sourceStage'), STAGES), targetStage: r.literal(o.targetStage, join(p, 'targetStage'), STAGES), phase: r.literal(o.phase, join(p, 'phase'), HANDOFF_PHASES), operationId: r.pattern(o.operationId, join(p, 'operationId'), isUuid, 'UUID')};
 }
+export function specRevision(r: Reader, v: unknown, p: string): SpecRevision {
+  const o = r.object(v, p, ['revision', 'operationId', 'stage', 'reason', 'changedIds', 'affectedFeatures', 'approvalViewDigest']) ?? {};
+  return {
+    revision: r.int(o.revision, join(p, 'revision')), operationId: r.pattern(o.operationId, join(p, 'operationId'), isUuid, 'UUID'), stage: r.literal(o.stage, join(p, 'stage'), STAGES),
+    reason: r.text(o.reason, join(p, 'reason')), changedIds: r.texts(o.changedIds, join(p, 'changedIds')),
+    affectedFeatures: r.array(o.affectedFeatures, join(p, 'affectedFeatures'), (x, q) => r.int(x, q)), approvalViewDigest: r.pattern(o.approvalViewDigest, join(p, 'approvalViewDigest'), isSha256, 'sha256'),
+  };
+}
 export function decodeModelBinding(r: Reader, v: unknown, p: string): ModelBinding {
   const o = r.object(v, p, ['model', 'thinking', 'reason']) ?? {};
   return {model: r.pattern(o.model, join(p, 'model'), x => typeof x === 'string' && MODEL_RE.test(x), 'provider/id'), thinking: r.literal(o.thinking, join(p, 'thinking'), THINKING_LEVELS), reason: r.text(o.reason, join(p, 'reason'))};
@@ -348,6 +360,7 @@ function epic(r: Reader, o: Rec): EpicDocV1 {
     dependencyPlan: o.dependencyPlan === null ? null : dependencyPlan(r, o.dependencyPlan, 'dependencyPlan'),
     wavePlan: o.wavePlan === null ? null : wavePlan(r, o.wavePlan, 'wavePlan'),
     handoff: o.handoff === null ? null : handoff(r, o.handoff, 'handoff'),
+    ...(o.specRevisions !== undefined ? {specRevisions: r.array(o.specRevisions, 'specRevisions', (v, p) => specRevision(r, v, p))} : {}),
   };
   r.unique(doc.questions.map(q => q.questionId), 'questions', 'questionId');
   r.unique(doc.requirements.map(q => q.id), 'requirements', 'id');
@@ -399,7 +412,7 @@ export function decodeScaffoldDoc(value: unknown): Decoded<ScaffoldDocV1> {
   const kind = value.kind;
   const keys = kind === 'epic' ? EPIC_KEYS : kind === 'feature' ? FEATURE_KEYS : kind === 'task' ? TASK_KEYS : undefined;
   if (!keys) { r.add('INVALID_VALUE', 'kind', 'Expected epic, feature or task.'); return r.result(undefined as never); }
-  const o = r.object(value, '', keys)!;
+  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions'] : [])!;
   const doc = kind === 'epic' ? epic(r, o) : kind === 'feature' ? feature(r, o) : task(r, o);
   return r.result(doc);
 }

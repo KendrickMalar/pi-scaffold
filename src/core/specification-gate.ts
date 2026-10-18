@@ -28,5 +28,7 @@ export function checkSpecificationReady(doc: EpicDocV1): GateResult {
 /** What the parent approves: the visible specification, bound to specificationDigest (approvals expire when it changes). */
 export function specificationApprovalView(doc: EpicDocV1): ApprovalView {
   // Design, dependency and Wave sections are recorded later (basic design) and are not part of the specification.
-  return {contentDigest: specificationDigest(doc), text: renderEpicVisible({...doc, design: null, dependencyPlan: null, wavePlan: null})};
+  // The revision history is not part of it either: the same specification reads the same before and after its log grows.
+  const {specRevisions: _log, ...spec} = doc;
+  return {contentDigest: specificationDigest(doc), text: renderEpicVisible({...spec, design: null, dependencyPlan: null, wavePlan: null})};
 }
