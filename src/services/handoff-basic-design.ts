@@ -47,7 +47,7 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
     if (existing.ok) approval = existing.value;
     else {
       if (!approvalNeedsConfirmation(existing.problems)) return blocked(existing.problems);
-      const confirmed = await call.approvals.confirmContent('specification', doc.workflowId, view, context.value, call.env.approvalUi, call.scope, {agentStage: await call.agentDecisionStage(input.repo, doc.workflowId)});
+      const confirmed = await call.approvals.confirmContent('specification', doc.workflowId, view, context.value, call.env.approvalUi, call.scope, await call.approvalOptions(input.repo, doc.workflowId, 'specification'));
       if (confirmed.status !== 'validated') return {status: confirmed.status, operation, problems: confirmed.problems};
       approval = confirmed.data;
     }

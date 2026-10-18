@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {AGENT_DECISION_BLOCKED_TOOLS, PREREQUISITE_QUESTION_MARKER, QUESTION_BLOCK_REASON, isPrerequisiteRequest, questionGuard, resolveAgentDecisionStage, type AcceptedHandoff} from '../src/core/agent-decision.js';
+import {AGENT_DECISION_BLOCKED_TOOLS, QUESTION_BLOCK_REASON, questionGuard, resolveAgentDecisionStage, resolveQuestionBlockedStage, type AcceptedHandoff} from '../src/core/agent-decision.js';
 import type {OwnerPolicy} from '../src/core/model-bindings.js';
 import type {Stage} from '../src/core/contracts.js';
 import {WORKFLOW_ID} from './helpers/docs.js';
@@ -72,46 +72,38 @@ test('question tools pass when the stage is not listed, before basic design, wit
   assert.equal(await broken('ask_user'), undefined, 'no policy file');
 });
 
-const P = PREREQUISITE_QUESTION_MARKER;
+const blockedPolicy = (stages: string[], key = 'example/demo'): OwnerPolicy => ({version: 1, repos: {[key]: {authMode: 'file-backed', models: [], questionBlockedStages: stages as never}}});
 
-test('a prerequisite-task request is recognised only when every question starts with the marker', () => {
-  assert.equal(P, '【事前作業】');
-  // ask_user (pi-ask-user): {question, context?, options?}
-  assert.equal(isPrerequisiteRequest({question: `${P}Studio にログインしてください。終わったら「完了」を選んでください。`}), true);
-  assert.equal(isPrerequisiteRequest({question: `  ${P}画面収録を許可してください。`, context: '検証が止まっています', options: ['完了']}), true, 'leading whitespace is ignored');
-  assert.equal(isPrerequisiteRequest({question: 'どちらの案にしますか？'}), false, 'a decision question');
-  assert.equal(isPrerequisiteRequest({question: `どちらにしますか？${P}`}), false, 'the marker must be at the start');
-  assert.equal(isPrerequisiteRequest({question: '事前作業：ログインしてください'}), false, 'only the exact bracketed marker counts');
-  assert.equal(isPrerequisiteRequest({question: 'どれにしますか？', context: `${P}`}), false, 'the context field does not count');
-  // AskUserQuestion (Claude Code shape): {questions: [{question, header, options, multiSelect}]}
-  assert.equal(isPrerequisiteRequest({questions: [{question: `${P}キーを登録してください。`, header: '事前作業', options: [{label: '完了'}], multiSelect: false}]}), true);
-  assert.equal(isPrerequisiteRequest({questions: [{question: `${P}ログインしてください。`}, {question: `${P}収録を許可してください。`}]}), true);
-  assert.equal(isPrerequisiteRequest({questions: [{question: `${P}ログインしてください。`}, {question: 'A案とB案のどちらにしますか？'}]}), false, 'one decision question mixed in');
-  assert.equal(isPrerequisiteRequest({question: `${P}ログインしてください。`, questions: [{question: '仕様をどうしますか？'}]}), false, 'both fields count');
-  // unknown or malformed shapes never pass
-  for (const input of [undefined, null, {}, 'text', {question: 1}, {questions: []}, {questions: 'x'}, {questions: [{}]}, {questions: [{question: 2}]}, {header: P}]) {
-    assert.equal(isPrerequisiteRequest(input), false, JSON.stringify(input));
+test('questionBlockedStages: a listed basic-design/implementation/verification session never asks; specification always may', async t => {
+  const all = blockedPolicy(['setup', 'basic-design', 'implementation', 'verification']);
+  for (const stage of ['basic-design', 'implementation', 'verification'] as const) {
+    assert.equal(resolveQuestionBlockedStage(handoff(stage), all, at), stage);
+    const call = await guardFor(t, all, handoff(stage));
+    for (const name of AGENT_DECISION_BLOCKED_TOOLS) {
+      const r = await call(name, 's1', {question: 'どちらにしますか？'});
+      assert.equal(r?.block, true, `${stage} ${name}`);
+      assert.equal(r!.reason, QUESTION_BLOCK_REASON(stage));
+    }
+  }
+  assert.equal(resolveQuestionBlockedStage(handoff('specification'), all, at), undefined, 'specification is never blocked');
+  assert.equal(await (await guardFor(t, all, handoff('specification')))('ask_user'), undefined);
+  assert.equal(await (await guardFor(t, blockedPolicy(['implementation']), handoff('basic-design')))('ask_user'), undefined, 'an unlisted stage asks');
+  assert.equal(await (await guardFor(t, all, undefined))('ask_user'), undefined, 'no accepted packet, no stage');
+  assert.equal(resolveQuestionBlockedStage(handoff('basic-design', {sessionId: 'other'}), all, at), undefined, 'another session');
+});
+
+test('a 【事前作業】 request is blocked like any other question (the exception was removed)', async t => {
+  for (const p of [policy(['implementation', 'verification']), blockedPolicy(['implementation', 'verification'])]) {
+    const call = await guardFor(t, p, handoff('implementation'));
+    assert.equal((await call('ask_user', 's1', {question: '【事前作業】Studio にログインしてください。', options: ['完了']}))?.block, true);
+    assert.equal((await call('AskUserQuestion', 's1', {questions: [{question: '【事前作業】キーを登録してください。'}]}))?.block, true);
   }
 });
 
-test('in a listed implementation/verification session, a prerequisite-task request passes and a decision question stays blocked', async t => {
-  for (const stage of ['implementation', 'verification'] as const) {
-    const call = await guardFor(t, policy([stage]), handoff(stage));
-    assert.equal(await call('ask_user', 's1', {question: `${P}Roblox Studio にログインし、MCP プラグインを有効にしてください。終わったら「完了」を選んでください。`, options: ['完了']}), undefined, `${stage} ask_user`);
-    assert.equal(await call('AskUserQuestion', 's1', {questions: [{question: `${P}キーチェーンに API キーを登録してください。`, header: '事前作業', options: [{label: '完了', description: '登録した'}], multiSelect: false}]}), undefined, `${stage} AskUserQuestion`);
-    const blocked = await call('ask_user', 's1', {question: 'どちらの実装にしますか？', options: ['A', 'B']});
-    assert.equal(blocked?.block, true);
-    assert.equal(blocked!.reason, QUESTION_BLOCK_REASON(stage));
-    assert.equal((await call('AskUserQuestion', 's1', {questions: [{question: `${P}ログインしてください。`}, {question: 'どちらにしますか？'}]}))?.block, true, 'a mixed call is blocked');
-    assert.equal((await call('ask_user', 's1', {}))?.block, true, 'an empty input is blocked');
-  }
-});
-
-test('the block reason explains the prerequisite exception in one line and keeps decision questions out', () => {
-  for (const stage of ['implementation', 'verification'] as const) {
-    const lines = QUESTION_BLOCK_REASON(stage).split('\n');
-    assert.equal(lines.length, 2);
-    assert.match(lines[1]!, /【事前作業】/);
-    assert.match(lines[1]!, /判断を求める質問には使えません/);
+test('the block reason sends the agent to decide, record, or revise the specification, and offers no exception', () => {
+  for (const stage of ['setup', 'basic-design', 'implementation', 'verification'] as const) {
+    const reason = QUESTION_BLOCK_REASON(stage);
+    assert.match(reason, /scaffold_specification_revise/);
+    assert.doesNotMatch(reason, /【事前作業】/);
   }
 });

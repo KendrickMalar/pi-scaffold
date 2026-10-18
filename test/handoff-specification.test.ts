@@ -460,3 +460,16 @@ test('a watch registration that throws still reports the handoff as applied', as
   h.runtime.watch = {add: async () => { throw new Error('disk full'); }};
   assert.equal((await h.invoke()).r.status, 'applied');
 });
+
+test('with agentApprovals handoff-abandon the parent abandons a stuck handoff itself in any session', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = ''; receiver(herdr, () => agentDir, {ready: false});
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentApprovals: ['handoff-abandon']}}};
+  const h = await harness(t, gh, herdr, {interactive: false, confirm: false, policy: aiPolicy}); agentDir = h.agentDir;
+  assert.equal((await h.invoke()).r.status, 'partial');
+  receiver(herdr, () => agentDir);
+  const fresh = await h.invoke(params(gh, {operationId: '66666666-6666-4666-8666-666666666666'}));
+  assert.equal(fresh.r.status, 'applied', JSON.stringify(fresh.r.problems));
+  assert.equal(fresh.confirmCalls, 0);
+  assert.deepEqual((fresh.r.data as {agentAbandoned?: string[]}).agentAbandoned, [OPERATION_ID]);
+});

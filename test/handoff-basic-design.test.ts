@@ -362,3 +362,25 @@ test('a corrupt specification approval record stays blocked without asking', asy
   assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(p => p.code === 'INVALID_JSON'), JSON.stringify(out.r.problems));
   assert.equal(out.confirmCalls, 0); noLaunch(herdr, gh);
 });
+
+test('with agentApprovals specification the parent records the specification approval itself (no dialog, headless ok)', async t => {
+  for (const interactive of [true, false]) {
+    const gh = world();
+    const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentApprovals: ['specification']}}};
+    const {h, herdr} = await harness(t, gh, new FakeHerdr(), {interactive, policy: aiPolicy});
+    const out = await h.invoke();
+    assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+    assert.equal(out.confirmCalls, 0);
+    assert.deepEqual((out.r.data as {agentApproval?: unknown}).agentApproval && {kind: (out.r.data as {agentApproval: {kind: string}}).agentApproval.kind, basis: (out.r.data as {agentApproval: {basis: string}}).agentApproval.basis}, {kind: 'specification', basis: 'policy'});
+    assert.equal(herdr.tabCreates, 1);
+  }
+});
+
+test('a subagent child cannot use the policy approval for the specification', async t => {
+  const gh = world();
+  const aiPolicy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], agentApprovals: ['specification']}}};
+  const {h, herdr} = await harness(t, gh, new FakeHerdr(), {policy: aiPolicy, environment: {...environment, PI_SUBAGENT_CHILD: '1'}});
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'blocked');
+  noLaunch(herdr, gh);
+});
