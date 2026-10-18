@@ -148,3 +148,66 @@ test('records without approvedBy/stage (older versions) are still accepted; malf
   await writeFile(path, JSON.stringify({...old, approvedBy: 'agent', stage: 'verification'}), {mode: 0o600});
   assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, context)).ok, true);
 });
+
+// ---- owner-policy approvals (agentApprovals) -------------------------------------------------------
+
+test('a policy approval is recorded by the parent itself: no dialog, also headless, approvedBy agent with basis policy', async t => {
+  const {store, context} = await setup(t);
+  for (const kind of ['specification', 'implementation-start', 'epic-completion', 'specification-revision'] as const) {
+    let asked = 0;
+    const headless: ApprovalUi = {interactive: false, confirm: async () => { asked++; return false; }};
+    const r = await store.confirmContent(kind, WORKFLOW_ID, view(), context, headless, makeScope(), {policy: true});
+    assert.equal(r.status, 'validated', JSON.stringify(r.problems));
+    assert.equal(asked, 0, 'the human is not asked');
+    assert.deepEqual([r.data?.approvedBy, r.data?.basis, r.data?.stage], ['agent', 'policy', undefined]);
+    const digest = approvalViewDigest(kind, view());
+    const record = JSON.parse(await readFile(recordPath(context, kind, digest), 'utf8')) as {approvedBy: string; basis: string; profileInstructionsDigest: string};
+    assert.deepEqual([record.approvedBy, record.basis, record.profileInstructionsDigest], ['agent', 'policy', SHA_B], 'the instructions digest is still recorded');
+    const ref = await store.requireContentApproval(kind, WORKFLOW_ID, digest, context);
+    assert.ok(ref.ok);
+    assert.deepEqual([ref.value.approvedBy, ref.value.basis], ['agent', 'policy']);
+  }
+});
+
+test('a policy approval stays valid after the profile instructions change; a human approval does not', async t => {
+  const {store, context} = await setup(t);
+  await store.confirmContent('specification', WORKFLOW_ID, view(SHA_A), context, ui(true).ui, makeScope(), {policy: true});
+  await store.confirmContent('implementation-start', WORKFLOW_ID, view(SHA_A), context, ui(true).ui, makeScope());
+  const changed = {...context, profileInstructionsDigest: SHA_A};
+  assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, approvalViewDigest('specification', view(SHA_A)), changed)).ok, true);
+  const human = await store.requireContentApproval('implementation-start', WORKFLOW_ID, approvalViewDigest('implementation-start', view(SHA_A)), changed);
+  assert.ok(!human.ok && human.problems[0]!.code === 'APPROVAL_MISMATCH');
+  // Other bindings still count for a policy approval.
+  const digest = approvalViewDigest('specification', view(SHA_A));
+  assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, {...context, profileId: 'other'})).ok, false);
+  assert.equal((await store.requireContentApproval('specification', WORKFLOW_ID, digest, {...context, accountBinding: SHA_B})).ok, false);
+});
+
+test('a child session never records a policy approval', async t => {
+  const {store, context} = await setup(t);
+  const child: ApprovalUi = {interactive: false, child: true, confirm: async () => true};
+  const r = await store.confirmContent('specification', WORKFLOW_ID, view(), context, child, makeScope(), {policy: true});
+  assert.equal(r.status, 'blocked');
+  assert.ok(r.problems.some(p => p.code === 'APPROVAL_UI_REQUIRED'));
+});
+
+test('a policy approval is refused once the session changed', async t => {
+  const {store, context} = await setup(t);
+  const scope = makeScope();
+  scope.expire();
+  const r = await store.confirmContent('specification', WORKFLOW_ID, view(), context, ui(true).ui, scope, {policy: true});
+  assert.equal(r.status, 'cancelled');
+});
+
+test('records with an unknown basis are invalid', async t => {
+  const {store, context} = await setup(t);
+  await store.confirmContent('specification', WORKFLOW_ID, view(), context, ui(true).ui, makeScope(), {policy: true});
+  const digest = approvalViewDigest('specification', view());
+  const path = recordPath(context, 'specification', digest);
+  const record = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  for (const bad of [{basis: 'whatever'}, {basis: 'policy', approvedBy: undefined}]) {
+    await writeFile(path, JSON.stringify({...record, ...bad}), {mode: 0o600});
+    const r = await store.requireContentApproval('specification', WORKFLOW_ID, digest, context);
+    assert.ok(!r.ok && r.problems[0]!.code === 'APPROVAL_INVALID', JSON.stringify(bad));
+  }
+});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, rm, writeFile, chmod, mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, repoPolicyFor, type OwnerPolicy} from '../src/core/model-bindings.js';
+import {loadOwnerPolicy, checkFeatureBindings, decodeOwnerPolicy, repoAgentApproves, repoPolicyFor, repoQuestionBlockedStages, type OwnerPolicy} from '../src/core/model-bindings.js';
 import {featureDoc} from './helpers/docs.js';
 
 const policy: OwnerPolicy = {version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [
@@ -104,5 +104,36 @@ test('agentDecisionStages: optional, only implementation/verification, strictly 
     const r = decodeOwnerPolicy(entry({agentDecisionStages: bad}));
     assert.equal(r.ok, false, JSON.stringify(bad));
     assert.ok(!r.ok && r.problems.every(p => p.path.startsWith('repos.example/demo.agentDecisionStages')), JSON.stringify(!r.ok && r.problems));
+  }
+});
+
+test('agentApprovals and questionBlockedStages: optional, strictly decoded, beside the old agentDecisionStages', () => {
+  const entry = (extra: Record<string, unknown>) => ({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], ...extra}}});
+  const kinds = ['specification', 'implementation-start', 'epic-completion', 'handoff-abandon', 'specification-revision'];
+  const stages = ['setup', 'basic-design', 'implementation', 'verification'];
+  const full = decodeOwnerPolicy(entry({agentApprovals: kinds, questionBlockedStages: stages}));
+  assert.ok(full.ok, JSON.stringify(!full.ok && full.problems));
+  assert.deepEqual(full.value.repos['example/demo']!.agentApprovals, kinds);
+  assert.deepEqual(full.value.repos['example/demo']!.questionBlockedStages, stages);
+  for (const k of kinds) assert.equal(repoAgentApproves(full.value, 'example/demo', k as never), true, k);
+  assert.deepEqual(repoQuestionBlockedStages(full.value, 'example/demo'), stages);
+  const none = decodeOwnerPolicy(entry({}));
+  assert.ok(none.ok);
+  assert.equal(repoAgentApproves(none.value, 'example/demo', 'specification'), false, 'absent means none');
+  assert.deepEqual(repoQuestionBlockedStages(none.value, 'example/demo'), []);
+  assert.equal(repoAgentApproves(undefined, 'example/demo', 'specification'), false, 'no policy');
+  // The old field still counts for question blocking; it never turns on policy approvals by kind.
+  const old = decodeOwnerPolicy(entry({agentDecisionStages: ['implementation', 'verification']}));
+  assert.ok(old.ok);
+  assert.deepEqual(repoQuestionBlockedStages(old.value, 'example/demo'), ['implementation', 'verification']);
+  assert.equal(repoAgentApproves(old.value, 'example/demo', 'epic-completion'), false);
+  const both = decodeOwnerPolicy(entry({agentDecisionStages: ['verification'], questionBlockedStages: ['basic-design', 'verification']}));
+  assert.ok(both.ok);
+  assert.deepEqual(repoQuestionBlockedStages(both.value, 'example/demo'), ['basic-design', 'verification'], 'union without duplicates');
+  for (const [key, bad] of [['agentApprovals', ['approve-all']], ['agentApprovals', ['specification', 'specification']], ['agentApprovals', 'specification'],
+    ['questionBlockedStages', ['specification']], ['questionBlockedStages', ['completed']], ['questionBlockedStages', ['setup', 'setup']], ['questionBlockedStages', null]] as const) {
+    const r = decodeOwnerPolicy(entry({[key]: bad}));
+    assert.equal(r.ok, false, `${key} ${JSON.stringify(bad)}`);
+    assert.ok(!r.ok && r.problems.every(p => p.path.startsWith(`repos.example/demo.${key}`)), JSON.stringify(!r.ok && r.problems));
   }
 });

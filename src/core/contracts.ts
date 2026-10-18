@@ -22,6 +22,12 @@ export type Stage = typeof STAGES[number];
 /** Stages whose parent agent decides and records content approvals itself when the owner policy lists them (no questions to the human). */
 export const AGENT_DECISION_STAGES = ['implementation', 'verification'] as const;
 export type AgentDecisionStage = typeof AGENT_DECISION_STAGES[number];
+/** Approvals the parent agent records itself, without a dialog, when the owner policy lists them in `agentApprovals`. */
+export const AGENT_APPROVAL_KINDS = ['specification', 'implementation-start', 'epic-completion', 'handoff-abandon', 'specification-revision'] as const;
+export type AgentApprovalKind = typeof AGENT_APPROVAL_KINDS[number];
+/** Stages whose sessions may never ask the human (owner policy `questionBlockedStages`); only specification asks. */
+export const QUESTION_BLOCKED_STAGES = ['setup', 'basic-design', 'implementation', 'verification'] as const;
+export type QuestionBlockedStage = typeof QUESTION_BLOCKED_STAGES[number];
 export const HANDOFF_PHASES = ['prepared', 'tab-created', 'receiver-ready', 'stage-committed', 'prompt-sent', 'turn-started'] as const;
 export type HandoffPhase = typeof HANDOFF_PHASES[number];
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -113,9 +119,12 @@ export interface RepoContext {
   accountBinding: Sha256 | null; profileId: string | null; profileInstructionsDigest: Sha256 | null;
 }
 export interface CallScope { sessionId: string; leafId: string; generation: number; signal: AbortSignal; isCurrent(): boolean }
-/** `approvedBy`/`stage` are present only for approvals the parent agent recorded itself in an agent-decision stage. */
-export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256; approvedBy?: 'agent'; stage?: AgentDecisionStage }
-export type ApprovalKind = 'specification' | 'implementation-start' | 'epic-completion';
+/**
+ * `approvedBy` is present only for approvals the parent agent recorded itself: with `stage` in an agent-decision stage
+ * (old `agentDecisionStages`), or with `basis: 'policy'` for a kind the owner policy lists in `agentApprovals`.
+ */
+export interface ApprovalRef { kind: ApprovalKind; viewDigest: Sha256; repo: RepoRef; workflowId: UUID; accountBinding: Sha256; approvedBy?: 'agent'; stage?: AgentDecisionStage; basis?: 'policy' }
+export type ApprovalKind = 'specification' | 'implementation-start' | 'epic-completion' | 'specification-revision';
 export interface OwnedArtifactRef { path: string; sha256: Sha256; operationId: UUID }
 export type OwnedPacketRef = OwnedArtifactRef;
 

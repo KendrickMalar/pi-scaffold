@@ -2,16 +2,18 @@
 // Only provider/id/thinking are handled; no model descriptors, auth.json or settings.json are read or changed.
 import {join} from 'node:path';
 import {resolveScaffoldDir} from './scaffold-dir.js';
-import {StrictReader, AGENT_DECISION_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentDecisionStage, type Decoded, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
+import {StrictReader, AGENT_APPROVAL_KINDS, AGENT_DECISION_STAGES, QUESTION_BLOCKED_STAGES, THINKING_LEVELS, isRepoRef, failed, okValue, problem, type AgentApprovalKind, type AgentDecisionStage, type Decoded, type QuestionBlockedStage, type FeatureRole, type ModelBinding, type Problem, type ThinkingLevel} from './contracts.js';
 import {OwnedFileError, readOwnedJson} from './files.js';
 
 export const FEATURE_ROLES: readonly FeatureRole[] = ['coding-manager', 'coder', 'tester'];
 export interface PolicyModel { model: string; thinking: ThinkingLevel; tier: 'basic' | 'upper'; roles: FeatureRole[] }
 /**
- * `agentDecisionStages`: stages (implementation/verification only) in which the parent agent must not ask the human;
- * it decides within the approved spec/design and records content approvals itself. Absent means none (`[]`).
+ * `agentApprovals`: approvals the parent agent records itself (no dialog, any mode); never a subagent child.
+ * `questionBlockedStages`: stages whose sessions never ask the human (only specification asks).
+ * `agentDecisionStages` (older form, still read): implementation/verification sessions that neither ask nor wait for a
+ * human approval. Absent fields mean none (`[]`).
  */
-export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[]; agentDecisionStages?: AgentDecisionStage[] }
+export interface RepoPolicy { authMode: 'file-backed'; models: PolicyModel[]; agentDecisionStages?: AgentDecisionStage[]; agentApprovals?: AgentApprovalKind[]; questionBlockedStages?: QuestionBlockedStage[] }
 export interface OwnerPolicy { version: 1; repos: Record<string, RepoPolicy> }
 
 /** A policy key is OWNER/REPO, or OWNER/* for every repository of exactly that owner. No other wildcard exists. */
@@ -23,6 +25,15 @@ export function repoPolicyFor(policy: OwnerPolicy | undefined, repo: string): Re
   const owner = repo.split('/')[0]!.toLowerCase();
   const key = Object.keys(policy.repos).find(k => k.endsWith('/*') && k.slice(0, -2).toLowerCase() === owner);
   return key === undefined ? undefined : policy.repos[key];
+}
+/** True when the owner policy lets the parent agent record this kind of approval itself. */
+export function repoAgentApproves(policy: OwnerPolicy | undefined, repo: string, kind: AgentApprovalKind): boolean {
+  return (repoPolicyFor(policy, repo)?.agentApprovals ?? []).includes(kind);
+}
+/** Stages whose sessions never ask the human: questionBlockedStages plus the older agentDecisionStages. */
+export function repoQuestionBlockedStages(policy: OwnerPolicy | undefined, repo: string): QuestionBlockedStage[] {
+  const p = repoPolicyFor(policy, repo);
+  return [...new Set([...(p?.questionBlockedStages ?? []), ...(p?.agentDecisionStages ?? [])])];
 }
 
 export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
@@ -36,7 +47,7 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
   else for (const [repo, v] of Object.entries(raw)) {
     const p = `repos.${repo}`;
     if (!isPolicyKey(repo)) r.add('INVALID_FORMAT', p, 'Expected OWNER/REPO or OWNER/*.');
-    const e = r.object(v, p, ['authMode', 'models'], ['agentDecisionStages']) ?? {};
+    const e = r.object(v, p, ['authMode', 'models'], ['agentDecisionStages', 'agentApprovals', 'questionBlockedStages']) ?? {};
     const authMode = r.literal(e.authMode, `${p}.authMode`, ['file-backed'] as const);
     const models = r.array(e.models, `${p}.models`, (m, q) => {
       const x = r.object(m, q, ['model', 'thinking', 'tier', 'roles']) ?? {};
@@ -46,9 +57,14 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
         roles: r.array(x.roles, `${q}.roles`, (role, rp) => r.literal(role, rp, FEATURE_ROLES)),
       };
     });
-    const stages = e.agentDecisionStages === undefined ? undefined : r.array(e.agentDecisionStages, `${p}.agentDecisionStages`, (s, q) => r.literal(s, q, AGENT_DECISION_STAGES));
-    if (Array.isArray(e.agentDecisionStages) && e.agentDecisionStages.length !== new Set(e.agentDecisionStages).size) r.add('DUPLICATE_VALUE', `${p}.agentDecisionStages`, 'Each stage may appear once.');
-    repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {})};
+    const set = <T extends string>(key: string, allowed: readonly T[]): T[] | undefined => {
+      if (e[key] === undefined) return undefined;
+      const values = r.array(e[key], `${p}.${key}`, (s, q) => r.literal(s, q, allowed));
+      if (Array.isArray(e[key]) && (e[key] as unknown[]).length !== new Set(e[key] as unknown[]).size) r.add('DUPLICATE_VALUE', `${p}.${key}`, 'Each value may appear once.');
+      return values;
+    };
+    const stages = set('agentDecisionStages', AGENT_DECISION_STAGES), approvals = set('agentApprovals', AGENT_APPROVAL_KINDS), blocked = set('questionBlockedStages', QUESTION_BLOCKED_STAGES);
+    repos[repo] = {authMode, models, ...(stages ? {agentDecisionStages: stages} : {}), ...(approvals ? {agentApprovals: approvals} : {}), ...(blocked ? {questionBlockedStages: blocked} : {})};
   }
   return r.result({version: 1, repos});
 }
