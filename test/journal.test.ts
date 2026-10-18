@@ -204,3 +204,21 @@ test('a partial operation whose steps are all definite does not block other oper
   const other = await withOperation(spec(journal, makeScope(), OTHER_OP), fourWrites([ok, ok, ok, ok], []));
   assert.equal(other.status, 'applied');
 });
+
+test('a pending step the resumed run neither wrote nor reconciled is named as STEP_NOT_RECONCILED (no silent unknown loop)', async t => {
+  const {journal} = await setup(t);
+  const first = await withOperation(spec(journal), async run => { await run.write('skipped', async () => unknown()); return {status: 'applied' as const, data: {}}; });
+  assert.equal(first.status, 'unknown');
+  // The resumed run finishes without touching the uncertain step (e.g. it judged it already satisfied and skipped it).
+  const resumed = await withOperation(spec(journal), async () => ({status: 'applied' as const, data: {}}));
+  assert.equal(resumed.status, 'unknown');
+  assert.deepEqual(resumed.problems.filter(p => p.code === 'STEP_NOT_RECONCILED').map(p => p.path), ['skipped']);
+});
+
+test('a pending step left untouched because the run stopped earlier is not reported as STEP_NOT_RECONCILED', async t => {
+  const {journal} = await setup(t);
+  await withOperation(spec(journal), async run => { await run.write('later', async () => unknown()); return {status: 'applied' as const, data: {}}; });
+  const resumed = await withOperation(spec(journal), async run => run.stop([{code: 'EARLY', path: '', message: 'stopped first'}]));
+  assert.equal(resumed.status, 'unknown');
+  assert.equal(resumed.problems.some(p => p.code === 'STEP_NOT_RECONCILED'), false);
+});

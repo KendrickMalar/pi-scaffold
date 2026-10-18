@@ -447,3 +447,21 @@ test('with agentApprovals epic-completion the parent gives the final acceptance 
   const d = out.r.data as {agentApproval?: {kind: string; basis?: string}};
   assert.deepEqual([d.agentApproval?.kind, d.agentApproval?.basis], ['epic-completion', 'policy']);
 });
+
+for (const [step, op, count] of [
+  ['epic-body', 'gh_issue_edit_if_current', (gh: FakePiGh) => gh.count('gh_issue_edit_if_current')],
+  ['epic-labels', 'gh_issue_labels_if_current', (gh: FakePiGh) => gh.count('gh_issue_labels_if_current')],
+  ['project', 'gh_project_field_update', projectWrites],
+] as const) test(`an ${step} change that landed but returned unknown is reconciled on resume and not resent`, async t => {
+  const gh = world();
+  const real = gh.execute;
+  gh.overrides.set(op, args => { gh.overrides.delete(op); return real(op, args).then(() => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true})); });
+  const h = await harness(t, gh);
+  const input = params(gh, await writeEvidence(h.agentDir), {project: PROJECT});
+  assert.equal((await h.invoke(input)).r.status, 'unknown');
+  const before = count(gh);
+  const resumed = await h.invoke(input);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(count(gh), before, `${op} is not sent again`);
+  assert.equal(gh.issues.get(10)!.state, 'closed');
+});
