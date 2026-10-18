@@ -132,7 +132,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 - 見る対象: 各 scaffold dir の handoff 記録（`state/*/*/handoff/*/packet.json` と `ready.json`）。Pi（`~/.pi/agent*/pi-scaffold`）と Claude（`~/.claude/scaffold/pi-scaffold`）の両方です。14日より古い handoff は見ません
 - ペインの特定: 全 herdr セッション（`herdr session list --json`）の `pane list` で、セッションが一致するペインを探します
-- 起動し直した会話への結び直し: 記録上の会話が見つからず、全セッションが読めたときは、後継の会話を探します。候補は、同じ種別（pi/Claude）で cwd が packet と同じ、他の工程や親が持っていない、handoff より後に作られた会話です（作成時刻は Pi のファイル名か UUIDv7 から）。引き継ぎのタブ（label `scaffold-<nonceSha256 の先頭12桁>`）にあるものを優先します。1つなら以後それを追い、`rebound`（`from`・`to`・ペイン）をログに出します。複数なら `rebind-ambiguous` を出して何もしません
+- 起動し直した会話への結び直し: 記録上の会話が見つからず、全セッションが読めたときは、後継の会話を探します。候補は、同じ種別（pi/Claude）で cwd が packet と同じ、他の工程や親が持っていない、handoff より後に作られた会話です（作成時刻は Pi のファイル名か UUIDv7 から）。結び直すのは引き継ぎのタブ（label `scaffold-<nonceSha256 の先頭12桁>`）にある会話だけです。1つなら以後それを追い、`rebound`（`from`・`to`・ペイン）をログに出します。複数なら `rebind-ambiguous` を出して何もしません。タブの外で cwd だけ一致する会話は、人が別の作業で開いたものかもしれないので結び直さず、`rebind-candidate-outside-tab`（会話 ID とペイン）を一度だけ出します
 - 完了の判定: `gh issue view` で Epic の Stage ラベルを読みます。工程と違うか、閉じていれば、その工程は二度と触りません。読めないときは何もしません
 
 | 状況 | 処理 |

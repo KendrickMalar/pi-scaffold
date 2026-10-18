@@ -119,18 +119,20 @@ async function tick(deps: WatchdogDeps, log: Log): Promise<void> {
     const epic = await epics.get(epicKey)!;
     // The stage is tracked under the conversation it was last rebound to; `key` stays the handoff's.
     let tracked: Target = state.rebound ? {...target, sessionId: state.rebound.sessionId} : target;
-    let pane: PaneObservation | undefined;
-    if (sawAll && !matchPane(tracked, panes)) {
-      const found = findSuccessor(tracked, panes, claimed);
-      if (found.kind === 'one') {
-        log('rebound', {...whoOf(target), from: tracked.sessionId, to: found.sessionId, paneId: found.pane.paneId, socket: found.pane.socket});
-        state = {...state, rebound: {sessionId: found.sessionId, at: now}};
-        delete state.loggedKey;
-        claimed.add(found.sessionId);
-        tracked = {...target, sessionId: found.sessionId};
-      } else if (found.kind === 'ambiguous') pane = {kind: 'ambiguous', paneIds: found.panes.map(p => `${p.socket}#${p.paneId}`)};
+    const found = sawAll && !matchPane(tracked, panes) ? findSuccessor(tracked, panes, claimed) : {kind: 'none' as const};
+    if (found.kind === 'one') {
+      log('rebound', {...whoOf(target), from: tracked.sessionId, to: found.sessionId, paneId: found.pane.paneId, socket: found.pane.socket});
+      state = {...state, rebound: {sessionId: found.sessionId, at: now}};
+      delete state.loggedKey;
+      claimed.add(found.sessionId);
+      tracked = {...target, sessionId: found.sessionId};
     }
-    pane ??= await observePane(deps, tracked, state, panes, readable);
+    let pane = await observePane(deps, tracked, state, panes, readable);
+    // An undecided successor only replaces "gone"; a pane back at its shell is still relaunched.
+    if (pane.kind === 'missing' || pane.kind === 'replaced') {
+      if (found.kind === 'ambiguous') pane = {kind: 'ambiguous', paneIds: found.panes.map(p => `${p.socket}#${p.paneId}`)};
+      else if (found.kind === 'outside-tab') pane = {kind: 'outside-tab', candidates: found.candidates.map(c => `${c.sessionId} ${c.pane.socket}#${c.pane.paneId}`)};
+    }
     const ownerAlive = !!target.ownerSessionId && panes.some(p => p.agent === 'pi' && sessionMatches('pi', p.sessionValue, target.ownerSessionId!));
     const r = planTarget(tracked, {epic, pane, ownerAlive}, state, now, deps.plan);
     next[target.key] = r.next;

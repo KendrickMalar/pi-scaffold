@@ -63,11 +63,16 @@ export function sessionCreatedAt(agent: string | undefined, value: string | unde
   return v7 ? parseInt(`${v7[1]}${v7[2]}`, 16) : undefined;
 }
 
-export type Successor = {kind: 'none'} | {kind: 'one'; pane: PaneSnapshot; sessionId: string} | {kind: 'ambiguous'; panes: PaneSnapshot[]};
+export type Successor =
+  | {kind: 'none'} | {kind: 'one'; pane: PaneSnapshot; sessionId: string} | {kind: 'ambiguous'; panes: PaneSnapshot[]}
+  /** Later conversations in the same cwd, but none in the handoff tab: reported, never taken. */
+  | {kind: 'outside-tab'; candidates: {pane: PaneSnapshot; sessionId: string}[]};
 /**
  * The conversation that took over a stage whose recorded one is gone: same agent and cwd, another conversation that
- * no other target or the owner holds (`claimed`), started after the handoff. The handoff's own tab wins; one
- * candidate is taken, several are never guessed. A conversation with no creation time counts only in that tab.
+ * no other target or the owner holds (`claimed`), started after the handoff, in the handoff's own tab. One is taken,
+ * several are never guessed. Candidates outside that tab are only reported: a person may have opened another
+ * conversation there for other work, and a "continue" typed into it does more harm than a missed stop.
+ * A conversation with no creation time counts only in the handoff tab.
  */
 export function findSuccessor(target: Target, panes: PaneSnapshot[], claimed: ReadonlySet<string>): Successor {
   const tagged = (p: PaneSnapshot) => target.tabTag !== undefined && p.tabLabel === target.tabTag;
@@ -77,9 +82,10 @@ export function findSuccessor(target: Target, panes: PaneSnapshot[], claimed: Re
     const created = sessionCreatedAt(p.agent, p.sessionValue);
     return (created === undefined ? tagged(p) : created > target.handoffAt) ? [{pane: p, sessionId: id}] : [];
   });
-  const pool = candidates.some(c => tagged(c.pane)) ? candidates.filter(c => tagged(c.pane)) : candidates;
-  if (pool.length === 1) return {kind: 'one', ...pool[0]!};
-  return pool.length ? {kind: 'ambiguous', panes: pool.map(c => c.pane)} : {kind: 'none'};
+  const inTab = candidates.filter(c => tagged(c.pane));
+  if (inTab.length === 1) return {kind: 'one', ...inTab[0]!};
+  if (inTab.length) return {kind: 'ambiguous', panes: inTab.map(c => c.pane)};
+  return candidates.length ? {kind: 'outside-tab', candidates} : {kind: 'none'};
 }
 
 /** `gh issue view --json state,labels`. More than one Stage label is never guessed. */

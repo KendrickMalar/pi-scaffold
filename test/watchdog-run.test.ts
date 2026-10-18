@@ -129,11 +129,43 @@ test('a stage relaunched in its handoff tab as another conversation is rebound, 
   assert.equal(saved.targets.s1.rebound.sessionId, 's2');
 });
 
-test('two later conversations in the same cwd and no tagged tab: rebind-ambiguous, nothing typed', async t => {
+test('one later conversation in the same cwd outside the handoff tab: logged once, not rebound, nothing typed', async t => {
   const s = await setup(t, {nonceSha256: NONCE});
   s.fleet.panesBySocket.set('/s.sock', [
-    {socket: '/s.sock', paneId: 'w1:pD', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo'},
-    {socket: '/s.sock', paneId: 'w1:pE', agent: 'pi', status: 'idle', sessionValue: '/sessions/--repo--/2026-10-18T00-40-00-000Z_s3.jsonl', revision: 2, cwd: '/repo'},
+    {socket: '/s.sock', paneId: 'w1:pD', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabLabel: '1'},
+  ]);
+  await runOnce(s.deps);
+  s.clock.now += IDLE_GRACE_MS;
+  await runOnce(s.deps);
+  assert.equal(s.fleet.sends().length, 0);
+  const logs = await s.logs();
+  const outside = logs.filter(l => l.event === 'rebind-candidate-outside-tab');
+  assert.equal(outside.length, 1);
+  assert.equal(outside[0]!.target, 's1');
+  assert.match(String(outside[0]!.detail), /s2 \/s\.sock#w1:pD/);
+  assert.ok(!logs.some(l => l.event === 'rebound'));
+  const saved = JSON.parse(await readFile(s.deps.statePath, 'utf8'));
+  assert.equal(saved.targets.s1.rebound, undefined);
+});
+
+test('a pane back at its shell is still relaunched when a conversation outside the handoff tab shares its cwd', async t => {
+  const s = await setup(t, {nonceSha256: NONCE});
+  await runOnce(s.deps);
+  s.fleet.panesBySocket.set('/s.sock', [
+    {socket: '/s.sock', paneId: 'w1:p2', status: 'unknown', revision: 9},
+    {socket: '/s.sock', paneId: 'w1:p8', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabLabel: '1'},
+  ]);
+  s.clock.now += 1000;
+  await runOnce(s.deps);
+  assert.deepEqual(s.fleet.sends(), [{command: 'paneRun', socket: '/s.sock', args: {paneId: 'w1:p2', command: `pi --session '${SESSION}'`}}]);
+  assert.ok(!(await s.logs()).some(l => l.event === 'rebind-candidate-outside-tab'));
+});
+
+test('two later conversations in the handoff tab: rebind-ambiguous, nothing typed', async t => {
+  const s = await setup(t, {nonceSha256: NONCE});
+  s.fleet.panesBySocket.set('/s.sock', [
+    {socket: '/s.sock', paneId: 'w1:pD', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabLabel: TAG},
+    {socket: '/s.sock', paneId: 'w1:pE', agent: 'pi', status: 'idle', sessionValue: '/sessions/--repo--/2026-10-18T00-40-00-000Z_s3.jsonl', revision: 2, cwd: '/repo', tabLabel: TAG},
   ]);
   await runOnce(s.deps);
   s.clock.now += IDLE_GRACE_MS;

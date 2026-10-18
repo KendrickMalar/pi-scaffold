@@ -121,14 +121,22 @@ test('successor: the tagged tab wins over other later conversations in the same 
   assert.equal(r.kind === 'one' && r.pane.paneId, 'w1:pD');
 });
 
-test('successor: without a tagged tab, two later conversations in the same cwd are ambiguous', () => {
+test('successor: two later conversations in the tagged tab are ambiguous', () => {
   const panes = [
-    piPane('w1:pD', '2026-10-16T17-22-56-031Z', 'n1'),
-    piPane('w1:pE', '2026-10-16T18-00-00-000Z', 'n2'),
+    piPane('w1:pD', '2026-10-16T17-22-56-031Z', 'n1', {tabLabel: 'scaffold-7d019e3f8e78'}),
+    piPane('w1:pE', '2026-10-16T18-00-00-000Z', 'n2', {tabLabel: 'scaffold-7d019e3f8e78'}),
   ];
   const r = findSuccessor(lost(), panes, new Set());
   assert.equal(r.kind, 'ambiguous');
   assert.deepEqual(r.kind === 'ambiguous' && r.panes.map(p => p.paneId), ['w1:pD', 'w1:pE']);
+});
+
+test('successor: later conversations in the same cwd but outside the handoff tab are only reported, never taken', () => {
+  const one = findSuccessor(lost(), [piPane('w1:pD', '2026-10-16T17-22-56-031Z', 'n1', {tabLabel: '1'})], new Set());
+  assert.equal(one.kind, 'outside-tab');
+  assert.deepEqual(one.kind === 'outside-tab' && one.candidates.map(c => [c.sessionId, c.pane.paneId]), [['n1', 'w1:pD']]);
+  const untagged = findSuccessor(lost({tabTag: undefined}), [piPane('w1:pD', '2026-10-16T17-22-56-031Z', 'n1', {tabLabel: 'scaffold-7d019e3f8e78'})], new Set());
+  assert.equal(untagged.kind, 'outside-tab', 'a handoff without a tag has no tab to trust');
 });
 
 test('successor: older, other-agent, already-claimed, owner and timeless untagged conversations are not candidates', () => {

@@ -23,6 +23,8 @@ export type PaneObservation =
   | {kind: 'missing'}
   /** The recorded conversation is gone and more than one later conversation could have replaced it. */
   | {kind: 'ambiguous'; paneIds: string[]}
+  /** The recorded conversation is gone; later ones exist in its cwd but not in the handoff tab (`<id> <socket>#<pane>`). */
+  | {kind: 'outside-tab'; candidates: string[]}
   /** The pane the target was last seen in now runs another session. */
   | {kind: 'replaced'; socket: string; paneId: string}
   /** The pane the target was last seen in is back at its shell prompt. */
