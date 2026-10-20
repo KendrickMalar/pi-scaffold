@@ -1,4 +1,4 @@
-// In-memory Herdr 0.9.1 for handoff tests. Never touches a real Herdr session.
+// In-memory Herdr (0.9.1 surface, also confirmed on 0.9.5) for handoff tests. Never touches a real Herdr session.
 import type {HerdrPort, PaneState} from '../../src/handoff/herdr-client.js';
 import {HerdrError} from '../../src/handoff/herdr-client.js';
 

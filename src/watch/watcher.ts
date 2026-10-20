@@ -1,6 +1,6 @@
 // Background watch of the stage panes this Pi session handed off. One timer per session, running only while the
 // registry holds watches this session owns; each check is observe → decide → act. Spec: Issue #36.
-import {SUPPORTED_HERDR, type HerdrPort} from '../handoff/herdr-client.js';
+import {isSupportedHerdr, supportedHerdrLabel, type HerdrPort} from '../handoff/herdr-client.js';
 import {isDeepStrictEqual} from 'node:util';
 import {CHECK_INTERVAL_MS, HERDR_FAILURE_LIMIT, MAX_AUTO_CONTINUE, decide, noticeHead, type NoticeLevel, type Observation, type WatchEntry, type WatchProgress} from './decide.js';
 import type {WatchRecord, WatchRegistry} from './registry.js';
@@ -76,8 +76,8 @@ export class StageWatcher {
       return 'skip';
     }
     this.versionFailures = 0;
-    this.herdr = v.version === SUPPORTED_HERDR.version && v.protocol === SUPPORTED_HERDR.protocol ? 'ok' : 'unsupported';
-    if (this.herdr === 'unsupported') this.deps.notify(`pi-scaffold: Herdr ${v.version}/protocol ${v.protocol} は未検証のため、下位の監視を止めました（必要: ${SUPPORTED_HERDR.version}/${SUPPORTED_HERDR.protocol}）。`, 'warning');
+    this.herdr = isSupportedHerdr(v) ? 'ok' : 'unsupported';
+    if (this.herdr === 'unsupported') this.deps.notify(`pi-scaffold: Herdr ${v.version}/protocol ${v.protocol} は未検証のため、下位の監視を止めました（必要: ${supportedHerdrLabel()}）。`, 'warning');
     return this.herdr;
   }
 

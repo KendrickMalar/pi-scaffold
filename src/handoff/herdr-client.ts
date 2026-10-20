@@ -1,8 +1,12 @@
-// Herdr control through its CLI with fixed argv (no shell). Only the confirmed 0.9.1 / protocol 22 surface is used.
+// Herdr control through its CLI with fixed argv (no shell). Only the surface confirmed on 0.9.1 and 0.9.5 (protocol 22) is used.
 import {execFile} from 'node:child_process';
 import {LIMITS} from '../core/contracts.js';
 
-export const SUPPORTED_HERDR = Object.freeze({version: '0.9.1', protocol: 22});
+export const SUPPORTED_HERDR = Object.freeze({versions: Object.freeze(['0.9.1', '0.9.5']), protocol: 22});
+/** True only for a version whose CLI surface was confirmed, on the confirmed private protocol. */
+export const isSupportedHerdr = (v: {version: string; protocol: number}): boolean =>
+  SUPPORTED_HERDR.versions.includes(v.version) && v.protocol === SUPPORTED_HERDR.protocol;
+export const supportedHerdrLabel = (): string => `${SUPPORTED_HERDR.versions.join(' or ')}/protocol ${SUPPORTED_HERDR.protocol}`;
 /** not-started/failed: definitely no effect; unknown: the request may have taken effect. */
 export class HerdrError extends Error { constructor(readonly kind: 'not-started' | 'failed' | 'unknown', message: string) { super(message); } }
 
@@ -33,7 +37,9 @@ function find(v: unknown, key: string): string | undefined {
 const SHELLS = /^-?(zsh|bash|fish|sh|dash|ksh)$/;
 
 /** caller: HERDR_PANE_ID/WORKSPACE_ID/TAB_ID/SESSION of the calling pane; without them `--current` means the focused pane. */
-export function createHerdrCli(options: {bin?: string; socketPath?: string; timeoutMs?: number; caller?: Record<string, string | undefined>} = {}): HerdrPort {
+/** paneRetry: 0.9.5 can answer pane_not_found for a moment right after `tab create`; process-info waits that out. */
+export function createHerdrCli(options: {bin?: string; socketPath?: string; timeoutMs?: number; caller?: Record<string, string | undefined>; paneRetry?: {attempts: number; delayMs: number}} = {}): HerdrPort {
+  const paneRetry = options.paneRetry ?? {attempts: 10, delayMs: 200};
   const run = (args: string[], mutation: boolean, opts: {errorJson?: boolean} = {}): Promise<string> => new Promise((resolve, reject) => {
     const env: Record<string, string> = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C.UTF-8'};
     if (options.socketPath) env.HERDR_SOCKET_PATH = options.socketPath;
@@ -82,7 +88,12 @@ export function createHerdrCli(options: {bin?: string; socketPath?: string; time
       });
     },
     async processInfo(paneId) {
-      const r = json(await run(['pane', 'process-info', '--pane', paneId], false));
+      let r = json(await run(['pane', 'process-info', '--pane', paneId], false, {errorJson: true}));
+      for (let i = 1; isRec(r.error) && r.error.code === 'pane_not_found' && i < paneRetry.attempts; i++) {
+        await new Promise(res => setTimeout(res, paneRetry.delayMs));
+        r = json(await run(['pane', 'process-info', '--pane', paneId], false, {errorJson: true}));
+      }
+      if (isRec(r.error)) throw new HerdrError('failed', `herdr pane process-info failed: ${String(r.error.code ?? 'error')}`);
       const info = isRec(r.result) && isRec(r.result.process_info) ? r.result.process_info : undefined;
       const procs = Array.isArray(info?.foreground_processes) ? info!.foreground_processes.filter(isRec) : [];
       if (info && typeof info.shell_pid === 'number') return {shellReady: info.shell_pid === info.foreground_process_group_id};
