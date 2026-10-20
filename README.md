@@ -78,7 +78,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 ### 下位工程セッションの監視
 
-引き継ぎが完了すると、親セッションはその下位 pane を60秒ごとに確認します（Herdr 0.9.1／protocol 22 のときだけ）。
+引き継ぎが完了すると、親セッションはその下位 pane を60秒ごとに確認します（Herdr 0.9.1 か 0.9.5／protocol 22 のときだけ）。
 
 - pane が消えた、pi が終了した、確認・入力待ち、エラー停止、返事待ち・完了のときは、親TUIに通知します。同じ状態で通知を繰り返すことはありません。
 - 別のセッションが動いている pane（pane ID が使い回された場合など）には送らず、監視を終えます。
@@ -91,7 +91,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 - Pi 1.x、pi-gh 0.5.0以上（`gh_labels_list`、ラベル絞り込み、`*_if_current`）
 - 引き継ぎには次が必要です。
-  - Herdr 0.9.1（protocol 22）
+  - Herdr 0.9.1 または 0.9.5（protocol 22。0.9.5 は `tab create` 直後の `pane process-info` が一瞬 `pane_not_found` を返すので、最大2秒待ち直す）
   - pi-profileの`developer` Profile
   - owner policy（`<scaffoldDir>/policy.json`、未指定時は `<agentDir>/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
   - 各リポジトリのエントリには、任意で`agentDecisionStages`（旧形式：`"implementation"`・`"verification"`）を書けます。

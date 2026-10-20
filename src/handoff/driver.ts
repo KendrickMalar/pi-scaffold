@@ -13,7 +13,7 @@ import {withOperation, type OperationRun} from '../core/lifecycle.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue, type GhOutcome} from '../ports/pi-gh.js';
-import {HerdrError, SUPPORTED_HERDR, type HerdrPort} from './herdr-client.js';
+import {HerdrError, isSupportedHerdr, supportedHerdrLabel, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
 import {promptTag} from './receiver.js';
 import {pickEpicWorktree} from '../core/epic-worktree.js';
@@ -71,8 +71,8 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   const herdr: HerdrPort = call.herdr();
   let version: {version: string; protocol: number};
   try { version = await herdr.version(); } catch (e) { return blocked([problem('HERDR_UNAVAILABLE', 'herdr', (e as Error).message)]); }
-  if (version.version !== SUPPORTED_HERDR.version || version.protocol !== SUPPORTED_HERDR.protocol)
-    return blocked([problem('HERDR_UNSUPPORTED', 'herdr', `Herdr ${version.version}/protocol ${version.protocol} is not verified (need ${SUPPORTED_HERDR.version}/${SUPPORTED_HERDR.protocol}).`)]);
+  if (!isSupportedHerdr(version))
+    return blocked([problem('HERDR_UNSUPPORTED', 'herdr', `Herdr ${version.version}/protocol ${version.protocol} is not verified (need ${supportedHerdrLabel()}).`)]);
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);
