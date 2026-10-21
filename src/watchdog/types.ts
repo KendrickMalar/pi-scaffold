@@ -14,6 +14,8 @@ export interface Target {
   handoffAt: number;
   /** Label the sender gave the handoff tab: `scaffold-<first 12 of nonceSha256>`. */
   tabTag?: string;
+  /** The Profile the stage runs in (packet.json `profileId`), when it is not the default developer one. */
+  profileId?: string;
   /** Pi only: the session that handed off (watches.json); its in-process watcher handles transient errors. */
   ownerSessionId?: string;
 }
