@@ -152,6 +152,14 @@ test('a claude pane back at its shell is resumed by session id', () => {
   assert.deepEqual(r.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`claude --resume 'c7f1a0de-0000-4000-8000-000000000001'`]);
 });
 
+test('a stage in another scaffold Profile is resumed in that Profile', () => {
+  const pi = run(target({profileId: 'roblox-game'}), [{obs: obs(idle()), now: 0}, {obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 1000}]);
+  assert.deepEqual(pi.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`pi-profile launch --profile roblox-game -- --session '${SESSION_PATH}'`]);
+  const t = target({agent: 'claude', profileId: 'roblox-game', sessionId: 'c7f1a0de-0000-4000-8000-000000000001', key: 'c7f1a0de-0000-4000-8000-000000000001'});
+  const claude = run(t, [{obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 0}]);
+  assert.deepEqual(claude.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`claude --scaffold-profile=roblox-game --resume 'c7f1a0de-0000-4000-8000-000000000001'`]);
+});
+
 test('relaunches are spaced and capped', () => {
   const shell = obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'});
   const steps = [{obs: obs(idle()), now: 0}];

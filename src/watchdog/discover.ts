@@ -4,6 +4,7 @@
 import {readdir, readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {AgentKind, Target, TargetStage} from './types.js';
+import {isScaffoldProfile} from '../handoff/profiles.js';
 
 export interface StateRoot { /** A scaffold dir, e.g. ~/.pi/agent/pi-scaffold */ dir: string; agent: AgentKind }
 /** Handoffs older than this are not watched: an Epic left that long is not a stop to recover. */
@@ -42,7 +43,7 @@ export async function discoverTargets(roots: StateRoot[], now: number): Promise<
         if (typeof p.repo !== 'string' || !Number.isInteger(p.epicIssue) || typeof p.cwd !== 'string' || !STAGES.includes(p.targetStage as TargetStage)) continue;
         const sessionId = r.sessionId, ownerSessionId = owner.get(sessionId);
         const tabTag = typeof r.nonceSha256 === 'string' && /^[0-9a-f]{64}$/.test(r.nonceSha256) ? `scaffold-${r.nonceSha256.slice(0, 12)}` : undefined;
-        const target: Target = {key: sessionId, agent: root.agent, repo: p.repo, epicIssue: p.epicIssue as number, targetStage: p.targetStage as TargetStage, cwd: p.cwd, sessionId, handoffAt: at, ...(tabTag ? {tabTag} : {}), ...(ownerSessionId ? {ownerSessionId} : {})};
+        const target: Target = {key: sessionId, agent: root.agent, repo: p.repo, epicIssue: p.epicIssue as number, targetStage: p.targetStage as TargetStage, cwd: p.cwd, sessionId, handoffAt: at, ...(tabTag ? {tabTag} : {}), ...(ownerSessionId ? {ownerSessionId} : {}), ...(isScaffoldProfile(p.profileId as string) && p.profileId !== 'developer' ? {profileId: p.profileId as string} : {})};
         const prev = found.get(sessionId);
         if (!prev || prev.at < at) found.set(sessionId, {target, at});
       }

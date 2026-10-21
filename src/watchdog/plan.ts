@@ -19,7 +19,7 @@ export const childDonePrompt = (ids: string[], at: number): string => `scaffold-
 /** Values typed into a shell must not need quoting beyond plain single quotes. */
 const SAFE_SHELL_VALUE = /^[A-Za-z0-9._\/:@+-]+$/;
 
-export interface PlanOptions { claudeCommand?: string; piCommand?: string }
+export interface PlanOptions { claudeCommand?: string; piCommand?: string; piProfileCommand?: string }
 
 export function planTarget(target: Target, obs: TargetObservation, state: TargetState, now: number, opts: PlanOptions = {}): {actions: WatchdogAction[]; next: TargetState} {
   const s: TargetState = {...state, watch: {...state.watch}};
@@ -59,7 +59,11 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
       const value = target.agent === 'pi' ? s.lastSeen?.sessionPath : target.sessionId;
       if (!value) { logOnce('relaunch-unknown-session', 'relaunch-unknown-session'); break; }
       if (!SAFE_SHELL_VALUE.test(value)) { logOnce('relaunch-refused', 'relaunch-refused', value); break; }
-      const command = target.agent === 'pi' ? `${opts.piCommand ?? 'pi'} --session '${value}'` : `${opts.claudeCommand ?? 'claude'} --resume '${value}'`;
+      // A stage outside the default Profile resumes in its own Profile (the id is from the fixed allowlist, so unquoted).
+      const profile = target.profileId;
+      const command = target.agent === 'pi'
+        ? (profile ? `${opts.piProfileCommand ?? 'pi-profile'} launch --profile ${profile} -- --session '${value}'` : `${opts.piCommand ?? 'pi'} --session '${value}'`)
+        : `${opts.claudeCommand ?? 'claude'}${profile ? ` --scaffold-profile=${profile}` : ''} --resume '${value}'`;
       s.relaunches += 1; s.lastRelaunchAt = now; delete s.loggedKey;
       actions.push({type: 'relaunch', socket: pane.socket, paneId: pane.paneId, command});
       break;

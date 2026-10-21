@@ -92,7 +92,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - Pi 1.x、pi-gh 0.5.0以上（`gh_labels_list`、ラベル絞り込み、`*_if_current`）
 - 引き継ぎには次が必要です。
   - Herdr 0.9.1 または 0.9.5（protocol 22。0.9.5 は `tab create` 直後の `pane process-info` が一瞬 `pane_not_found` を返すので、最大2秒待ち直す）
-  - pi-profileの`developer` Profile
+  - pi-profileの scaffold 用 Profile（`developer` か `roblox-game`。これ以外の Profile からは引き継げません）
   - owner policy（`<scaffoldDir>/policy.json`、未指定時は `<agentDir>/pi-scaffold/policy.json`、`authMode: "file-backed"`と、許可するモデルtuple）。`repos`のキーは`OWNER/REPO`か、そのオーナー配下の全リポジトリを表す`OWNER/*`です。両方あれば`OWNER/REPO`を優先します。それ以外のワイルドカードは使えません。
   - 各リポジトリのエントリには、任意で`agentDecisionStages`（旧形式：`"implementation"`・`"verification"`）を書けます。
   - AI承認と質問の遮断は、同じディレクトリの**別ファイル`policy.agent.json`**に書きます。policy.jsonを旧形式のまま保つので、この版より前のpi-scaffoldが動いているセッションも壊れません（前の版はこのファイルを読みません）。policy.jsonと同じキーのエントリにだけ足され、無ければ旧形式だけで動きます。壊れていればpolicyのエラーです。
@@ -111,7 +111,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - 引き継ぎの受け手は、送り手と同じProfile（id）で起動していれば受け付けます。Profileの指示文が送り手の開始後に変わっていても止めず、受領（`ready.json`）に両方のdigestを残し、結果の`data.profileChanged`で知らせます。cwd・アカウント・必要なツール・固定した文書の検査はそのままです。
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
-新しいPiは`pi-profile launch --profile developer -- --scaffold-handoff <packet>`で起動します。既存のタブを閉じたり、相手のセッションを止めたりはしません。
+新しいPiは、送り手と同じProfileで`pi-profile launch --profile <送り手のid> -- --scaffold-handoff <packet>`として起動します（`developer` なら従来と同じコマンド）。既存のタブを閉じたり、相手のセッションを止めたりはしません。scaffold-watchdog が止まった工程を再開するときも、`developer` 以外の Profile なら同じ Profile で起動し直します（pi は `pi-profile launch --profile <id> -- --session <path>`、Claude は `claude-dev --scaffold-profile=<id> --resume <id>`）。
 
 ## 範囲外
 

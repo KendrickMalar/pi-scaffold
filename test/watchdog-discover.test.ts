@@ -39,6 +39,15 @@ test('discover: the handoff tab tag comes from the receipt nonce, as the sender 
   assert.equal(target?.tabTag, 'scaffold-7d019e3f8e78');
 });
 
+test('discover: a non-default scaffold Profile is kept; developer and unknown ids are not', async t => {
+  const dir = await scaffoldDir(t);
+  await handoff(dir, 'op1', packet({profileId: 'roblox-game'}), ready('s1'));
+  await handoff(dir, 'op2', packet({profileId: 'developer', targetStage: 'verification'}), ready('s2'));
+  await handoff(dir, 'op3', packet({profileId: 'evil; rm -rf ~', targetStage: 'specification'}), ready('s3'));
+  const byKey = new Map((await discoverTargets([{dir, agent: 'pi'}], NOW)).map(x => [x.key, x.profileId]));
+  assert.deepEqual([...byKey.entries()].sort(), [['s1', 'roblox-game'], ['s2', undefined], ['s3', undefined]]);
+});
+
 test('discover: malformed records, unknown stages and old handoffs are skipped; a missing root is empty', async t => {
   const dir = await scaffoldDir(t);
   await handoff(dir, 'op1', packet({targetStage: 'completed'}), ready('s1'));

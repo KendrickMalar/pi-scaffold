@@ -78,6 +78,17 @@ test('a valid setup Epic is handed to a new Specification session and only start
   assert.ok(out.ghWrites >= 2);
 });
 
+test('a roblox-game session hands off into the same Profile; other Profiles stay refused', async t => {
+  const gh = world(), herdr = new FakeHerdr();
+  let agentDir = '';
+  receiver(herdr, () => agentDir, {entries: [profile('roblox-game')]});
+  const h = await harness(t, gh, herdr, {sessionEntries: [profile('roblox-game')]}); agentDir = h.agentDir;
+  const out = await h.invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const run = herdr.calls.find(c => c.command === 'paneRun')!.args as {command: string};
+  assert.match(run.command, / pi-profile launch --profile roblox-game -- --scaffold-handoff '/);
+});
+
 test('a minimal draft with unanswered questions and pending research is accepted', async t => {
   const body = epicBody(d => { d.questions = [{questionId: 'Q001', kind: 'question', question: '対象は？', answer: null, required: true, sourceRef: null}]; d.research = [{researchId: 'R001', question: 'q', requiredEvidence: 'e', doneCondition: 'd', state: 'pending', claim: null, conclusion: null, evidenceRefs: [], limitations: []}]; });
   const gh = world(body), herdr = new FakeHerdr();

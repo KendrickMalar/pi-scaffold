@@ -15,6 +15,7 @@ import type {ToolCall} from '../core/runtime.js';
 import {readIssue, type GhOutcome} from '../ports/pi-gh.js';
 import {HerdrError, isSupportedHerdr, supportedHerdrLabel, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
+import {SCAFFOLD_PROFILE_IDS, isScaffoldProfile} from './profiles.js';
 import {promptTag} from './receiver.js';
 import {pickEpicWorktree} from '../core/epic-worktree.js';
 import {pinnedDocRefs} from '../core/pinned-docs.js';
@@ -106,7 +107,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
     for (const r of busy) await journal.abandon(r.operationId);
     if (agentDecides) agentAbandoned = busy.map(r => r.operationId);
   }
-  if (ctx.profileId !== 'developer' || !ctx.profileInstructionsDigest) return blocked([problem('PROFILE_NOT_DEVELOPMENT', 'profile', 'Stage sessions start only from the Development (developer) Profile.')]);
+  if (!isScaffoldProfile(ctx.profileId) || !ctx.profileInstructionsDigest) return blocked([problem('PROFILE_NOT_DEVELOPMENT', 'profile', `Stage sessions start only from a scaffold Profile (${SCAFFOLD_PROFILE_IDS.join(', ')}).`)]);
   if (!ctx.accountBinding) return blocked([problem('ACCOUNT_UNBOUND', 'account', 'Owner policy must declare authMode "file-backed" for this repository.')]);
   const names = call.env.toolNames();
   const missingTools = BASE_REQUIRED_TOOLS.filter(t => !names.includes(t));
@@ -118,7 +119,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   if (live.workspaceId !== binding.workspaceId || live.paneId !== binding.paneId) return blocked([problem('HERDR_BINDING_CHANGED', 'herdr', 'This tool is no longer running in the pane it was started from.')]);
   const model = call.env.currentModel();
   const dir = handoffDir(ctx.workflowStateRoot, input.operationId);
-  const unsafe = unsafeLaunchValues({agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
+  const unsafe = unsafeLaunchValues({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
   if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
   // The new stage session opens in the Epic branch's worktree when exactly one exists (design docs live there, not on main).
@@ -187,7 +188,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       try { shell = await herdr.processInfo(tab.paneId); } catch (e) { return run.stop([problem('HERDR_FAILED', 'herdr', (e as Error).message)]); }
       if (!shell.shellReady) return run.stop([problem('HERDR_PANE_BUSY', 'herdr', 'The new tab is not at an idle shell; nothing was run.')]);
     }
-    await run.write('pane-run', () => herdrStep(() => herdr.paneRun(tab.paneId, buildLaunchCommand({agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: prepared!.packetPath, ...(model ? {model: model.model, thinking: model.thinking} : {})}))).then(o => ({...o, data: o.status === 'ok' ? true : undefined})), {
+    await run.write('pane-run', () => herdrStep(() => herdr.paneRun(tab.paneId, buildLaunchCommand({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: prepared!.packetPath, ...(model ? {model: model.model, thinking: model.thinking} : {})}))).then(o => ({...o, data: o.status === 'ok' ? true : undefined})), {
       reconcile: async () => (await readReceipt(dir, 'receiver-ready', call.namespaceRoot)) ? 'applied' : 'unknown',
     });
     // receiver-ready: the new session confirmed cwd/profile/account/tools for this packet.
