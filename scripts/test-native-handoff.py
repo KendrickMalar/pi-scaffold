@@ -121,8 +121,8 @@ class Acceptance(unittest.TestCase):
                     'PI_OFFLINE': '1', 'FAKE_GH_STATE': str(self.state), 'PI_PROFILE_PI_BIN': str(Path(OPTIONS.pi).resolve())}
         version = subprocess.check_output([OPTIONS.pi, '--no-extensions', '--version'], env=self.env, text=True).strip()
         (self.agent / 'settings.json').write_text(json.dumps({'packages': [OPTIONS.pi_profile], 'extensions': [], 'quietStartup': True, 'telemetry': False, 'theme': 'dark', 'compaction': {'enabled': False}, 'lastChangelogVersion': version}))
-        dev = self.agent / 'profiles/development'; dev.mkdir(parents=True)
-        (dev / 'profile.json').write_text(json.dumps({'id': 'developer', 'label': 'Development', 'description': '開発（試験用）', 'order': 30, 'enabled': True}))
+        dev = self.agent / 'profiles' / ('development' if OPTIONS.profile == 'developer' else OPTIONS.profile); dev.mkdir(parents=True)
+        (dev / 'profile.json').write_text(json.dumps({'id': OPTIONS.profile, 'label': OPTIONS.profile, 'description': '開発（試験用）', 'order': 30, 'enabled': True}))
         (dev / 'instructions.md').write_text('試験用の開発Profile（架空）\n')
         (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.pi_gh).resolve()), str(ROOT)]}))
         (self.agent / 'pi-scaffold').mkdir(mode=0o700)
@@ -149,7 +149,7 @@ class Acceptance(unittest.TestCase):
                     'labels': [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', f'Wave: {w}')], 'html_url': f'https://github.com/example/demo/issues/{n}', **({'blocked_by': [11]} if n == 12 else {})}))
         grant = self.agent / 'pi-gh-permissions.json'
         grant.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current', 'gh_issue_labels_if_current'], 'allowHeadless': True, 'allowChild': False}]})); grant.chmod(0o600)
-        for cmd in (['pi-profile', 'packages', 'install', '--profile', 'developer'], ['herdr', 'integration', 'install', 'pi']):
+        for cmd in (['pi-profile', 'packages', 'install', '--profile', OPTIONS.profile], ['herdr', 'integration', 'install', 'pi']):
             r = subprocess.run(cmd, env=self.env, cwd=self.repo, text=True, capture_output=True, timeout=120)
             self.assertEqual(r.returncode, 0, f'{cmd}: {r.stdout}\n{r.stderr}')
 
@@ -195,7 +195,7 @@ class Acceptance(unittest.TestCase):
         self.start_session()
         pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
         out, done = self.home / 'sender.out', self.home / 'sender.done'
-        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+        cmd = (f"cd {self.repo} && pi-profile launch --profile {OPTIONS.profile} -- --print --approve --model owned-fixture/fixture --thinking medium "
                f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
         self.herdr('pane', 'run', pane, cmd)
         end = time.monotonic() + 180
@@ -226,7 +226,7 @@ class Acceptance(unittest.TestCase):
         master, slave = pty.openpty(); fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 140, 0, 0))
         # Herdr-looking variables with a socket that does not exist: the cheap checks pass, the dialog is shown, then the driver cannot reach Herdr.
         env = dict(self.env, HERDR_ENV='1', HERDR_WORKSPACE_ID='w0', HERDR_PANE_ID='w0:p0', HERDR_SOCKET_PATH=str(self.home / 'no-such-herdr.sock'))
-        tui = subprocess.Popen(['pi-profile', 'launch', '--profile', 'developer', '--', '--approve', '--model', 'owned-fixture/fixture', '--thinking', 'medium'],
+        tui = subprocess.Popen(['pi-profile', 'launch', '--profile', OPTIONS.profile, '--', '--approve', '--model', 'owned-fixture/fixture', '--thinking', 'medium'],
                                stdin=slave, stdout=slave, stderr=slave, env=env, cwd=self.repo, start_new_session=True)
         os.close(slave); os.set_blocking(master, False)
         data = b''
@@ -263,7 +263,7 @@ class Acceptance(unittest.TestCase):
         self.start_session()
         pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
         out, done = self.home / 'sender.out', self.home / 'sender.done'
-        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+        cmd = (f"cd {self.repo} && pi-profile launch --profile {OPTIONS.profile} -- --print --approve --model owned-fixture/fixture --thinking medium "
                f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
         self.herdr('pane', 'run', pane, cmd)
         end = time.monotonic() + 180
@@ -282,7 +282,7 @@ class Acceptance(unittest.TestCase):
         self.start_session()
         pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
         out, done = self.home / 'sender.out', self.home / 'sender.done'
-        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+        cmd = (f"cd {self.repo} && pi-profile launch --profile {OPTIONS.profile} -- --print --approve --model owned-fixture/fixture --thinking medium "
                f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
         self.herdr('pane', 'run', pane, cmd)
         end = time.monotonic() + 180
@@ -301,7 +301,7 @@ class Acceptance(unittest.TestCase):
         self.start_session()
         pane = self.herdr('pane', 'list')['result']['panes'][0]['pane_id']
         out, done = self.home / 'sender.out', self.home / 'sender.done'
-        cmd = (f"cd {self.repo} && pi-profile launch --profile developer -- --print --approve --model owned-fixture/fixture --thinking medium "
+        cmd = (f"cd {self.repo} && pi-profile launch --profile {OPTIONS.profile} -- --print --approve --model owned-fixture/fixture --thinking medium "
                f"OWNED_TOOL_REQUEST > {out} 2>&1; echo $? > {done}")
         self.herdr('pane', 'run', pane, cmd)
         end = time.monotonic() + 180
@@ -326,6 +326,7 @@ if __name__ == '__main__':
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
     parser.add_argument('--pi-gh', required=True)
     parser.add_argument('--pi-profile', required=True)
+    parser.add_argument('--profile', default='developer', help='the scaffold Profile id the stage sessions run in (developer or roblox-game)')
     parser.add_argument('--case')
     OPTIONS = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(Acceptance(n) for n in (['test_' + OPTIONS.case] if OPTIONS.case else ['test_handoff_starts_a_new_specification_session', 'test_basic_design_handoff_after_parent_tui_approval', 'test_implementation_handoff_after_parent_tui_approval', 'test_verification_handoff_with_pinned_evidence'])))
