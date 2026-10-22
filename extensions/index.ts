@@ -21,7 +21,8 @@ export default function (pi: ExtensionAPI) {
   registerTools(pi, runtime);
   runtime.activeToolNames = () => pi.getActiveTools();
   // enforce-worktree (dotfiles) announces the linked worktree it redirects to; scaffold_stage_check reads pinned docs there.
-  pi.events.on(ACTIVE_WORKTREE_CHANNEL, setActiveWorktree);
+  // Hosts without the shared bus (claude-scaffold) simply keep ctx.cwd.
+  pi.events?.on(ACTIVE_WORKTREE_CHANNEL, setActiveWorktree);
   pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a pi-scaffold stage handoff.'});
 
   let accepted: {packetPath: string; sessionId: string} | undefined;
