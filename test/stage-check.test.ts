@@ -4,18 +4,23 @@ import {createHarness, loadToolModule} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {populatedDoc, featureDoc} from './helpers/docs.js';
+import {mkdir, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {setActiveWorktree} from '../src/core/active-worktree.js';
+import {gitRepoWithWorktree} from './helpers/git-worktree.js';
 
 // Plan mode keeps only the gh reads.
 const READ = ['gh_capabilities', 'gh_issue_get'];
 const WRITE = ['scaffold_feature_create', 'scaffold_dependencies_apply', 'scaffold_waves_apply', 'scaffold_handoff_implementation'];
 
-async function run(tools: string[], opts: {activeTools?: string[]; pin?: boolean; feature?: boolean} = {}) {
+async function run(tools: string[], opts: {activeTools?: string[]; pin?: boolean; feature?: boolean; pinRef?: string; cwd?: string} = {}) {
   const d = populatedDoc(); d.stage = 'basic-design';
-  if (opts.pin) d.originalRequest.sourceRefs = [`docs/missing.md@sha256:${'a'.repeat(64)}`];
+  if (opts.pin) d.originalRequest.sourceRefs = [opts.pinRef ?? `docs/missing.md@sha256:${'a'.repeat(64)}`];
   const gh = new FakePiGh(); gh.add({number: 10, title: 'Epic', body: renderEpicBlock(d), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open'});
   if (opts.feature) gh.add({number: 10, title: 'Feature', body: renderFeatureBlock(featureDoc()), labels: ['Type: Scaffold', 'Scope: Feature'], state: 'open'});
   const {createTool} = await loadToolModule('extensions/tools/stage-check.ts');
-  const h = await createHarness(createTool, {scenario: {gh, tools, ...(opts.activeTools ? {activeTools: opts.activeTools} : {})}});
+  const h = await createHarness(createTool, {scenario: {gh, tools, ...(opts.activeTools ? {activeTools: opts.activeTools} : {}), ...(opts.cwd ? {cwd: opts.cwd} : {})}});
   return (await h.invoke({repo: 'example/demo', epicIssue: 10})).r;
 }
 
@@ -49,4 +54,17 @@ test('a non-Epic issue is blocked as NOT_AN_EPIC', async () => {
   const r = await run(READ, {feature: true});
   assert.equal(r.status, 'blocked');
   assert.ok(r.problems.some(p => p.code === 'NOT_AN_EPIC'), JSON.stringify(r.problems));
+});
+
+test('after worktree_switch, a pinned doc that exists only in the active linked worktree passes', async t => {
+  const {repo} = await gitRepoWithWorktree(t);
+  await mkdir(join(repo.linked, 'docs/spec'), {recursive: true});
+  await writeFile(join(repo.linked, 'docs/spec/spec.md'), 'spec');
+  const pinRef = `docs/spec/spec.md@sha256:${createHash('sha256').update('spec').digest('hex')}`;
+  t.after(() => setActiveWorktree(null));
+  setActiveWorktree(null);
+  assert.equal((await run(READ, {pin: true, pinRef, cwd: repo.main})).status, 'blocked', 'without the announcement it checks the main worktree');
+  setActiveWorktree({path: repo.linked, mainRoot: repo.main});
+  const r = await run(READ, {pin: true, pinRef, cwd: repo.main});
+  assert.equal(r.status, 'validated', JSON.stringify(r.problems));
 });

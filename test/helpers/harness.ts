@@ -23,6 +23,8 @@ import type {HerdrPort} from '../../src/handoff/herdr-client.js';
 export interface FakeHerdrLike { calls: {command: string; args: unknown}[] }
 export interface Scenario {
   gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
+  /** ctx.cwd of the session (default /synthetic/repo). */
+  cwd?: string;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
   defaultParams?: Record<string, unknown>; herdr?: FakeHerdrLike & Partial<HerdrPort>;
   /** Process environment seen by the tool (HERDR_*, PI_SUBAGENT_CHILD…). */
@@ -95,7 +97,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
   const tool = createTool(runtime);
   let confirmCalls = 0;
   const ctx = {
-    cwd: '/synthetic/repo', mode: scenario.interactive === false ? 'print' : 'tui', hasUI: scenario.interactive !== false,
+    cwd: scenario.cwd ?? '/synthetic/repo', mode: scenario.interactive === false ? 'print' : 'tui', hasUI: scenario.interactive !== false,
     isProjectTrusted: () => scenario.trusted !== false,
     executeTool: (name: string, args: unknown, options?: {signal?: AbortSignal}) => gh.execute(name, args, options),
     ui: {confirm: async () => { confirmCalls++; const c = scenario.confirm ?? true; return typeof c === 'function' ? c() : c; }},

@@ -37,7 +37,7 @@ export async function stageCheck(input: StageCheckInput, call: ToolCall): Promis
   if (!snap.ok) return {status: 'blocked', operation, problems: snap.problems, data: empty};
   if (snap.value.doc.kind !== 'epic') return {status: 'blocked', operation, problems: [problem('NOT_AN_EPIC', 'epicIssue', `#${input.epicIssue} is not a Scaffold Epic.`)], data: empty};
   const stage = snap.value.doc.stage;
-  const docs = await verifyPinnedDocs(call.env.cwd, pinnedDocRefs(snap.value.doc));
+  const docs = await verifyPinnedDocs(await (call.env.docsCwd?.() ?? call.env.cwd), pinnedDocRefs(snap.value.doc));
   const data: StageCheckData = {
     stage, missingReadTools, missingStageTools: (STAGE_TOOLS[stage] ?? []).filter(t => !active.includes(t)),
     docProblems: docs.map(p => ({path: p.path, message: p.message})), passed: false,

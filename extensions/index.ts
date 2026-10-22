@@ -13,12 +13,15 @@ import {createHerdrCli} from '../dist/src/handoff/herdr-client.js';
 import {WatchRegistry} from '../dist/src/watch/registry.js';
 import {StageWatcher} from '../dist/src/watch/watcher.js';
 import {tailReader} from '../dist/src/watch/session-tail.js';
+import {ACTIVE_WORKTREE_CHANNEL, setActiveWorktree} from '../dist/src/core/active-worktree.js';
 import {registerTools} from './register-tools.ts';
 
 export default function (pi: ExtensionAPI) {
   const runtime = createRuntime();
   registerTools(pi, runtime);
   runtime.activeToolNames = () => pi.getActiveTools();
+  // enforce-worktree (dotfiles) announces the linked worktree it redirects to; scaffold_stage_check reads pinned docs there.
+  pi.events.on(ACTIVE_WORKTREE_CHANNEL, setActiveWorktree);
   pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a pi-scaffold stage handoff.'});
 
   let accepted: {packetPath: string; sessionId: string} | undefined;
@@ -51,6 +54,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on('session_start', (_event, ctx) => {
+    setActiveWorktree(null);
     invalidate();
     stopRetry();
     startWatcher(ctx);
