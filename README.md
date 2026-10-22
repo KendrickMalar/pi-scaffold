@@ -62,6 +62,7 @@ Epicは `setup → specification → basic-design → implementation → verific
   - 子セッション（subagent）は、どの場合も承認を記録できません。
   - `scaffold_feature_create`は、今の仕様に使える承認が無いとき（指示文が変わった人の承認など）、仕様がそろっていれば承認をやり直します（policyなら親エージェント、そうでなければ確認画面）。
   - 止まっている引き継ぎの放棄（`HANDOFF_IN_PROGRESS`）は、`agentApprovals`に`handoff-abandon`があれば確認画面なしで親エージェントが行います。結果の`data.agentAbandoned`に放棄したoperationIdが入ります。
+- **固定資料の照合（`scaffold_stage_check`）**：Epicが固定した`docs/…@sha256:…`を、セッションの作業フォルダで読んでハッシュを照らし合わせます。別の拡張が`pi.events`の`worktree:active`（`{path, mainRoot}`）で切り替え先のworktreeを知らせていれば、そちらで読みます（dotfilesの`enforce-worktree`が送ります）。ただし、作業フォルダがその`mainRoot`の中にあり、`path`がgitの一覧に載った同じリポジトリのworktreeであるときだけです。ほかのツールの作業フォルダは変えません。
 - **質問の遮断（`questionBlockedStages`）**：人間に質問してよいのは仕様策定の工程だけです。owner policyの`questionBlockedStages`（`"setup"`・`"basic-design"`・`"implementation"`・`"verification"`）に入った工程のセッションでは、`ask_user`（pi-ask-user）と`AskUserQuestion`の呼び出しを`tool_call`で止めます。例外はありません（以前の`【事前作業】`の例外は廃止）。
   - 工程は、このセッションが受け付けた引き継ぎpacketの`targetStage`で決まります。packetを受け付けていないセッション（setupの元のセッションや、手で起動したPiなど）、別のセッション、packetと違うリポジトリ・workflowでは止めません。
   - 止められたら、承認済みの仕様・設計の意図の範囲で自分で決めて記録します。意図を変える必要があれば`scaffold_specification_revise`を使います。

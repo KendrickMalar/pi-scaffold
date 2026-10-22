@@ -36,7 +36,7 @@ async function boot(t: {after(fn: () => Promise<void>): void}, opts: {stages: st
   });
   const handlers = new Map<string, Handler[]>();
   const pi = {
-    registerTool: () => {}, registerFlag: () => {}, getAllTools: () => [],
+    registerTool: () => {}, registerFlag: () => {}, getAllTools: () => [], events: {on: () => () => {}, emit: () => {}},
     getFlag: (name: string) => name === 'scaffold-handoff' && opts.withPacket !== false ? path : undefined,
     on: (name: string, h: Handler) => { handlers.set(name, [...(handlers.get(name) ?? []), h]); },
   };

@@ -5,6 +5,7 @@ import {problem, type Decoded, type ScaffoldResult} from '../dist/src/core/contr
 import {createCallScope} from '../dist/src/core/lifecycle.js';
 import {toToolResult} from '../dist/src/core/result.js';
 import {ToolCall, type ScaffoldRuntime, type ToolEnv} from '../dist/src/core/runtime.js';
+import {docsCwd} from '../dist/src/core/active-worktree.js';
 
 const STATUS = ['validated', 'prepared', 'applied', 'noop', 'blocked', 'partial', 'unknown', 'cancelled'] as const;
 export const scaffoldOutputSchema = Type.Object({
@@ -37,6 +38,7 @@ export function toolEnv(ctx: ExtensionToolContext): ToolEnv {
     scopedModels: () => ctx.scopedModels.map(s => `${s.model.provider}/${s.model.id}`),
     toolNames: () => (ctx.tools ?? []).map(t => t.name),
     currentModel: () => ctx.model && ctx.thinkingLevel ? {model: `${ctx.model.provider}/${ctx.model.id}`, thinking: ctx.thinkingLevel} : undefined,
+    docsCwd: () => docsCwd(ctx.cwd),
   };
 }
 

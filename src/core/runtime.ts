@@ -27,6 +27,8 @@ export interface ToolEnv {
   toolNames(): string[];
   /** The session's current model and thinking level; undefined when Pi does not report them. Never called, only recorded. */
   currentModel(): {model: string; thinking: string} | undefined;
+  /** Where pinned docs are read: the active linked worktree when one is announced, else cwd. Absent in old callers. */
+  docsCwd?(): Promise<string>;
 }
 export interface ScaffoldRuntime {
   scope: RuntimeScope; agentDir: string; scaffoldDir: string; git: GitReader; timeoutMs?: number;
