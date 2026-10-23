@@ -3,6 +3,7 @@
 import {decide, type WatchEntry} from '../watch/decide.js';
 import {STAGE_LABELS, stageLabelName} from '../core/label-policy.js';
 import {STAGES} from '../core/contracts.js';
+import {resolveBrowserAccount} from '../core/browser-account.js';
 import type {ChildRun, Target, TargetObservation, TargetState, WatchdogAction} from './types.js';
 
 export const IDLE_GRACE_MS = 300_000;
@@ -59,10 +60,13 @@ export function planTarget(target: Target, obs: TargetObservation, state: Target
       const value = target.agent === 'pi' ? s.lastSeen?.sessionPath : target.sessionId;
       if (!value) { logOnce('relaunch-unknown-session', 'relaunch-unknown-session'); break; }
       if (!SAFE_SHELL_VALUE.test(value)) { logOnce('relaunch-refused', 'relaunch-refused', value); break; }
+      if (target.agentDir !== undefined && !SAFE_SHELL_VALUE.test(target.agentDir)) { logOnce('relaunch-refused', 'relaunch-refused', target.agentDir); break; }
       // A stage outside the default Profile resumes in its own Profile (the id is from the fixed allowlist, so unquoted).
+      // A Pi stage keeps its account: its agent directory and the Chrome profile of its playwright-browser MCP.
       const profile = target.profileId;
+      const piEnv = `env ${target.agentDir !== undefined ? `PI_CODING_AGENT_DIR='${target.agentDir}' ` : ''}PI_BROWSER_ACCOUNT=${resolveBrowserAccount({}, target.agentDir)} `;
       const command = target.agent === 'pi'
-        ? (profile ? `${opts.piProfileCommand ?? 'pi-profile'} launch --profile ${profile} -- --session '${value}'` : `${opts.piCommand ?? 'pi'} --session '${value}'`)
+        ? piEnv + (profile ? `${opts.piProfileCommand ?? 'pi-profile'} launch --profile ${profile} -- --session '${value}'` : `${opts.piCommand ?? 'pi'} --session '${value}'`)
         : `${opts.claudeCommand ?? 'claude'}${profile ? ` --scaffold-profile=${profile}` : ''} --resume '${value}'`;
       s.relaunches += 1; s.lastRelaunchAt = now; delete s.loggedKey;
       actions.push({type: 'relaunch', socket: pane.socket, paneId: pane.paneId, command});

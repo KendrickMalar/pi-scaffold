@@ -19,3 +19,10 @@ test('profiles: the allowlist is developer and roblox-game only', () => {
   assert.equal(isScaffoldProfile(null), false);
   assert.equal(isScaffoldProfile('research'), false);
 });
+
+test('launch: the stage session carries the sender browser account; anything else is refused', () => {
+  assert.equal(buildLaunchCommand({packetPath: '/p/packet.json', profileId: 'roblox-game', browserAccount: 'rbx'}), `env PI_BROWSER_ACCOUNT=rbx pi-profile launch --profile roblox-game -- --scaffold-handoff '/p/packet.json'`);
+  assert.equal(buildLaunchCommand({packetPath: '/p', agentDir: '/h/.pi/agent-rbx', browserAccount: 'rbx'}), `env PI_CODING_AGENT_DIR='/h/.pi/agent-rbx' PI_BROWSER_ACCOUNT=rbx pi-profile launch --profile developer -- --scaffold-handoff '/p'`);
+  assert.deepEqual(unsafeLaunchValues({packetPath: '/p', browserAccount: 'other'}), ['browserAccount']);
+  assert.throws(() => buildLaunchCommand({packetPath: '/p', browserAccount: 'other'}));
+});

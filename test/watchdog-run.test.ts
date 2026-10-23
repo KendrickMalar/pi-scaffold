@@ -81,7 +81,7 @@ test('a pi pane back at its shell is relaunched with its session through the shi
   s.fleet.panesBySocket.set('/s.sock', [{socket: '/s.sock', paneId: 'w1:p2', status: 'unknown', revision: 9}]);
   s.clock.now += 1000;
   await runOnce(s.deps);
-  assert.deepEqual(s.fleet.sends(), [{command: 'paneRun', socket: '/s.sock', args: {paneId: 'w1:p2', command: `pi --session '${SESSION}'`}}]);
+  assert.deepEqual(s.fleet.sends(), [{command: 'paneRun', socket: '/s.sock', args: {paneId: 'w1:p2', command: `env PI_BROWSER_ACCOUNT=kuno pi --session '${SESSION}'`}}]);
   assert.ok((await s.logs()).some(l => l.event === 'relaunched'));
 });
 
@@ -158,7 +158,7 @@ test('a pane back at its shell is still relaunched when a conversation outside t
   ]);
   s.clock.now += 1000;
   await runOnce(s.deps);
-  assert.deepEqual(s.fleet.sends(), [{command: 'paneRun', socket: '/s.sock', args: {paneId: 'w1:p2', command: `pi --session '${SESSION}'`}}]);
+  assert.deepEqual(s.fleet.sends(), [{command: 'paneRun', socket: '/s.sock', args: {paneId: 'w1:p2', command: `env PI_BROWSER_ACCOUNT=kuno pi --session '${SESSION}'`}}]);
   assert.ok(!(await s.logs()).some(l => l.event === 'rebind-candidate-outside-tab'));
 });
 

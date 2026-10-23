@@ -2,11 +2,16 @@
 // ready.json says which session received it. Works the same for Pi and Claude (claude-scaffold writes the same files).
 // Read-only; anything malformed is skipped, never guessed.
 import {readdir, readFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename, dirname, join} from 'node:path';
 import type {AgentKind, Target, TargetStage} from './types.js';
 import {isScaffoldProfile} from '../handoff/profiles.js';
+import {accountOfAgentDir} from '../core/browser-account.js';
 
 export interface StateRoot { /** A scaffold dir, e.g. ~/.pi/agent/pi-scaffold */ dir: string; agent: AgentKind }
+/** Pi only: the agent directory a scaffold dir belongs to (…/.pi/agent or agent-<account>, then /pi-scaffold), so a relaunch keeps its account. */
+export function agentDirOfRoot(root: StateRoot): string | undefined {
+  return root.agent === 'pi' && basename(root.dir) === 'pi-scaffold' && accountOfAgentDir(dirname(root.dir)) ? dirname(root.dir) : undefined;
+}
 /** Handoffs older than this are not watched: an Epic left that long is not a stop to recover. */
 export const MAX_HANDOFF_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const STAGES: readonly TargetStage[] = ['specification', 'basic-design', 'implementation', 'verification'];
@@ -31,7 +36,7 @@ async function owners(dir: string): Promise<Map<string, string>> {
 export async function discoverTargets(roots: StateRoot[], now: number): Promise<Target[]> {
   const found = new Map<string, {target: Target; at: number}>();
   for (const root of roots) {
-    const owner = await owners(root.dir);
+    const owner = await owners(root.dir), agentDir = agentDirOfRoot(root);
     const state = join(root.dir, 'state');
     for (const repo of await dirs(state)) for (const wf of await dirs(join(state, repo))) {
       const handoffs = join(state, repo, wf, 'handoff');
@@ -43,7 +48,7 @@ export async function discoverTargets(roots: StateRoot[], now: number): Promise<
         if (typeof p.repo !== 'string' || !Number.isInteger(p.epicIssue) || typeof p.cwd !== 'string' || !STAGES.includes(p.targetStage as TargetStage)) continue;
         const sessionId = r.sessionId, ownerSessionId = owner.get(sessionId);
         const tabTag = typeof r.nonceSha256 === 'string' && /^[0-9a-f]{64}$/.test(r.nonceSha256) ? `scaffold-${r.nonceSha256.slice(0, 12)}` : undefined;
-        const target: Target = {key: sessionId, agent: root.agent, repo: p.repo, epicIssue: p.epicIssue as number, targetStage: p.targetStage as TargetStage, cwd: p.cwd, sessionId, handoffAt: at, ...(tabTag ? {tabTag} : {}), ...(ownerSessionId ? {ownerSessionId} : {}), ...(isScaffoldProfile(p.profileId as string) && p.profileId !== 'developer' ? {profileId: p.profileId as string} : {})};
+        const target: Target = {key: sessionId, agent: root.agent, repo: p.repo, epicIssue: p.epicIssue as number, targetStage: p.targetStage as TargetStage, cwd: p.cwd, sessionId, handoffAt: at, ...(tabTag ? {tabTag} : {}), ...(ownerSessionId ? {ownerSessionId} : {}), ...(agentDir ? {agentDir} : {}), ...(isScaffoldProfile(p.profileId as string) && p.profileId !== 'developer' ? {profileId: p.profileId as string} : {})};
         const prev = found.get(sessionId);
         if (!prev || prev.at < at) found.set(sessionId, {target, at});
       }

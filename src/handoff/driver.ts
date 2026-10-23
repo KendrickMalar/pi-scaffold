@@ -12,6 +12,7 @@ import {writeOwnedFile} from '../core/files.js';
 import {withOperation, type OperationRun} from '../core/lifecycle.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
+import {resolveBrowserAccount} from '../core/browser-account.js';
 import {readIssue, type GhOutcome} from '../ports/pi-gh.js';
 import {HerdrError, isSupportedHerdr, supportedHerdrLabel, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
@@ -118,8 +119,9 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
   try { live = await herdr.currentPane(); } catch (e) { return blocked([problem('HERDR_UNAVAILABLE', 'herdr', (e as Error).message)]); }
   if (live.workspaceId !== binding.workspaceId || live.paneId !== binding.paneId) return blocked([problem('HERDR_BINDING_CHANGED', 'herdr', 'This tool is no longer running in the pane it was started from.')]);
   const model = call.env.currentModel();
+  const browserAccount = resolveBrowserAccount(env, call.runtime.agentDir);
   const dir = handoffDir(ctx.workflowStateRoot, input.operationId);
-  const unsafe = unsafeLaunchValues({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
+  const unsafe = unsafeLaunchValues({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, browserAccount, packetPath: join(dir, 'packet.json'), ...(model ? {model: model.model, thinking: model.thinking} : {})});
   if (unsafe.length) return blocked([problem('UNSAFE_LAUNCH_VALUE', unsafe.join(','), `The launch command would contain ${unsafe.join(' and ')} with characters other than A-Z a-z 0-9 . _ / : @ + - (for example spaces or non-ASCII in the agent directory path). Nothing was started; use a plain path/model id.`)]);
 
   // The new stage session opens in the Epic branch's worktree when exactly one exists (design docs live there, not on main).
@@ -188,7 +190,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       try { shell = await herdr.processInfo(tab.paneId); } catch (e) { return run.stop([problem('HERDR_FAILED', 'herdr', (e as Error).message)]); }
       if (!shell.shellReady) return run.stop([problem('HERDR_PANE_BUSY', 'herdr', 'The new tab is not at an idle shell; nothing was run.')]);
     }
-    await run.write('pane-run', () => herdrStep(() => herdr.paneRun(tab.paneId, buildLaunchCommand({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, packetPath: prepared!.packetPath, ...(model ? {model: model.model, thinking: model.thinking} : {})}))).then(o => ({...o, data: o.status === 'ok' ? true : undefined})), {
+    await run.write('pane-run', () => herdrStep(() => herdr.paneRun(tab.paneId, buildLaunchCommand({profileId: ctx.profileId!, agentDir: call.runtime.agentDir, scaffoldDir: call.runtime.scaffoldDir, browserAccount, packetPath: prepared!.packetPath, ...(model ? {model: model.model, thinking: model.thinking} : {})}))).then(o => ({...o, data: o.status === 'ok' ? true : undefined})), {
       reconcile: async () => (await readReceipt(dir, 'receiver-ready', call.namespaceRoot)) ? 'applied' : 'unknown',
     });
     // receiver-ready: the new session confirmed cwd/profile/account/tools for this packet.

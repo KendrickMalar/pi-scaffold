@@ -143,7 +143,7 @@ test('a non-transient error is logged once and not prompted', () => {
 
 test('a pi pane back at its shell is relaunched through the shim with its session', () => {
   const r = run(target(), [{obs: obs(idle()), now: 0}, {obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 1000}]);
-  assert.deepEqual(r.actions.filter(a => a.type === 'relaunch'), [{type: 'relaunch', socket: '/s.sock', paneId: 'w1:p2', command: `pi --session '${SESSION_PATH}'`}]);
+  assert.deepEqual(r.actions.filter(a => a.type === 'relaunch'), [{type: 'relaunch', socket: '/s.sock', paneId: 'w1:p2', command: `env PI_BROWSER_ACCOUNT=kuno pi --session '${SESSION_PATH}'`}]);
 });
 
 test('a claude pane back at its shell is resumed by session id', () => {
@@ -154,10 +154,18 @@ test('a claude pane back at its shell is resumed by session id', () => {
 
 test('a stage in another scaffold Profile is resumed in that Profile', () => {
   const pi = run(target({profileId: 'roblox-game'}), [{obs: obs(idle()), now: 0}, {obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 1000}]);
-  assert.deepEqual(pi.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`pi-profile launch --profile roblox-game -- --session '${SESSION_PATH}'`]);
+  assert.deepEqual(pi.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`env PI_BROWSER_ACCOUNT=kuno pi-profile launch --profile roblox-game -- --session '${SESSION_PATH}'`]);
   const t = target({agent: 'claude', profileId: 'roblox-game', sessionId: 'c7f1a0de-0000-4000-8000-000000000001', key: 'c7f1a0de-0000-4000-8000-000000000001'});
   const claude = run(t, [{obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 0}]);
   assert.deepEqual(claude.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`claude --scaffold-profile=roblox-game --resume 'c7f1a0de-0000-4000-8000-000000000001'`]);
+});
+
+test('a pi stage is relaunched in its own account: agent directory and browser account', () => {
+  const r = run(target({profileId: 'roblox-game', agentDir: '/h/.pi/agent-rbx'}), [{obs: obs(idle()), now: 0}, {obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 1000}]);
+  assert.deepEqual(r.actions.filter(a => a.type === 'relaunch').map(a => (a as {command: string}).command), [`env PI_CODING_AGENT_DIR='/h/.pi/agent-rbx' PI_BROWSER_ACCOUNT=rbx pi-profile launch --profile roblox-game -- --session '${SESSION_PATH}'`]);
+  const bad = run(target({agentDir: "/h/.pi/agent rbx"}), [{obs: obs(idle()), now: 0}, {obs: obs({kind: 'shell', socket: '/s.sock', paneId: 'w1:p2'}), now: 1}]);
+  assert.equal(bad.actions.filter(a => a.type === 'relaunch').length, 0);
+  assert.ok(bad.actions.some(a => a.type === 'log' && a.event === 'relaunch-refused'));
 });
 
 test('relaunches are spaced and capped', () => {

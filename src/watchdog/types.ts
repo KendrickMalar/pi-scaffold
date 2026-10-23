@@ -16,6 +16,8 @@ export interface Target {
   tabTag?: string;
   /** The Profile the stage runs in (packet.json `profileId`), when it is not the default developer one. */
   profileId?: string;
+  /** Pi only: the agent directory of the scaffold dir the handoff was found in (~/.pi/agent or ~/.pi/agent-<account>). */
+  agentDir?: string;
   /** Pi only: the session that handed off (watches.json); its in-process watcher handles transient errors. */
   ownerSessionId?: string;
 }
