@@ -19,7 +19,7 @@ npm名は`@papillon6814/pi-scaffold`（MIT）。
 - 空文字・相対パス・制御文字（NULを含む）は拒否します。環境変数や `~` のシェル展開、symlinkの自動解決、旧保存先へのfallbackは行いません。
 - 保存先と配下ディレクトリは現在ユーザー所有の通常ディレクトリ（700）、ファイルは通常ファイル（600）が必要です。symlink・FIFO・過大ファイル等は拒否します。引き継ぎ起動では、認証ディレクトリと保存先の両方に安全なASCII token（`A-Z a-z 0-9 . _ / : @ + -`）だけを使ってください。
 - `PI_CODING_AGENT_DIR` は**認証とPiのセッション履歴**の場所です。`PI_SCAFFOLD_DIR` で変更しません。監視が読むログも `<agentDir>/sessions` のままです。account bindingは `realpath(agentDir)` に結び付き、保存先から認証を推測しません。同じ認証で保存先を変えてもbindingは同じで、別の認証との承認/Profile照合は引き続き行います。
-- 工程を引き継ぐ子Piへ、元の `PI_CODING_AGENT_DIR` と選択済みの `PI_SCAFFOLD_DIR` を固定・quotedの起動コマンドで明示伝播します。共有台帳の監視は引き継いだ本人だけが操作します。プロセス間の同時書き込みロックはありません。
+- 工程を引き継ぐ子Piへ、元の `PI_CODING_AGENT_DIR` と選択済みの `PI_SCAFFOLD_DIR`、ブラウザのアカウント `PI_BROWSER_ACCOUNT` を固定・quotedの起動コマンドで明示伝播します。`PI_BROWSER_ACCOUNT` は `playwright-browser` MCP（`~/.local/bin/pi-browser-mcp`）が操作する Chrome プロファイルを決めます。送り手に無ければ `PI_CODING_AGENT_DIR` から決め（`~/.pi/agent` は kuno、`~/.pi/agent-muu`・`~/.pi/agent-rbx` はそれぞれ muu・rbx）、それも決まらなければ kuno にします（0.7.0）。共有台帳の監視は引き継いだ本人だけが操作します。プロセス間の同時書き込みロックはありません。
 
 
 ## Issue本文の容量
@@ -112,7 +112,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 - 引き継ぎの受け手は、送り手と同じProfile（id）で起動していれば受け付けます。Profileの指示文が送り手の開始後に変わっていても止めず、受領（`ready.json`）に両方のdigestを残し、結果の`data.profileChanged`で知らせます。cwd・アカウント・必要なツール・固定した文書の検査はそのままです。
 - GitHubへの書き込みは、pi-ghのTUI承認か、所有者が置いたpi-ghの許可ファイルを経由する必要があります。pi-scaffoldは許可ファイルを作りません。
 
-新しいPiは、送り手と同じProfileで`pi-profile launch --profile <送り手のid> -- --scaffold-handoff <packet>`として起動します（`developer` なら従来と同じコマンド）。既存のタブを閉じたり、相手のセッションを止めたりはしません。scaffold-watchdog が止まった工程を再開するときも、`developer` 以外の Profile なら同じ Profile で起動し直します（pi は `pi-profile launch --profile <id> -- --session <path>`、Claude は `claude-dev --scaffold-profile=<id> --resume <id>`）。
+新しいPiは、送り手と同じProfileで`env PI_CODING_AGENT_DIR=<dir> PI_SCAFFOLD_DIR=<dir> PI_BROWSER_ACCOUNT=<account> pi-profile launch --profile <送り手のid> -- --scaffold-handoff <packet>`として起動します（`env` の値は送り手のもの）。既存のタブを閉じたり、相手のセッションを止めたりはしません。scaffold-watchdog が止まった工程を再開するときも、`developer` 以外の Profile なら同じ Profile で起動し直します（pi は `env PI_CODING_AGENT_DIR=<dir> PI_BROWSER_ACCOUNT=<account> pi-profile launch --profile <id> -- --session <path>`、Claude は `claude-dev --scaffold-profile=<id> --resume <id>`）。pi の `<dir>` は工程を見つけた scaffold の置き場所（`~/.pi/agent*/pi-scaffold`）の親で、アカウントもそこから決めます。置き場所が `~/.pi/agent*` の下に無いときは `PI_CODING_AGENT_DIR` を付けず、アカウントは kuno です（0.7.0）。
 
 ## 範囲外
 
@@ -142,7 +142,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 | 上の idle で、その会話の pi-subagents の async run が動いている（running/queued で status.json が10分以内に更新、または runner の pid が生存） | 送らない。回数も使わない。`waiting-child`（run id）を状態が変わったときだけ出す |
 | 上の idle で、run が親の最後の発話より後に終わっている | 「続けて」の代わりに「子 run <id> は <時刻> に完了済みです…保存された結果を読んで続けてください」を送る（上限は同じ） |
 | 一時エラー | 親の pi が生きていれば親内の監視（`watch/watcher.ts`）に任せる。居なければ同じ `decide()` で再開する |
-| pi・Claude が消えてシェルだけ残った | `pi --session <path>`（shim 経由）または `claude --resume <id>` を打つ。3回まで、5分おき |
+| pi・Claude が消えてシェルだけ残った | `env [PI_CODING_AGENT_DIR=<dir>] PI_BROWSER_ACCOUNT=<account> pi --session <path>`（shim 経由。Profile があれば `pi-profile launch`）または `claude --resume <id>` を打つ。3回まで、5分おき |
 | 仕様策定の idle、Esc での中断、回復しないエラー、ペイン消失 | ログだけ |
 | pi-subagents の runner が死んだ run | `SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE` のスクリプトを毎回呼ぶ（failed にして結果ファイルで親へ届く） |
 
