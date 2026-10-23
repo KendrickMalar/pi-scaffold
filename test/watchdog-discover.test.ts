@@ -32,6 +32,15 @@ test('discover: a handoff with a ready receiver becomes a target, with its owner
   assert.deepEqual(targets, [{key: 's1', agent: 'pi', repo: 'example/demo', epicIssue: 7, targetStage: 'implementation', cwd: '/repo', sessionId: 's1', handoffAt: Date.parse('2026-10-18T00:00:00.000Z'), ownerSessionId: 'o1'} satisfies Target]);
 });
 
+test('discover: a pi scaffold dir under ~/.pi/agent* gives its targets that agent directory', async t => {
+  const home = await scaffoldDir(t), dir = join(home, '.pi', 'agent-rbx', 'pi-scaffold');
+  await handoff(dir, 'op1', packet(), ready('s1'));
+  const [pi] = await discoverTargets([{dir, agent: 'pi'}], NOW);
+  assert.equal(pi?.agentDir, join(home, '.pi', 'agent-rbx'));
+  const [claude] = await discoverTargets([{dir, agent: 'claude'}], NOW);
+  assert.equal(claude?.agentDir, undefined);
+});
+
 test('discover: the handoff tab tag comes from the receipt nonce, as the sender labels the tab', async t => {
   const dir = await scaffoldDir(t);
   await handoff(dir, 'op1', packet(), ready('s1', undefined, {nonceSha256: '7d019e3f8e78322daa4abb8fdbfc19022cf3fd89cb98a0b3a7e99ac709fc69d1'}));
