@@ -10,8 +10,10 @@ export function createTool(runtime: ScaffoldRuntime) {
     description: 'Complete a verification-stage Epic after the parent\'s final acceptance in the TUI. Checks: complete specification, every requirement '
       + 'covered by Feature criteria whose final evidence (owned reports/logs, hashes) passed on verifiedRef or its ancestors, and verifiedRef (a full '
       + 'commit id) contained in origin\'s default branch as `git ls-remote` reports it — if that commit is not local, stop and ask the user to fetch '
-      + '(never fetch/merge/push). Optional project {projectId,itemId,statusFieldId,doneOptionId} is validated up front. Then: body/Stage → Completed, '
-      + 'close, read back, Project Done, read back. Partial progress resumes with the same operationId (no second close). No reopen, rollback, '
+      + '(never fetch/merge/push). Optional project {projectId,itemId,statusFieldId,doneOptionId} is validated up front. Every Feature and Task must already be closed. Then: '
+      + 'body/Stage → Completed, close, read back, Project Done, read back, then close the Projects recorded on the Epic (projectIds) that hold only '
+      + 'Issues of its tree, and read them back (projectsClosed; others in projectsSkipped as not-recorded or foreign-items). Partial progress '
+      + 'resumes with the same operationId (no second close; pendingStep project-close closes the remaining Projects). No reopen, rollback, '
       + 'release or notification; evidence authenticity is not claimed.',
     parameters: Type.Object({
       ...mutationInputFields,

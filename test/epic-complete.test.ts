@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
+import {readFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
 import {FakePiGh} from './helpers/fake-pi-gh.js';
@@ -498,4 +499,117 @@ for (const [step, op, count] of [
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
   assert.equal(count(gh), before, `${op} is not sent again`);
   assert.equal(gh.issues.get(10)!.state, 'closed');
+});
+
+// ---- recorded Projects are closed after the Epic ----------------------------------------------------
+
+type CloseData = Data & {projectsClosed: string[]; projectsSkipped: {projectId: string | null; reason: string}[]};
+const PB = 'PVT_fixture2';
+/** An Epic whose recorded Projects hold only Issues of its tree (Epic and Features). */
+function recordedWorld(ids: string[] = [PROJECT.projectId], opts: Parameters<typeof world>[0] = {}) {
+  const gh = world({...opts, epic: epicDoc(d => { d.projectIds = ids; })});
+  for (const id of ids) { gh.projects.set(id, [10, 11, 12]); if (!gh.projectFields.has(id)) gh.projectFields.set(id, []); }
+  return gh;
+}
+
+test('a recorded Project whose items are all closed tree issues is closed and read back', async t => {
+  const gh = recordedWorld(); const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.ok(gh.closedProjects.has(PROJECT.projectId));
+  assert.deepEqual(d.projectsClosed, [PROJECT.projectId]); assert.deepEqual(d.projectsSkipped, []); assert.equal(d.pendingStep, null);
+  assert.equal(gh.count('gh_project_close'), 1);
+  const order = gh.calls.map(c => c.name).filter(n => /close/.test(n));
+  assert.deepEqual(order, ['gh_issue_close_if_current', 'gh_project_close'], 'the Epic is closed before the Project');
+});
+test('an already closed Project is reported closed without a write', async t => {
+  const gh = recordedWorld(); gh.closedProjects.add(PROJECT.projectId); const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual((out.r.data as CloseData).projectsClosed, [PROJECT.projectId]);
+  assert.equal(gh.count('gh_project_close'), 0);
+});
+test('a Project with another Issue is skipped as foreign-items and the completion is applied', async t => {
+  const gh = recordedWorld([PROJECT.projectId, PB]); gh.projects.set(PB, [10, 99]); const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, [PROJECT.projectId]); assert.deepEqual(d.projectsSkipped, [{projectId: PB, reason: 'foreign-items'}]);
+  assert.ok(!gh.closedProjects.has(PB)); assert.equal(gh.count('gh_project_close'), 1);
+});
+test('an Epic without projectIds completes with a not-recorded skip and no Project call', async t => {
+  const gh = world(); const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, []); assert.deepEqual(d.projectsSkipped, [{projectId: null, reason: 'not-recorded'}]);
+  assert.equal(gh.calls.filter(c => c.name.startsWith('gh_project_')).length, 0);
+});
+test('a failed Project close blocks with pendingStep project-close and issueClosed true', async t => {
+  const gh = recordedWorld();
+  gh.overrides.set('gh_project_close', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
+  const d = out.r.data as CloseData;
+  assert.deepEqual([d.issueClosed, d.pendingStep], [true, 'project-close']);
+  assert.deepEqual(d.projectsClosed, []);
+  assert.ok(!gh.closedProjects.has(PROJECT.projectId));
+});
+test('a resume after a failed Project close closes only the remaining Projects without a second Issue close', async t => {
+  const gh = recordedWorld([PROJECT.projectId, PB]);
+  let fail = true;
+  gh.overrides.set('gh_project_close', args => { const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {projectId: string}; return c.projectId === PB && fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined; });
+  const h = await harness(t, gh);
+  const input = params(gh, await writeEvidence(h.agentDir));
+  const first = await h.invoke(input);
+  assert.equal(first.r.status, 'partial', JSON.stringify(first.r));
+  assert.deepEqual((first.r.data as CloseData).projectsClosed, [PROJECT.projectId]);
+  assert.ok(gh.closedProjects.has(PROJECT.projectId)); assert.ok(!gh.closedProjects.has(PB));
+  const resumed = await h.invoke(input);
+  assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
+  assert.equal(resumed.confirmCalls, 0);
+  assert.equal(closes(gh), 1, 'the Issue is closed once');
+  assert.ok(gh.closedProjects.has(PB));
+  const projectCloses = gh.calls.filter(c => c.name === 'gh_project_close').map(c => (JSON.parse(readFileSync((c.args as {changePath: string}).changePath, 'utf8')) as {projectId: string}).projectId);
+  assert.equal(projectCloses.filter(id => id === PROJECT.projectId).length, 1, 'a closed Project is not sent again');
+  assert.deepEqual((resumed.r.data as CloseData).projectsClosed, [PROJECT.projectId, PB]);
+  assert.equal((resumed.r.data as CloseData).pendingStep, null);
+});
+test('an item added after the acceptance makes the Project skipped, not closed', async t => {
+  const gh = recordedWorld();
+  const h = await harness(t, gh, {confirm: () => { gh.projects.get(PROJECT.projectId)!.push(99); return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, []); assert.deepEqual(d.projectsSkipped, [{projectId: PROJECT.projectId, reason: 'foreign-items'}]);
+  assert.equal(gh.count('gh_project_close'), 0);
+});
+test('a tree issue reopened after the acceptance blocks with PROJECT_ITEMS_OPEN', async t => {
+  const gh = recordedWorld();
+  const h = await harness(t, gh, {confirm: () => { gh.issues.get(11)!.state = 'open'; return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
+  assert.ok(out.r.problems.some(p => p.code === 'PROJECT_ITEMS_OPEN'), JSON.stringify(out.r.problems));
+  assert.equal(gh.count('gh_project_close'), 0);
+  assert.deepEqual([(out.r.data as CloseData).issueClosed, (out.r.data as CloseData).pendingStep], [true, 'project-close']);
+});
+test('a close reported applied but not visible is caught by the read-back', async t => {
+  const gh = recordedWorld();
+  gh.overrides.set('gh_project_close', () => FakePiGh.ok({projectId: PROJECT.projectId}, 'applied'));
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.notEqual(out.r.status, 'applied');
+  assert.ok(out.r.problems.some(p => p.code === 'PROJECT_NOT_CLOSED'), JSON.stringify(out.r.problems));
+  assert.deepEqual([(out.r.data as CloseData).issueClosed, (out.r.data as CloseData).pendingStep], [true, 'project-close']);
+});
+test('the optional project Done step still runs before the Projects are closed', async t => {
+  const gh = recordedWorld(); const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: PROJECT}));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.equal(d.projectUpdated, true); assert.deepEqual(d.projectsClosed, [PROJECT.projectId]);
+  const order = gh.calls.map(c => c.name).filter(n => /close_if_current|field_update|project_close/.test(n));
+  assert.deepEqual(order, ['gh_issue_close_if_current', 'gh_project_field_update', 'gh_project_close']);
 });

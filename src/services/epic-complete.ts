@@ -1,7 +1,7 @@
 // #16 scaffold_epic_complete: final acceptance of a verification-stage Epic. Everything is checked (specification,
 // requirement coverage, final evidence, verifiedRef contained in origin's default branch, optional Project target) and the
-// parent TUI accepts exactly that; then body/Stage (B1/B2) → close (B3) → read back → Project Done → read back, journaled.
-// Once this operation has closed the Issue, a resume only finishes the Project step. No reopen, rollback or notification.
+// parent TUI accepts exactly that; then body/Stage (B1/B2) → close (B3) → read back → Project Done → read back →
+// the Projects recorded on the Epic closed and read back, journaled. Once this operation has closed the Issue, a resume only finishes the Project steps. No reopen, rollback or notification.
 import {join} from 'node:path';
 import {
   decodeMutationInput, isGitObjectId, isSha256, problem,
@@ -24,7 +24,10 @@ import {planProjectClose, type ProjectClosePlan} from '../core/project-close-pla
 export const EPIC_COMPLETE = 'scaffold_epic_complete';
 export interface ProjectTarget { projectId: string; itemId: string; statusFieldId: string; doneOptionId: string }
 export type EpicCompleteInput = MutationInput & {verifiedRef: GitObjectId; finalEvidenceRefs: OwnedEvidenceRef[]; project?: ProjectTarget};
-export interface EpicCompleteData { issueClosed: boolean; projectUpdated: boolean; verifiedRef: string; remoteMainRef: string; pendingStep: string | null }
+export interface EpicCompleteData {
+  issueClosed: boolean; projectUpdated: boolean; verifiedRef: string; remoteMainRef: string; pendingStep: string | null;
+  projectsClosed: string[]; projectsSkipped: ProjectClosePlan['skipped'];
+}
 
 export function decodeEpicCompleteInput(value: unknown): Decoded<EpicCompleteInput> {
   const normalized = (x: unknown) => typeof x === 'string' && !x.includes('@') && !x.startsWith('/') && x.split('/').every(s => s !== '' && s !== '.' && s !== '..');
@@ -76,6 +79,10 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     const [fields, items] = [await call.bridge.call('gh_project_get', {projectId: p.projectId}, d => (d as {fields?: ProjectField[]} | null)?.fields, call.scope), await call.bridge.call('gh_project_items', {projectId: p.projectId}, d => (d as {items?: ProjectItem[]} | null)?.items, call.scope)];
     return {fields: fields.status === 'ok' ? fields.data! : undefined, items: items.status === 'ok' ? items.data! : undefined};
   };
+  // A recorded Project: whether it shows closed (undefined when it cannot be read).
+  const projectClosed = async (projectId: string) => { const r = await call.bridge.call('gh_project_get', {projectId}, d => typeof (d as {closed?: unknown} | null)?.closed === 'boolean' ? (d as {closed: boolean}).closed : undefined, call.scope); return r.status === 'ok' ? r.data! : undefined; };
+  /** Stands in for the plan of an operation journaled before plans were recorded. */
+  const NO_PLAN: ProjectClosePlan = {close: [], alreadyClosed: [], skipped: [{projectId: null, reason: 'not-recorded'}]};
   const projectDone = (items: ProjectItem[] | undefined) => !!items?.find(i => i.id === input.project!.itemId)?.fieldValues?.nodes?.some(v => v.field?.id === input.project!.statusFieldId && v.optionId === input.project!.doneOptionId);
 
   let gate: CompletionResult | undefined;
@@ -151,6 +158,9 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     payloadDigest: taggedDigest('epic-complete', payload), journal, scope: call.scope,
   }, async run => {
     const refs = (run.done('refs') as {remoteMainRef: string} | undefined) ?? (run.note('refs', {remoteMainRef: gate!.remoteMainRef}), {remoteMainRef: gate!.remoteMainRef!});
+    // The Projects to close are those accepted with this completion; a resume after the close reuses them and does not plan again.
+    if (closePlan) run.note('projects-plan', closePlan);
+    let plan = (run.done('projects-plan') as ProjectClosePlan | undefined) ?? NO_PLAN;
     // A change an earlier run sent without a confirmed outcome goes through run.write (its reconcile reads GitHub)
     // even when GitHub already shows it; skipping it would leave the operation uncertain on every resume.
     const pending = (step: string) => run.record.steps.some(s => s.name === step && (s.phase === 'requested' || s.phase === 'unknown'));
@@ -208,7 +218,38 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       if (!projectDone((await readProject()).items)) return run.stop([problem('PROJECT_NOT_DONE', 'project', 'The Project item does not show Done.')]);
       projectUpdated = true;
     }
-    return {status: 'applied', data: {issueClosed: true, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: refs.remoteMainRef, pendingStep: null}};
+    // 5. Recorded Projects: read the items again, close, read back. Items not of the tree added since the acceptance → left open.
+    const closedNow: string[] = [];
+    if (plan.close.length) {
+      run.checkpoint();
+      const tree = await readEpicTree(input.repo, input.epicIssue, call.bridge, call.scope);
+      if (!tree.ok) return run.stop(tree.problems);
+      const byNumber = new Map(tree.value.map(i => [i.number, i]));
+      for (const projectId of [...plan.close]) {
+        const step = `project-close:${projectId}`;
+        const path = join(dir, `project-close-${projectId}.json`);
+        if (!run.done(step) && !pending(step)) {
+          const items = await call.bridge.call('gh_project_items', {projectId}, d => Array.isArray((d as {items?: unknown} | null)?.items) ? (d as {items: ProjectItem[]}).items : undefined, call.scope);
+          if (items.status !== 'ok') return run.stop([problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`)]);
+          const contents = items.data!.map(i => i.content);
+          if (!contents.every(c => c?.__typename === 'Issue' && typeof c.number === 'number' && byNumber.has(c.number) && String(c.repository?.nameWithOwner ?? '').toLowerCase() === input.repo.toLowerCase())) {
+            // Not a failure: the Project is left open and reported; the recorded plan keeps it out of a resume.
+            plan = {...plan, close: plan.close.filter(id => id !== projectId), skipped: [...plan.skipped, {projectId, reason: 'foreign-items'}]};
+            run.note('projects-plan', plan);
+            continue;
+          }
+          const open = contents.filter(c => byNumber.get(c!.number as number)!.state === 'open' || (c as {state?: unknown}).state === 'OPEN').map(c => `#${c!.number}`);
+          if (open.length) return run.stop([problem('PROJECT_ITEMS_OPEN', `projectIds[${projectId}]`, `Project ${projectId} holds Issues open again: ${open.join(', ')}. Close them and resume with the same operationId.`)]);
+          await writeOwnedFile(path, JSON.stringify({version: 1, repo: input.repo, operation: 'project-close', projectId}), {root: call.namespaceRoot});
+        }
+        await run.write(step, () => call.bridge.call('gh_project_close', {changePath: path}, () => true as const, call.scope), {
+          reconcile: async () => { const c = await projectClosed(projectId); return c === undefined ? 'unknown' : c ? 'applied' : 'not-applied'; },
+        });
+        if ((await projectClosed(projectId)) !== true) return run.stop([problem('PROJECT_NOT_CLOSED', `projectIds[${projectId}]`, `The recorded Project ${projectId} does not show as closed.`)]);
+        closedNow.push(projectId);
+      }
+    }
+    return {status: 'applied', data: {issueClosed: true, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: refs.remoteMainRef, pendingStep: null, projectsClosed: [...plan.alreadyClosed, ...closedNow], projectsSkipped: plan.skipped}};
   });
   if ((result.status === 'partial' || result.status === 'unknown' || result.status === 'blocked') && (await journal.load(input.operationId))) {
     // Report from what GitHub shows now, not from the journal alone.
@@ -218,8 +259,14 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     if (now.ok) {
       const d = now.value.doc as EpicDocV1;
       const issueClosed = now.value.state === 'closed';
-      const pendingStep = d.stage !== 'completed' ? 'epic-body' : !now.value.labels.includes('Stage: Completed') ? 'epic-labels' : !issueClosed ? 'close' : input.project ? 'project' : null;
-      return withAgentApproval({...result, data: {issueClosed, projectUpdated: false, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep}} as ScaffoldResult<EpicCompleteData>, approval);
+      const plan = (rec?.steps.find(s => s.name === 'projects-plan' && s.phase === 'done')?.data as ProjectClosePlan | undefined) ?? closePlan ?? NO_PLAN;
+      // The Project steps run after the close; once it shows closed they are reported from what GitHub shows now.
+      const projectUpdated = issueClosed && !!input.project && projectDone((await readProject()).items);
+      const projectsClosed = [...plan.alreadyClosed];
+      if (issueClosed) for (const id of plan.close) if ((await projectClosed(id)) === true) projectsClosed.push(id);
+      const pendingStep = d.stage !== 'completed' ? 'epic-body' : !now.value.labels.includes('Stage: Completed') ? 'epic-labels' : !issueClosed ? 'close'
+        : input.project && !projectUpdated ? 'project' : plan.close.some(id => !projectsClosed.includes(id)) ? 'project-close' : null;
+      return withAgentApproval({...result, data: {issueClosed, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: remote, pendingStep, projectsClosed, projectsSkipped: plan.skipped}} as ScaffoldResult<EpicCompleteData>, approval);
     }
   }
   return withAgentApproval(result as ScaffoldResult<EpicCompleteData>, approval);
