@@ -10,7 +10,7 @@ export interface FakeLabel { name: string; color: string; description: string }
 export const PI_GH_020_OPERATIONS = [
   'gh_issue_validate', 'gh_issue_preview', 'gh_issue_submit', 'gh_labels_validate', 'gh_labels_preview', 'gh_labels_apply', 'gh_issue_form',
   'gh_issue_get', 'gh_issue_list', 'gh_subissues_list', 'gh_dependencies_list', 'gh_project_get', 'gh_project_items',
-  'gh_issue_edit', 'gh_issue_close', 'gh_subissue_add', 'gh_dependency_add', 'gh_project_add_issue', 'gh_project_field_update', 'gh_capabilities',
+  'gh_issue_edit', 'gh_issue_close', 'gh_subissue_add', 'gh_dependency_add', 'gh_project_add_issue', 'gh_project_field_update', 'gh_project_close', 'gh_capabilities',
 ];
 /** pi-gh with the B4 addition (KendrickMalar/pi-gh#5). */
 export const PI_GH_WITH_LABELS_LIST = [...PI_GH_020_OPERATIONS, 'gh_labels_list'];
@@ -40,6 +40,10 @@ export class FakePiGh {
   /** Project fields (id → type/options) and single-select values by item id (PVTI_<issue>). */
   readonly projectFields = new Map<string, {id: string; name: string; dataType: string; options?: {id: string; name: string}[]}[]>();
   readonly itemValues = new Map<string, Record<string, string>>();
+  /** Projects closed through gh_project_close. */
+  readonly closedProjects = new Set<string>();
+  /** Non-Issue items (PullRequest, DraftIssue) injected per project id. */
+  readonly projectExtraItems = new Map<string, unknown[]>();
   constructor(readonly repo = 'example/demo') {}
 
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
@@ -104,7 +108,16 @@ export class FakePiGh {
     if (name === 'gh_project_get') {
       const fields = this.projectFields.get((args as {projectId: string}).projectId);
       if (!fields) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
-      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', fields});
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', closed: this.closedProjects.has((args as {projectId: string}).projectId), fields});
+    }
+    if (name === 'gh_project_close') {
+      const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;
+      if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'projectId'].includes(k)) || ['version', 'repo', 'operation', 'projectId'].some(k => !(k in c))) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
+      const id = c.projectId as string;
+      if (c.operation !== 'project-close' || !this.projects.has(id)) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      if (this.closedProjects.has(id)) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
+      this.closedProjects.add(id);
+      return FakePiGh.ok({projectId: id}, 'applied');
     }
     if (name === 'gh_project_field_update') {
       const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {repo: string; operation: string; projectId: string; itemId: string; fieldId: string; value: {singleSelectOptionId?: string}};
@@ -119,8 +132,8 @@ export class FakePiGh {
     if (name === 'gh_project_items') {
       const items = this.projects.get((args as {projectId: string}).projectId);
       if (!items) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
-      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', items: items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: `I_${n}`, number: n, repository: {nameWithOwner: this.repo}},
-        fieldValues: {nodes: Object.entries(this.itemValues.get(`PVTI_${n}`) ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}}))}}))});
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', items: [...items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: `I_${n}`, number: n, state: this.issues.get(n)?.state === 'closed' ? 'CLOSED' : 'OPEN', repository: {nameWithOwner: this.repo}},
+        fieldValues: {nodes: Object.entries(this.itemValues.get(`PVTI_${n}`) ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}}))}})), ...(this.projectExtraItems.get((args as {projectId: string}).projectId) ?? [])]});
     }
     if (name === 'gh_subissue_add') {
       // pi-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
