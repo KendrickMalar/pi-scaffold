@@ -4,6 +4,10 @@ import {
   LIMITS, decodeMutationInput, decodeScaffoldDoc, decodeEpicDoc, isErrorStatus, parseStableId,
   isUuid, isSha256, isRepoRef, isGitObjectId, type Problem,
 } from '../src/core/contracts.js';
+import {canonicalDocJson, renderEpicBlock} from '../src/core/epic-render.js';
+import {parseIssueBody} from '../src/core/body-codec.js';
+import {designDigest, dependencyPlanDigest, specificationDigest} from '../src/core/digests.js';
+import type {EpicDocV1} from '../src/core/contracts.js';
 import {initialDoc, populatedDoc, featureDoc, clone, OPERATION_ID, SHA_A} from './helpers/docs.js';
 
 const validInput = () => ({repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: 1, expectedBodySha256: SHA_A});
@@ -188,4 +192,36 @@ test('feature docs validate bindings and keys', () => {
 test('non-success statuses are errors', () => {
   for (const s of ['blocked', 'partial', 'unknown', 'cancelled'] as const) assert.equal(isErrorStatus(s), true);
   for (const s of ['validated', 'prepared', 'applied', 'noop'] as const) assert.equal(isErrorStatus(s), false);
+});
+
+test('an Epic without projectIds still decodes and round-trips unchanged', () => {
+  const doc = populatedDoc();
+  const decoded = decodeEpicDoc(doc);
+  assert.ok(decoded.ok);
+  assert.equal('projectIds' in decoded.value, false);
+  assert.equal(canonicalDocJson(decoded.value), canonicalDocJson(doc));
+  assert.equal(parseIssueBody(renderEpicBlock(doc)).ok, true);
+});
+
+test('projectIds round-trips through render and parse', () => {
+  const doc = populatedDoc(); doc.projectIds = ['PVT_a1', 'PVT_b2'];
+  const parsed = parseIssueBody(renderEpicBlock(doc));
+  assert.ok(parsed.ok);
+  assert.deepEqual((parsed.value.doc as EpicDocV1).projectIds, ['PVT_a1', 'PVT_b2']);
+});
+
+test('projectIds rejects a non-PVT id and a duplicate', () => {
+  const bad = populatedDoc(); bad.projectIds = ['PVT_a1', 'PRJ_x'];
+  assert.ok(paths(rejected(decodeEpicDoc(bad))).includes('projectIds[1]'));
+  const dup = populatedDoc(); dup.projectIds = ['PVT_a1', 'PVT_a1'];
+  assert.ok(rejected(decodeEpicDoc(dup)).some(p => p.code === 'DUPLICATE_ID'));
+  const many = populatedDoc(); many.projectIds = Array.from({length: 11}, (_, i) => `PVT_${i}`);
+  assert.ok(rejected(decodeEpicDoc(many)).some(p => p.code === 'LIMIT_EXCEEDED'));
+});
+
+test('projectIds does not change designDigest, dependencyPlanDigest or specificationDigest', () => {
+  const a = populatedDoc(), b = populatedDoc(); b.projectIds = ['PVT_a1'];
+  assert.equal(designDigest(a), designDigest(b));
+  assert.equal(dependencyPlanDigest(a.dependencyPlan), dependencyPlanDigest(b.dependencyPlan));
+  assert.equal(specificationDigest(a), specificationDigest(b));
 });
