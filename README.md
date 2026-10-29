@@ -46,7 +46,7 @@ Epicは `setup → specification → basic-design → implementation → verific
 | basic-design | `scaffold_waves_apply` | 検証を通ったWave計画をFeatureのラベルへ反映し、計画をEpicに保存する。計画の2つのdigestは、先に`scaffold_waves_verify`を呼んで得る |
 | basic-design→implementation | `scaffold_handoff_implementation` | 設計・Feature・合格基準・Waveを確認し、**実装開始の指示**を得てから引き継ぐ |
 | implementation→verification | `scaffold_handoff_verification` | 統合コミットと、FeatureごとのAC別の証拠（レポート・ログのハッシュ）を固定して引き継ぐ。Epicは閉じない |
-| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**最終受け入れ**を得てから、本文・Stage・closeを反映する（owner policyの`agentApprovals`に`epic-completion`があれば、親エージェントが自分で記録する。後述）。指定があればProjectをDoneにする |
+| verification→completed | `scaffold_epic_complete` | 完了条件を確認し、**最終受け入れ**を得てから、本文・Stage・closeを反映する（owner policyの`agentApprovals`に`epic-completion`があれば、親エージェントが自分で記録する。後述）。指定があればProjectをDoneにする。Epicの木（Feature・Task）に開いたIssueがあれば`TREE_ISSUES_OPEN`で止まる。完了後、Epicに記録されたProjectのうち、repoに紐付いていて、中身がこのEpicの木の閉じたIssueだけのものを閉じる（確認画面に出る。結果は`projectsClosed`（返す時点で閉じていると読めたもの）・`projectsSkipped`（`not-recorded`・`foreign-items`・`not-linked`。失敗ではない）。別repoのsub-issueは木に含めない。閉じる途中の失敗は同じ`operationId`で呼び直すと続きから進む） |
 | basic-design・implementation・verification | `scaffold_specification_revise` | 承認済みの仕様を改訂する（意図を変えるときだけ）。patchは`scaffold_specification_update`と同じ形で、理由を必ず付ける。改訂後も仕様がそろっていること。調査結果は戻さない。**仕様の改訂**の承認を得てから、Epicの`specRevisions`に記録し、変わったREQ/ACを合格基準に持つFeatureだけに`Blocked`を付ける。Stageは動かさない |
 | basic-design・implementation・verification | `scaffold_feature_revise` | Featureを1件、改訂後の仕様に合わせる（合格基準と、任意で設計の参照）。Featureの`expectedRevision`・`expectedBodySha256`を渡す。仕様の改訂で止まったFeatureなら`Blocked`を外す（ほかの理由の`Blocked`は残す） |
 

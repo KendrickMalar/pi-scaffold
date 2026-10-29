@@ -83,6 +83,8 @@ export interface EpicDocV1 {
   design: DesignRef | null; dependencyPlan: DependencyPlan | null; wavePlan: WavePlan | null; handoff: HandoffState | null;
   /** Absent until the first revision (older Epics never carry it). */
   specRevisions?: SpecRevision[];
+  /** Absent until a Project is recorded (older Epics never carry it). Not part of any digest. */
+  projectIds?: string[];
 }
 export type FeatureRole = 'coding-manager' | 'coder' | 'tester';
 export interface FeatureDocV1 {
@@ -139,6 +141,8 @@ const SHA_RE = /^[0-9a-f]{64}$/;
 const REPO_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 const OID_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const PROJECT_ID_RE = /^PVT_[A-Za-z0-9_-]{1,200}$/;
+export const isProjectId = (v: unknown): v is string => typeof v === 'string' && PROJECT_ID_RE.test(v);
 export const isUuid = (v: unknown): v is UUID => typeof v === 'string' && UUID_RE.test(v);
 export const isSha256 = (v: unknown): v is Sha256 => typeof v === 'string' && SHA_RE.test(v);
 export const isRepoRef = (v: unknown): v is RepoRef => typeof v === 'string' && REPO_RE.test(v) && !/\/\.{1,2}$/.test(v);
@@ -361,12 +365,14 @@ function epic(r: Reader, o: Rec): EpicDocV1 {
     wavePlan: o.wavePlan === null ? null : wavePlan(r, o.wavePlan, 'wavePlan'),
     handoff: o.handoff === null ? null : handoff(r, o.handoff, 'handoff'),
     ...(o.specRevisions !== undefined ? {specRevisions: r.array(o.specRevisions, 'specRevisions', (v, p) => specRevision(r, v, p))} : {}),
+    ...(o.projectIds !== undefined ? {projectIds: r.array(o.projectIds, 'projectIds', (v, p) => r.pattern(v, p, isProjectId, 'PVT_ project ID'), 10)} : {}),
   };
   r.unique(doc.questions.map(q => q.questionId), 'questions', 'questionId');
   r.unique(doc.requirements.map(q => q.id), 'requirements', 'id');
   r.unique(doc.criteria.map(q => q.id), 'criteria', 'id');
   r.unique(doc.research.map(q => q.researchId), 'research', 'researchId');
   r.unique(doc.decisions.map(q => q.id), 'decisions', 'id');
+  if (doc.projectIds) r.unique(doc.projectIds, 'projectIds', 'projectId');
   const reqs = new Set(doc.requirements.map(q => q.id));
   doc.criteria.forEach((c, i) => c.requirementIds.forEach((id, j) => { if (id && parseStableId('REQ', id) && !reqs.has(id)) r.add('UNKNOWN_REFERENCE', `criteria[${i}].requirementIds[${j}]`, `${id} does not exist.`); }));
   return doc;
@@ -412,7 +418,7 @@ export function decodeScaffoldDoc(value: unknown): Decoded<ScaffoldDocV1> {
   const kind = value.kind;
   const keys = kind === 'epic' ? EPIC_KEYS : kind === 'feature' ? FEATURE_KEYS : kind === 'task' ? TASK_KEYS : undefined;
   if (!keys) { r.add('INVALID_VALUE', 'kind', 'Expected epic, feature or task.'); return r.result(undefined as never); }
-  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions'] : [])!;
+  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions', 'projectIds'] : [])!;
   const doc = kind === 'epic' ? epic(r, o) : kind === 'feature' ? feature(r, o) : task(r, o);
   return r.result(doc);
 }

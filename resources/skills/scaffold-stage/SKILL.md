@@ -49,5 +49,10 @@ description: Scaffold工程（setup→specification→basic-design→implementat
    - 最終の証拠を用意します。
    - `verifiedRef` がoriginの既定ブランチに含まれていることを確かめます。手元に無ければ、自分で `git fetch` します（merge / push はしません）。
    - `scaffold_epic_complete` を呼びます（`agentApprovals` に `epic-completion` があるときは、確認画面は出ず、呼んだ時点で親エージェントの受け入れとして記録されます）。
+   - `scaffold_epic_complete` は、Epic の木（Feature・Task）に開いている Issue があると `TREE_ISSUES_OPEN` で止まります。先に Feature・Task を閉じてから呼び直します。
+   - 完了すると、Epic に記録された Project（`scaffold_dependencies_apply` の `projectId` で記録したもの）を閉じます。閉じるのは、Epic を閉じた後で、この repo に紐付いていて、中身がこの Epic の木の閉じた Issue だけの Project です。別の repo の sub-issue は木に含めません（開いていても止まりません）。確認画面に、閉じる Project が出ます。
+   - 結果の `projectsClosed` は閉じた Project、`projectsSkipped` は閉じなかった Project と理由です。`not-recorded` は Epic に Project が記録されていない、`foreign-items` は Project に別の Issue や Issue 以外の項目が入っているので閉じなかった、`not-linked` は Project がこの repo に紐付いていないので閉じなかった（pi-gh は紐付いた Project しか閉じません）、という意味です。どれも完了の失敗ではありません。`foreign-items`・`not-linked` の Project は、必要なら人が手で閉じます。`projectsClosed` には、結果を返す時点で閉じていると読めた Project だけが入ります。
+   - Project を閉じる途中で失敗したら、完了は止まります（`pendingStep` が `project-close`、`PROJECT_UNREADABLE`・`PROJECT_ITEMS_OPEN`・`PROJECT_NOT_CLOSED`）。原因を直し、同じ `operationId` で呼び直すと続きから進みます。
+   - 記録した Project が消された、または読めない（`PROJECT_UNREADABLE`）とき、`projectIds` から ID を外すツールはありません。Epic を閉じる前に止まった場合は、呼び直すと検査からやり直すので、人が読む権限を戻す（`gh auth refresh -s project` など）か、Epic の管理ブロックの JSON から ID を手で消します（2スペースの整形を崩すと `DOC_PROJECTION_MISMATCH` で止まります）。Epic を閉じた後に止まった場合は、Epic の完了はもう反映済みです。呼び直しは承認時に記録した計画を使うので、管理ブロックを直しても進みません。人が権限を戻すか、残りの Project を手で閉じて、呼び直しはやめます。
 
 登録されているツールは、受け入れ済みのものだけです。登録されていない操作は、まだ提供されていません。
