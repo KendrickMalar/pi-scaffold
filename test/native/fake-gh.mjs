@@ -40,12 +40,19 @@ if (args.includes('graphql')) {
     if (!items.includes(n)) { items.push(n); writeFileSync(pfile, JSON.stringify(items)); appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint: 'graphql', projectAdd: n}) + '\n'); }
     out({data: {addProjectV2ItemById: {item: {id: `PVTI_${n}`}}}});
   }
+  const cfile = join(state, `project-${variables.projectId}-closed`);
+  if (query.includes('updateProjectV2(')) {
+    writeFileSync(cfile, '1');
+    appendFileSync(join(state, 'writes.jsonl'), JSON.stringify({endpoint: 'graphql', projectClose: variables.projectId}) + '\n');
+    out({data: {updateProjectV2: {projectV2: {id: variables.projectId, closed: true}}}});
+  }
+  if (query.includes('repositories(first')) out({data: {node: {__typename: 'ProjectV2', id: variables.projectId, repositories: {nodes: [{nameWithOwner: 'example/demo'}], pageInfo: {hasNextPage: false, endCursor: null}}}}});
   const kind = query.includes('items(first') ? 'items' : 'fields';
   const ffile = join(state, `project-${variables.projectId}-fields.json`);
   const fields = existsSync(ffile) ? JSON.parse(readFileSync(ffile, 'utf8')) : [];
   const nodes = kind === 'fields' ? fields : items.map(n => ({id: `PVTI_${n}`, content: {__typename: 'Issue', id: issueBy(n).node_id, number: n, repository: {nameWithOwner: 'example/demo'}},
     fieldValues: {nodes: Object.entries(values[`PVTI_${n}`] ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}})), pageInfo: {hasNextPage: false, endCursor: null}}}));
-  out({data: {node: {__typename: 'ProjectV2', id: variables.projectId, title: 'Fixture', [kind]: {nodes, pageInfo: {hasNextPage: false, endCursor: null}}}}});
+  out({data: {node: {__typename: 'ProjectV2', id: variables.projectId, title: 'Fixture', ...(kind === 'fields' ? {closed: existsSync(cfile)} : {}), [kind]: {nodes, pageInfo: {hasNextPage: false, endCursor: null}}}}});
 }
 const [path, query = ''] = endpoint.split('?');
 const params = new URLSearchParams(query);

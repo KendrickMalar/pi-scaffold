@@ -49,5 +49,9 @@ description: Scaffold工程（setup→specification→basic-design→implementat
    - 最終の証拠を用意します。
    - `verifiedRef` がoriginの既定ブランチに含まれていることを確かめます。手元に無ければ、自分で `git fetch` します（merge / push はしません）。
    - `scaffold_epic_complete` を呼びます（`agentApprovals` に `epic-completion` があるときは、確認画面は出ず、呼んだ時点で親エージェントの受け入れとして記録されます）。
+   - `scaffold_epic_complete` は、Epic の木（Feature・Task）に開いている Issue があると `TREE_ISSUES_OPEN` で止まります。先に Feature・Task を閉じてから呼び直します。
+   - 完了すると、Epic に記録された Project（`scaffold_dependencies_apply` の `projectId` で記録したもの）を閉じます。閉じるのは、Epic を閉じた後で、中身がこの Epic の木の閉じた Issue だけの Project です。確認画面に、閉じる Project が出ます。
+   - 結果の `projectsClosed` は閉じた Project、`projectsSkipped` は閉じなかった Project と理由です。`not-recorded` は Epic に Project が記録されていない、`foreign-items` は Project に別の Issue や Issue 以外の項目が入っているので閉じなかった、という意味です。どちらも完了の失敗ではありません。
+   - Project を閉じる途中で失敗したら、完了は止まります（`pendingStep` が `project-close`、`PROJECT_UNREADABLE`・`PROJECT_ITEMS_OPEN`・`PROJECT_NOT_CLOSED`）。原因を直し、同じ `operationId` で呼び直すと続きから進みます。
 
 登録されているツールは、受け入れ済みのものだけです。登録されていない操作は、まだ提供されていません。

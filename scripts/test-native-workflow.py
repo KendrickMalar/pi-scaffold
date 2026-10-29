@@ -273,6 +273,13 @@ class Workflow(unittest.TestCase):
 
         # verification → completed. Negative checks first (nothing may be closed by them):
         final = evidence('final')
+        # The Features are still open: the Epic cannot be completed until the tree is closed.
+        (self.home / 'remote-head').write_text(integration)
+        stop = self.headless('scaffold_epic_complete', {**self.mutation(U(17)), 'verifiedRef': integration, 'finalEvidenceRefs': final}, ('blocked',))
+        self.assertIn('TREE_ISSUES_OPEN', json.dumps(stop))
+        self.assertEqual(self.issue(1)['state'], 'open')
+        for n in (f1, f2):
+            feature = self.issue(n); feature['state'] = 'closed'; (self.state / f'issue-{n}.json').write_text(json.dumps(feature))
         # origin's default branch does not contain the verified commit yet.
         (self.home / 'remote-head').write_text(design_commit)
         stop = self.headless('scaffold_epic_complete', {**self.mutation(U(15)), 'verifiedRef': integration, 'finalEvidenceRefs': final}, ('blocked',))
@@ -288,7 +295,8 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.issue(1)['state'], 'closed')
         self.assertEqual(self.labels(1), ['Scope: Epic', 'Stage: Completed', 'Type: Scaffold'])
         self.assertEqual(self.doc(1)['stage'], 'completed')
-        for n in (f1, f2): self.assertEqual(self.issue(n)['state'], 'open', 'Features are not closed by the workflow')
+        for n in (f1, f2): self.assertEqual(self.issue(n)['state'], 'closed', 'the Features were closed before completion; the workflow does not touch them')
+        self.assertEqual(done['data']['projectsSkipped'], [{'projectId': None, 'reason': 'not-recorded'}], 'no Project was recorded on this Epic')
         self.assertEqual(sorted(self.issue(1).get('sub_issues', [])), sorted([f1, f2]))
         self.assertEqual(self.issue(f2).get('blocked_by'), [f1])
         tabs = [t for t in self.herdr('tab', 'list')['result']['tabs'] if t['label'].startswith('scaffold-')]
