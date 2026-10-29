@@ -1,4 +1,4 @@
-// The tree of an Epic: the Epic, its native sub-issues (Features) and theirs (Tasks), each with its state.
+// The tree of an Epic: the Epic, its native sub-issues (Features) and theirs (Tasks) in the same repository, each with its state.
 import {failed, okValue, problem, type CallScope, type Decoded} from '../core/contracts.js';
 import {PiGhBridge} from './pi-gh.js';
 
@@ -19,9 +19,9 @@ function decodeChildren(d: unknown): Child[] | undefined {
 async function listChildren(repo: string, issue: number, bridge: PiGhBridge, scope: CallScope): Promise<Decoded<Child[]>> {
   const listed = await bridge.call('gh_subissues_list', {repo, issue}, decodeChildren, scope);
   if (listed.status !== 'ok') return failed([problem('TREE_INCOMPLETE', `tree[#${issue}]`, `The sub-issues of #${issue} could not be read completely.`), ...listed.problems]);
-  const foreign = listed.data!.filter(c => c.htmlUrl.toLowerCase() !== `https://github.com/${repo}/issues/${c.number}`.toLowerCase());
-  if (foreign.length) return failed(foreign.map(c => problem('FOREIGN_CHILD', `tree[${c.htmlUrl}]`, `${c.htmlUrl} is not an Issue of ${repo}; cross-repository children are not supported.`)));
-  return okValue(listed.data!);
+  // A sub-issue in another repository is not part of the tree: it is not traversed and does not count as open.
+  // A recorded Project holding such an Issue is then left open as foreign-items.
+  return okValue(listed.data!.filter(c => c.htmlUrl.toLowerCase() === `https://github.com/${repo}/issues/${c.number}`.toLowerCase()));
 }
 
 /** Reads the Epic, its Features and their Tasks (closed included) with their states. */

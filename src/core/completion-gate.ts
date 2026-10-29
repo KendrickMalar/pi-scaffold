@@ -60,7 +60,7 @@ export function completionApprovalView(epic: EpicDocV1, featureSetDigest: Sha256
     '証拠（参照とハッシュのみ確認。内容の真正性は保証しません）:', ...sortedEvidence.map(e => `- ${e.relativePath} sha256 ${e.sha256}`),
     `Project: ${project ? `${project.projectId} の item ${project.itemId} の ${project.statusFieldId} を ${project.doneOptionId} にする` : '変更しない'}`,
     ...(closePlan ? [...closePlan.close.map(id => `Project を閉じる: ${id}`), ...closePlan.alreadyClosed.map(id => `閉じない: ${id}（既に閉じている）`),
-      ...closePlan.skipped.map(s => s.projectId ? `閉じない: ${s.projectId}（別の Issue が混ざっている）` : 'Project の記録なし')] : []),
+      ...closePlan.skipped.map(s => !s.projectId ? 'Project の記録なし' : s.reason === 'not-linked' ? `閉じない: ${s.projectId}（repo に紐付いていない。手で閉じる）` : `閉じない: ${s.projectId}（別の Issue が混ざっている）`)] : []),
     '受け入れると、Epic の本文と Stage を完了にし、Issue を閉じます。',
   ].join('\n');
   return {contentDigest, text};

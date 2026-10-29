@@ -613,3 +613,54 @@ test('the optional project Done step still runs before the Projects are closed',
   const order = gh.calls.map(c => c.name).filter(n => /close_if_current|field_update|project_close/.test(n));
   assert.deepEqual(order, ['gh_issue_close_if_current', 'gh_project_field_update', 'gh_project_close']);
 });
+
+// ---- final review fixes: link check, report read-back, foreign-repo sub-issues ------------------------
+
+test('a Project not linked to the repo is skipped as not-linked at the acceptance and the completion is applied', async t => {
+  const gh = recordedWorld([PROJECT.projectId, PB]); gh.projectRepos.set(PB, ['other/repo']);
+  const shown: string[] = [];
+  const h = await harness(t, gh, {confirm: (_title, message) => { shown.push(message); return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, [PROJECT.projectId]); assert.deepEqual(d.projectsSkipped, [{projectId: PB, reason: 'not-linked'}]); assert.equal(d.pendingStep, null);
+  assert.match(shown[0]!, /閉じない: PVT_fixture2（repo に紐付いていない。手で閉じる）/);
+  assert.ok(!gh.closedProjects.has(PB)); assert.equal(gh.count('gh_project_close'), 1);
+});
+test('a link removed after the acceptance makes the Project skipped as not-linked, not failed', async t => {
+  const gh = recordedWorld();
+  const h = await harness(t, gh, {confirm: () => { gh.projectRepos.set(PROJECT.projectId, []); return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, []); assert.deepEqual(d.projectsSkipped, [{projectId: PROJECT.projectId, reason: 'not-linked'}]); assert.equal(d.pendingStep, null);
+  assert.equal(gh.count('gh_project_close'), 0);
+});
+test('an already closed Project reopened after the acceptance is not reported closed', async t => {
+  const gh = recordedWorld(); gh.closedProjects.add(PROJECT.projectId);
+  const h = await harness(t, gh, {confirm: () => { gh.closedProjects.delete(PROJECT.projectId); return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual((out.r.data as CloseData).projectsClosed, []);
+});
+test('a partial result reports an already closed Project only when it still reads back closed', async t => {
+  const gh = recordedWorld([PROJECT.projectId, PB]); gh.closedProjects.add(PROJECT.projectId);
+  gh.overrides.set('gh_project_close', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  const h = await harness(t, gh, {confirm: () => { gh.closedProjects.delete(PROJECT.projectId); return true; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
+  const d = out.r.data as CloseData;
+  assert.deepEqual([d.issueClosed, d.pendingStep], [true, 'project-close']);
+  assert.deepEqual(d.projectsClosed, []);
+});
+test('an open sub-issue in another repository does not block; a Project holding it is foreign-items', async t => {
+  const gh = recordedWorld([PROJECT.projectId, PB]);
+  gh.projectExtraItems.set(PB, [{id: 'PVTI_x5', content: {__typename: 'Issue', id: 'I_x5', number: 5, state: 'OPEN', repository: {nameWithOwner: 'other/repo'}}}]);
+  gh.overrides.set('gh_subissues_list', args => (args as {issue: number}).issue === 11 ? FakePiGh.ok([{number: 5, title: 'X', body: '', state: 'open', labels: [], html_url: 'https://github.com/other/repo/issues/5'}]) : undefined);
+  const h = await harness(t, gh);
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  const d = out.r.data as CloseData;
+  assert.deepEqual(d.projectsClosed, [PROJECT.projectId]); assert.deepEqual(d.projectsSkipped, [{projectId: PB, reason: 'foreign-items'}]);
+  assert.ok(!gh.closedProjects.has(PB));
+});

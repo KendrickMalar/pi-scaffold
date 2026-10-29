@@ -11,8 +11,9 @@ export function createTool(runtime: ScaffoldRuntime) {
       + 'covered by Feature criteria whose final evidence (owned reports/logs, hashes) passed on verifiedRef or its ancestors, and verifiedRef (a full '
       + 'commit id) contained in origin\'s default branch as `git ls-remote` reports it — if that commit is not local, stop and ask the user to fetch '
       + '(never fetch/merge/push). Optional project {projectId,itemId,statusFieldId,doneOptionId} is validated up front. Every Feature and Task must already be closed. Then: '
-      + 'body/Stage → Completed, close, read back, Project Done, read back, then close the Projects recorded on the Epic (projectIds) that hold only '
-      + 'Issues of its tree, and read them back (projectsClosed; others in projectsSkipped as not-recorded or foreign-items). Partial progress '
+      + 'body/Stage → Completed, close, read back, Project Done, read back, then close the Projects recorded on the Epic (projectIds) that are linked to repo and hold only '
+      + 'Issues of its tree, and read them back (projectsClosed: those reading back closed; others in projectsSkipped as not-recorded, foreign-items '
+      + 'or not-linked — not failures, close those by hand). Sub-issues in another repository are not part of the tree. Partial progress '
       + 'resumes with the same operationId (no second close; pendingStep project-close closes the remaining Projects). No reopen, rollback, '
       + 'release or notification; evidence authenticity is not claimed.',
     parameters: Type.Object({

@@ -42,10 +42,13 @@ export class FakePiGh {
   readonly itemValues = new Map<string, Record<string, string>>();
   /** Projects closed through gh_project_close. */
   readonly closedProjects = new Set<string>();
+  /** Repositories linked to a project (nameWithOwner); a project not listed here is linked to this repo only. */
+  readonly projectRepos = new Map<string, string[]>();
   /** Non-Issue items (PullRequest, DraftIssue) injected per project id. */
   readonly projectExtraItems = new Map<string, unknown[]>();
   constructor(readonly repo = 'example/demo') {}
 
+  linkedRepos(projectId: string) { return this.projectRepos.get(projectId) ?? [this.repo]; }
   get writes() { return this.calls.filter(c => !READ_TOOLS.has(c.name)).length; }
   count(name: string) { return this.calls.filter(c => c.name === name).length; }
   add(issue: FakeIssue) { this.issues.set(issue.number, issue); return this; }
@@ -108,13 +111,14 @@ export class FakePiGh {
     if (name === 'gh_project_get') {
       const fields = this.projectFields.get((args as {projectId: string}).projectId);
       if (!fields) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
-      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', closed: this.closedProjects.has((args as {projectId: string}).projectId), fields});
+      return FakePiGh.ok({id: (args as {projectId: string}).projectId, title: 'Fixture', closed: this.closedProjects.has((args as {projectId: string}).projectId), fields, repositories: this.linkedRepos((args as {projectId: string}).projectId)});
     }
     if (name === 'gh_project_close') {
       const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;
       if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'projectId'].includes(k)) || ['version', 'repo', 'operation', 'projectId'].some(k => !(k in c))) return FakePiGh.err('rejected', 'UNKNOWN_KEY');
       const id = c.projectId as string;
-      if (c.operation !== 'project-close' || !this.projects.has(id)) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
+      // Like pi-gh: only a Project linked to the repository may be closed.
+      if (c.operation !== 'project-close' || !this.projects.has(id) || !this.linkedRepos(id).some(r => r.toLowerCase() === String(c.repo).toLowerCase())) return FakePiGh.err('rejected', 'GITHUB_IDENTITY');
       if (this.closedProjects.has(id)) return {result: {content: [], structuredContent: {status: 'noop'}}, isError: false};
       this.closedProjects.add(id);
       return FakePiGh.ok({projectId: id}, 'applied');

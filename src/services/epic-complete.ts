@@ -19,7 +19,7 @@ import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {readEpicTree} from '../ports/epic-tree.js';
-import {planProjectClose, type ProjectClosePlan} from '../core/project-close-plan.js';
+import {linked, planProjectClose, type ProjectClosePlan} from '../core/project-close-plan.js';
 
 export const EPIC_COMPLETE = 'scaffold_epic_complete';
 export interface ProjectTarget { projectId: string; itemId: string; statusFieldId: string; doneOptionId: string }
@@ -81,6 +81,11 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
   };
   // A recorded Project: whether it shows closed (undefined when it cannot be read).
   const projectClosed = async (projectId: string) => { const r = await call.bridge.call('gh_project_get', {projectId}, d => typeof (d as {closed?: unknown} | null)?.closed === 'boolean' ? (d as {closed: boolean}).closed : undefined, call.scope); return r.status === 'ok' ? r.data! : undefined; };
+  // A recorded Project's closed flag and linked repositories (nameWithOwner); an answer without them counts as unreadable.
+  const decodeProjectState = (d: unknown) => { const v = d as {closed?: unknown; repositories?: unknown} | null; return typeof v?.closed === 'boolean' && Array.isArray(v.repositories) && v.repositories.every(r => typeof r === 'string') ? {closed: v.closed, repositories: v.repositories as string[]} : undefined; };
+  const readProjectState = (projectId: string) => call.bridge.call('gh_project_get', {projectId}, decodeProjectState, call.scope);
+  // Report only the Projects that read back closed now.
+  const stillClosed = async (ids: string[]) => { const out: string[] = []; for (const id of ids) if ((await projectClosed(id)) === true) out.push(id); return out; };
   /** Stands in for the plan of an operation journaled before plans were recorded. */
   const NO_PLAN: ProjectClosePlan = {close: [], alreadyClosed: [], skipped: [{projectId: null, reason: 'not-recorded'}]};
   const projectDone = (items: ProjectItem[] | undefined) => !!items?.find(i => i.id === input.project!.itemId)?.fieldValues?.nodes?.some(v => v.field?.id === input.project!.statusFieldId && v.optionId === input.project!.doneOptionId);
@@ -120,12 +125,12 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     else {
       const open = tree.value.filter(i => i.parent !== null && i.state === 'open').map(i => `#${i.number}`);
       if (open.length) problems.push(problem('TREE_ISSUES_OPEN', 'tree', `Close the Features and Tasks first: ${open.join(', ')} still open.`));
-      const projects: {projectId: string; closed: boolean; items: unknown[]}[] = [];
+      const projects: {projectId: string; closed: boolean; repositories: string[]; items: unknown[]}[] = [];
       for (const projectId of epic.projectIds ?? []) {
-        const got = await call.bridge.call('gh_project_get', {projectId}, d => typeof (d as {closed?: unknown} | null)?.closed === 'boolean' ? (d as {closed: boolean}).closed : undefined, call.scope);
+        const got = await readProjectState(projectId);
         const items = await call.bridge.call('gh_project_items', {projectId}, d => Array.isArray((d as {items?: unknown} | null)?.items) ? (d as {items: unknown[]}).items : undefined, call.scope);
         if (got.status !== 'ok' || items.status !== 'ok') problems.push(problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`));
-        else projects.push({projectId, closed: got.data!, items: items.data!});
+        else projects.push({projectId, ...got.data!, items: items.data!});
       }
       if (projects.length === (epic.projectIds ?? []).length) closePlan = planProjectClose(epic.projectIds, tree.value, input.repo, projects);
     }
@@ -218,7 +223,8 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       if (!projectDone((await readProject()).items)) return run.stop([problem('PROJECT_NOT_DONE', 'project', 'The Project item does not show Done.')]);
       projectUpdated = true;
     }
-    // 5. Recorded Projects: read the items again, close, read back. Items not of the tree added since the acceptance → left open.
+    // 5. Recorded Projects: read the link and the items again, close, read back. A link removed or items not of the tree added
+    // since the acceptance → left open and reported (not-linked / foreign-items).
     const closedNow: string[] = [];
     if (plan.close.length) {
       run.checkpoint();
@@ -229,6 +235,14 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
         const step = `project-close:${projectId}`;
         const path = join(dir, `project-close-${projectId}.json`);
         if (!run.done(step) && !pending(step)) {
+          const state = await readProjectState(projectId);
+          if (state.status !== 'ok') return run.stop([problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`)]);
+          if (!linked(state.data!.repositories, input.repo)) {
+            // Not a failure: pi-gh closes only a Project linked to the repo; it is left open and reported for a human to close.
+            plan = {...plan, close: plan.close.filter(id => id !== projectId), skipped: [...plan.skipped, {projectId, reason: 'not-linked'}]};
+            run.note('projects-plan', plan);
+            continue;
+          }
           const items = await call.bridge.call('gh_project_items', {projectId}, d => Array.isArray((d as {items?: unknown} | null)?.items) ? (d as {items: ProjectItem[]}).items : undefined, call.scope);
           if (items.status !== 'ok') return run.stop([problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`)]);
           const contents = items.data!.map(i => i.content);
@@ -249,7 +263,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
         closedNow.push(projectId);
       }
     }
-    return {status: 'applied', data: {issueClosed: true, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: refs.remoteMainRef, pendingStep: null, projectsClosed: [...plan.alreadyClosed, ...closedNow], projectsSkipped: plan.skipped}};
+    return {status: 'applied', data: {issueClosed: true, projectUpdated, verifiedRef: input.verifiedRef, remoteMainRef: refs.remoteMainRef, pendingStep: null, projectsClosed: [...await stillClosed(plan.alreadyClosed), ...closedNow], projectsSkipped: plan.skipped}};
   });
   if ((result.status === 'partial' || result.status === 'unknown' || result.status === 'blocked') && (await journal.load(input.operationId))) {
     // Report from what GitHub shows now, not from the journal alone.
@@ -262,7 +276,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       const plan = (rec?.steps.find(s => s.name === 'projects-plan' && s.phase === 'done')?.data as ProjectClosePlan | undefined) ?? closePlan ?? NO_PLAN;
       // The Project steps run after the close; once it shows closed they are reported from what GitHub shows now.
       const projectUpdated = issueClosed && !!input.project && projectDone((await readProject()).items);
-      const projectsClosed = [...plan.alreadyClosed];
+      const projectsClosed = await stillClosed(plan.alreadyClosed);
       if (issueClosed) for (const id of plan.close) if ((await projectClosed(id)) === true) projectsClosed.push(id);
       const pendingStep = d.stage !== 'completed' ? 'epic-body' : !now.value.labels.includes('Stage: Completed') ? 'epic-labels' : !issueClosed ? 'close'
         : input.project && !projectUpdated ? 'project' : plan.close.some(id => !projectsClosed.includes(id)) ? 'project-close' : null;

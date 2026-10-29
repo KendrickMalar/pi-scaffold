@@ -28,6 +28,7 @@
 | 既存の `project` 引数 | **そのまま残す**（筆者の判断） | 使っている呼び出し元を壊さない |
 | Project の説明文に Epic の URL を書く | **今回は入れない**（筆者の判断） | 表示のためだけで、pi-gh に Project を更新する操作が別に要る。後回しにする |
 | Project の削除 | **しない** | 閉じれば中身が残り、`--undo` で開き直せる |
+| repo に紐付いていない Project | **閉じない。結果に `not-linked` と書く。失敗にはしない。実行時にも紐付きを読み直し、承認後に外れたものも `not-linked` にする**（2026-10-29 改訂） | pi-gh の `project-close` は紐付いていない Project を拒否する。Epic を閉じた後に拒否されて、再開しても進まなくなるのを防ぐ。人が手で閉じる |
 
 ## 3. 動作
 
@@ -46,6 +47,7 @@
 2. Epic の木を求める。Epic 自身と、その sub-issue（Feature）、さらにその sub-issue（Task）の Issue 番号の集合とする。リポジトリは `input.repo` だけとする。
 3. 記録した Project ごとに、Project（`closed`）と全項目を読む。
    - 既に閉じている → `already-closed`。
+   - repo に紐付いていない → 閉じない（`not-linked`）（2026-10-29 改訂）。
    - Issue でない項目（PR・下書き）がある、または別リポジトリの Issue か、木に無い Issue がある → 閉じない（`foreign-items`）。
    - Project を読めない → `blocked`（`PROJECT_UNREADABLE`）。
 4. Epic の木のうち Epic 以外（Feature・Task）が1つでも開いていれば、何も変えずに `blocked`（`TREE_ISSUES_OPEN`、開いている番号を載せる）。Project の記録の有無に関わらず行う。
@@ -60,7 +62,7 @@
 結果の `data` に、次を足す。
 
 - `projectsClosed: string[]`：閉じた Project（既に閉じていたものを含む）
-- `projectsSkipped: {projectId: string | null; reason: 'not-recorded' | 'foreign-items'}[]`：閉じなかった Project と理由
+- `projectsSkipped: {projectId: string | null; reason: 'not-recorded' | 'foreign-items' | 'not-linked'}[]`：閉じなかった Project と理由
 
 ### 3.3 pi-gh に足すもの
 
