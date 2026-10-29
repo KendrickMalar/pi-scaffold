@@ -32,6 +32,9 @@ description: Scaffold工程（setup→specification→basic-design→implementat
    - ヒアリングで確定したことだけを `scaffold_specification_update` に入れます。未回答の項目は `answer: null` のまま残します。
    - 調査は `scaffold_research_begin` → 調査 → `scaffold_research_resolve` の順に進めます。根拠を示せない結果は `needs-more-work` にします。
    - 仕様がそろったら `scaffold_handoff_basic_design` を呼びます（`agentApprovals` に `specification` があれば、呼んだ時点で親エージェントの仕様承認として記録されます）。
+   - `scaffold_handoff_basic_design` が `PLAN_PENDING` または `EPIC_WAITING` を返したら、この Epic は orchestrator の計画待ち、または名前の挙がった Epic の完了待ちです。止まって「計画（または該当 Epic）を待っている」と報告し、**呼び直しません**。
+   - `scaffold_stage_check` は `specificationReady`（仕様がそろっているか）と `waiting`（計画待ち・Epic 待ち）を返します。status が `validated` でも `problems` が空とは限りません（`DEPENDENCIES_UNREADABLE` など）。`validated` のときも `problems` を読みます。
+   - orchestrator から起動した仕様策定では環境変数 `SCAFFOLD_PLAN_PENDING=1` が付き、`scaffold_epic_draft_create` が Epic に `scaffold:plan-pending` を付けて作ります。このラベルは orchestrator が作るもので、`scaffold_labels_ensure` は作りません（無ければ `LABELS_NOT_READY`）。
 3. **basic-design**
    - 設計書をコミットします。
    - `scaffold_feature_create` で、Featureを1件ずつ作ります。
