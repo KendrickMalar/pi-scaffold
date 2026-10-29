@@ -311,3 +311,29 @@ test('a corrupt recorded draft blocks with a clear reason instead of an internal
     assert.ok(out.r.problems.some(p => p.code === 'RECORDED_DRAFT_INVALID'), JSON.stringify(out.r.problems));
   }
 });
+
+const PLAN_PENDING = 'scaffold:plan-pending';
+const pendingLabel = () => withLabels().seedLabels([{name: PLAN_PENDING, color: 'fbca04', description: 'orchestrator plan pending'}]);
+
+test('with SCAFFOLD_PLAN_PENDING=1 the Epic is created with scaffold:plan-pending', async t => {
+  const gh = pendingLabel();
+  const out = await (await harness(t, gh, {environment: {SCAFFOLD_PLAN_PENDING: '1'}})).invoke();
+  assert.equal(out.r.status, 'applied');
+  assert.deepEqual(gh.issues.get(10)!.labels.sort(), ['Scope: Epic', 'Type: Scaffold', PLAN_PENDING]);
+});
+
+test('with SCAFFOLD_PLAN_PENDING=1 and no such label the draft is blocked LABELS_NOT_READY', async t => {
+  const gh = withLabels();
+  const out = await (await harness(t, gh, {environment: {SCAFFOLD_PLAN_PENDING: '1'}})).invoke();
+  assert.equal(out.r.status, 'blocked');
+  const p = out.r.problems.find(x => x.code === 'LABELS_NOT_READY');
+  assert.ok(p && p.message.includes(PLAN_PENDING) && /orchestrator/.test(p.message));
+  assert.equal(submits(gh), 0);
+});
+
+test('without the variable the labels are unchanged', async t => {
+  const gh = pendingLabel();
+  const out = await (await harness(t, gh, {environment: {}})).invoke();
+  assert.equal(out.r.status, 'applied');
+  assert.deepEqual(gh.issues.get(10)!.labels.sort(), ['Scope: Epic', 'Type: Scaffold']);
+});

@@ -8,6 +8,7 @@ import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../
 import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
+import {epicWaitProblems, readEpicWait} from '../core/epic-wait.js';
 
 export const HANDOFF_BASIC_DESIGN = 'scaffold_handoff_basic_design';
 export function decodeBasicDesignHandoffInput(value: unknown): Decoded<MutationInput> { return decodeMutationInput(value); }
@@ -16,7 +17,7 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
   const operation = HANDOFF_BASIC_DESIGN;
   const blocked = (problems: ReturnType<typeof problem>[]): ScaffoldResult<HandoffData> => ({status: 'blocked', operation, problems});
   // Everything the handoff will need, including the driver's later writes, before anything is asked of the parent.
-  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
+  const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_dependencies_list', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const snap = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
   if (!snap.ok) return blocked(snap.problems);
@@ -33,6 +34,11 @@ export async function handoffBasicDesign(input: MutationInput, call: ToolCall): 
     if (env.HERDR_ENV !== '1' || !env.HERDR_WORKSPACE_ID || !env.HERDR_PANE_ID) return blocked([problem('HERDR_UNAVAILABLE', 'herdr', 'This session is not running inside Herdr.')]);
     if (env.PI_SUBAGENT_CHILD) return blocked([problem('CHILD_SESSION', 'session', 'A subagent child cannot approve the specification or start a stage session.')]);
     if (doc.stage !== 'specification') return blocked([problem('STAGE_MISMATCH', 'stage', `Epic is in ${doc.stage}, not specification.`)]);
+    // The orchestrator's plan: an Epic marked plan-pending or blocked by an open Epic of this repo waits here.
+    const wait = await readEpicWait(input.repo, snap.value, call);
+    if (!wait.ok) return blocked(wait.problems);
+    const waiting = epicWaitProblems(wait.value);
+    if (waiting.length) return blocked(waiting);
     const stale = [
       ...(snap.value.bodySha256 !== input.expectedBodySha256 ? [problem('STALE_BODY', 'expectedBodySha256', 'Epic body changed; read it again.')] : []),
       ...(doc.revision !== input.expectedRevision ? [problem('STALE_REVISION', 'expectedRevision', `Epic revision is ${doc.revision}.`)] : []),

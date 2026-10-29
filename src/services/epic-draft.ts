@@ -15,6 +15,7 @@ import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/templ
 import type {ToolCall} from '../core/runtime.js';
 import {decodeGithubIssue, readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
 import {readLabels} from './labels-ensure.js';
+import {PLAN_PENDING_LABEL} from '../core/epic-wait.js';
 
 export const EPIC_DRAFT_CREATE = 'scaffold_epic_draft_create';
 export const EPIC_LABELS = ['Type: Scaffold', 'Scope: Epic'] as const;
@@ -112,7 +113,10 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   // A recorded operation keeps the planner of its first call, so its draft and policy snapshot stay consistent.
   const plannerBinding = recorded?.agents?.planner ?? {model: planner.model, thinking: planner.thinking, reason: 'Epic下書きを作成したセッションのモデル（記録のみ）'};
   const snapshot = await buildTemplateSnapshot('epic', {planner: plannerBinding as never}, join(dir, 'template'), call.namespaceRoot);
-  const draft = {version: 1, template: TEMPLATE_IDS.epic, repo: input.repo, title: input.title, labels: [...EPIC_LABELS], fields: {[TEMPLATE_FIELD]: block}, agents: {planner: plannerBinding}};
+  // The orchestrator marks Epics it launched a session for, so they wait for its plan (SCAFFOLD_PLAN_PENDING=1).
+  const planPending = call.environment?.().SCAFFOLD_PLAN_PENDING === '1';
+  const epicLabels: string[] = planPending ? [...EPIC_LABELS, PLAN_PENDING_LABEL] : [...EPIC_LABELS];
+  const draft = {version: 1, template: TEMPLATE_IDS.epic, repo: input.repo, title: input.title, labels: epicLabels, fields: {[TEMPLATE_FIELD]: block}, agents: {planner: plannerBinding}};
   const draftText = JSON.stringify(draft, null, 2) + '\n';
   await writeOwnedFile(draftPath, draftText, {root: call.namespaceRoot});
   const args = {draftPath, templatePath: snapshot.templatePath};
@@ -124,8 +128,8 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
 
   const labels = await readLabels(call, input.repo);
   if ('error' in labels) return blocked(labels.error);
-  const absent = EPIC_LABELS.filter(l => labels.labels.get(l.toLowerCase())?.name !== l);
-  if (absent.length) return blocked([problem('LABELS_NOT_READY', 'labels', `Management labels are missing (${absent.join(', ')}); run scaffold_labels_ensure first.`)]);
+  const absent = epicLabels.filter(l => labels.labels.get(l.toLowerCase())?.name !== l);
+  if (absent.length) return blocked([problem('LABELS_NOT_READY', 'labels', `Management labels are missing (${absent.join(', ')}); run scaffold_labels_ensure first.${planPending ? ` ${PLAN_PENDING_LABEL} is created by the orchestrator, not by scaffold_labels_ensure.` : ''}`)]);
 
   /** Issues whose managed body carries this operation's createOperationId. */
   const candidates = async (): Promise<{number: number}[] | Problem[]> => {
