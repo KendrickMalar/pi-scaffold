@@ -32,11 +32,11 @@ function feature(epic: EpicDocV1, n: number): FeatureDocV1 {
   return {...featureDoc(), workflowId: epic.workflowId, featureKey: `F00${n - 10}`, parentEpic: 10, stage: 'implementation', editScope: [`src/f${n}/`],
     criteria: [{id: `AC10${n - 10}`, requirementIds: [n === 11 ? 'REQ001' : 'REQ002'], verification: 'v', expectedResult: 'e'}], createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
 }
-function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 'closed'; stateReason?: 'completed' | 'not_planned'; features?: Record<number, FeatureDocV1>} = {}) {
+function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 'closed'; stateReason?: 'completed' | 'not_planned'; features?: Record<number, FeatureDocV1>; openIssues?: number[]} = {}) {
   const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: 'メモ（管理外）\n\n' + renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Verification'], state: opts.state ?? 'open', ...(opts.stateReason ? {stateReason: opts.stateReason} : {}), subIssues: [...ISSUES]});
-  for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(opts.features?.[n] ?? feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: Implementation', 'Wave: 1'], state: 'open'});
+  for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(opts.features?.[n] ?? feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: Implementation', 'Wave: 1'], state: opts.openIssues?.includes(n) ? 'open' : 'closed'});
   gh.projects.set(PROJECT.projectId, [10]);
   gh.projectFields.set(PROJECT.projectId, [{id: PROJECT.statusFieldId, name: 'Status', dataType: 'SINGLE_SELECT', options: [{id: 'opt_todo', name: 'Todo'}, {id: PROJECT.doneOptionId, name: 'Done'}]}]);
   return gh;
@@ -174,7 +174,7 @@ test('all gates and the acceptance: body/Stage, close, read back, Project Done, 
   assert.equal(gh.itemValues.get('PVTI_10')?.[PROJECT.statusFieldId], PROJECT.doneOptionId);
   const order = gh.calls.map(c => c.name).filter(n => /if_current|field_update/.test(n));
   assert.deepEqual(order, ['gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current', 'gh_project_field_update']);
-  for (const n of ISSUES) assert.equal(gh.issues.get(n)!.state, 'open', 'Features are not closed by this tool');
+  assert.equal(closes(gh), 1, 'only the Epic is closed by this tool');
 });
 test('without a project there is no Project call at all', async t => {
   const gh = world(); const h = await harness(t, gh);
@@ -346,6 +346,40 @@ test('the acceptance shows the Features, evidence and Project target, and binds 
   const v2 = completionApprovalView(epicDoc(), 'f'.repeat(64), refs, base, features, {...PROJECT, doneOptionId: 'opt_other'});
   assert.notEqual(v1.contentDigest, v2.contentDigest);
   assert.match(v1.text, /#11 F001/); assert.match(v1.text, /final\/11\.json/); assert.match(v1.text, /PVTI_10/);
+});
+
+test('an open Feature or Task blocks before any change with TREE_ISSUES_OPEN', async t => {
+  await expectBlocked(t, 'TREE_ISSUES_OPEN', {gh: world({openIssues: [12]})});
+  const task = world({epic: epicDoc(d => { d.projectIds = [PROJECT.projectId]; })});
+  task.issues.get(11)!.subIssues = [13]; task.add({number: 13, title: 'T13', body: '', labels: [], state: 'open'});
+  const before = task.issues.get(10)!.body; const h = await harness(t, task);
+  const out = await h.invoke(params(task, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'blocked'); assert.equal(out.confirmCalls, 0); nothingChanged(task, before); assert.equal(task.count('gh_project_close'), 0);
+  const p = out.r.problems.find(x => x.code === 'TREE_ISSUES_OPEN'); assert.ok(p, JSON.stringify(out.r.problems)); assert.match(p.message, /#13/);
+});
+test('an unreadable recorded Project blocks before any change', async t => {
+  await expectBlocked(t, 'PROJECT_UNREADABLE', {gh: world({epic: epicDoc(d => { d.projectIds = ['PVT_missing']; })})});
+});
+test('the acceptance shows the Projects to close and the skipped ones', async t => {
+  const recorded = (ids: string[]) => { const gh = world({epic: epicDoc(d => { d.projectIds = ids; })}); gh.projects.set('PVT_other', [10, 99]); gh.projectFields.set('PVT_other', []); return gh; };
+  const gh = recorded([PROJECT.projectId, 'PVT_other']);
+  const shown: string[] = [];
+  const h = await harness(t, gh, {confirm: (_title, message) => { shown.push(message); return false; }});
+  const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
+  assert.equal(out.r.status, 'cancelled', JSON.stringify(out.r)); assert.equal(shown.length, 1);
+  assert.match(shown[0]!, /Project を閉じる: PVT_fixture1/); assert.match(shown[0]!, /閉じない: PVT_other（別の Issue が混ざっている）/);
+  const none = world(); const shownNone: string[] = [];
+  const h2 = await harness(t, none, {confirm: (_title, message) => { shownNone.push(message); return false; }});
+  await h2.invoke(params(none, await writeEvidence(h2.agentDir)));
+  assert.match(shownNone[0]!, /Project の記録なし/);
+  assert.equal(gh.count('gh_project_close'), 0);
+  const {completionApprovalView} = await import('../src/core/completion-gate.js');
+  const base = {status: 'validated' as const, problems: [], artifactDigests: {}, verifiedRef: VERIFIED, remoteMainRef: MAIN, defaultBranch: 'main'};
+  const features = ISSUES.map(n => ({number: n, doc: feature(epicDoc(), n)})) as never;
+  const refs = [{relativePath: 'final/11.json', sha256: 'a'.repeat(64)}];
+  const v1 = completionApprovalView(epicDoc(), 'f'.repeat(64), refs, base, features, undefined, {close: ['PVT_a'], alreadyClosed: [], skipped: []});
+  const v2 = completionApprovalView(epicDoc(), 'f'.repeat(64), refs, base, features, undefined, {close: [], alreadyClosed: [], skipped: [{projectId: 'PVT_a', reason: 'foreign-items'}]});
+  assert.notEqual(v1.contentDigest, v2.contentDigest);
 });
 
 // ---- agent decision stages ------------------------------------------------------------------------

@@ -18,6 +18,8 @@ import {checkCompletion, completionApprovalView, type CompletionResult} from '..
 import type {ToolCall} from '../core/runtime.js';
 import {readIssue} from '../ports/pi-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
+import {readEpicTree} from '../ports/epic-tree.js';
+import {planProjectClose, type ProjectClosePlan} from '../core/project-close-plan.js';
 
 export const EPIC_COMPLETE = 'scaffold_epic_complete';
 export interface ProjectTarget { projectId: string; itemId: string; statusFieldId: string; doneOptionId: string }
@@ -57,6 +59,10 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
   if (!snap.ok) return blocked(snap.problems);
   if (snap.value.doc.kind !== 'epic') return blocked([problem('NOT_AN_EPIC', 'epicIssue', `#${input.epicIssue} is not a Scaffold Epic.`)]);
   const epic = snap.value.doc;
+  if (epic.projectIds?.length) {
+    const more = await call.bridge.requireCapabilities(['gh_project_get', 'gh_project_items', 'gh_project_close'], call.scope);
+    if (!more.ok) return blocked(more.problems);
+  }
   const context = await call.repoContext(input.repo, epic.workflowId);
   if (!context.ok) return blocked(context.problems);
   const journal = call.journal(context.value);
@@ -74,6 +80,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
 
   let gate: CompletionResult | undefined;
   let approval: ApprovalRef | undefined;
+  let closePlan: ProjectClosePlan | undefined;
   if (!closedByUs) {
     // ---- everything is (re)checked until this operation has closed the Issue; an already-closed Epic is no shortcut ----
     const pre: Problem[] = [];
@@ -100,6 +107,21 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
     const ev = await readEvidence(input.finalEvidenceRefs, evidenceRootOf(context.value.workflowStateRoot), call.namespaceRoot);
     gate = await checkCompletion({epic, features: set.value.features, reports: ev.reports, verifiedRef: input.verifiedRef, git: call.runtime.git, repoRoot: repoOnly.value.repoRoot});
     const problems = [...ev.problems, ...gate.problems];
+    // The whole tree must be closed by hand first; recorded Projects are closed only if they hold nothing but this tree.
+    const tree = await readEpicTree(input.repo, input.epicIssue, call.bridge, call.scope);
+    if (!tree.ok) problems.push(...tree.problems);
+    else {
+      const open = tree.value.filter(i => i.parent !== null && i.state === 'open').map(i => `#${i.number}`);
+      if (open.length) problems.push(problem('TREE_ISSUES_OPEN', 'tree', `Close the Features and Tasks first: ${open.join(', ')} still open.`));
+      const projects: {projectId: string; closed: boolean; items: unknown[]}[] = [];
+      for (const projectId of epic.projectIds ?? []) {
+        const got = await call.bridge.call('gh_project_get', {projectId}, d => typeof (d as {closed?: unknown} | null)?.closed === 'boolean' ? (d as {closed: boolean}).closed : undefined, call.scope);
+        const items = await call.bridge.call('gh_project_items', {projectId}, d => Array.isArray((d as {items?: unknown} | null)?.items) ? (d as {items: unknown[]}).items : undefined, call.scope);
+        if (got.status !== 'ok' || items.status !== 'ok') problems.push(problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`));
+        else projects.push({projectId, closed: got.data!, items: items.data!});
+      }
+      if (projects.length === (epic.projectIds ?? []).length) closePlan = planProjectClose(epic.projectIds, tree.value, input.repo, projects);
+    }
     if (input.project) {
       const pr = await readProject();
       const field = pr.fields?.find(f => f.id === input.project!.statusFieldId);
@@ -109,7 +131,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
       else if (!itemIsEpic || !field || field.dataType !== 'SINGLE_SELECT' || !field.options?.some(o => o.id === input.project!.doneOptionId)) problems.push(problem('PROJECT_TARGET_INVALID', 'project', 'The Project item is not this Epic, or the field is not a single-select holding the Done option.'));
     }
     if (problems.length) return blocked(problems);
-    const view = completionApprovalView(epic, set.value.featureSetDigest, input.finalEvidenceRefs, gate, set.value.features, input.project);
+    const view = completionApprovalView(epic, set.value.featureSetDigest, input.finalEvidenceRefs, gate, set.value.features, input.project, closePlan);
     const existing = await call.approvals.requireContentApproval('epic-completion', epic.workflowId, approvalViewDigest('epic-completion', view), context.value);
     if (existing.ok) approval = existing.value;
     else {

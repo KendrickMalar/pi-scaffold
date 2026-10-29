@@ -7,6 +7,7 @@ import {checkFeatureIntegration} from './evidence.js';
 import {designDigest, specificationDigest, taggedDigest} from './digests.js';
 import type {GitReader} from '../ports/git-read.js';
 import type {ApprovalView} from './approvals.js';
+import type {ProjectClosePlan} from './project-close-plan.js';
 
 export interface CompletionResult extends GateResult { verifiedRef: GitObjectId; remoteMainRef: GitObjectId | null; defaultBranch: string | null }
 
@@ -42,12 +43,13 @@ export async function checkCompletion(input: {epic: EpicDocV1; features: readonl
 /** The parent's final acceptance: this specification/design/Feature set/evidence at these exact refs. */
 export interface CompletionProjectTarget { projectId: string; itemId: string; statusFieldId: string; doneOptionId: string }
 export function completionApprovalView(epic: EpicDocV1, featureSetDigest: Sha256, evidence: readonly {relativePath: string; sha256: Sha256}[], result: CompletionResult,
-  features: readonly {number: number; doc: FeatureDocV1}[], project?: CompletionProjectTarget): ApprovalView {
+  features: readonly {number: number; doc: FeatureDocV1}[], project?: CompletionProjectTarget, closePlan?: ProjectClosePlan): ApprovalView {
   const sortedEvidence = [...evidence].sort((a, b) => a.relativePath < b.relativePath ? -1 : 1);
   const sortedFeatures = [...features].sort((a, b) => a.number - b.number);
   const contentDigest = taggedDigest('epic-completion', {
     specification: specificationDigest(epic), design: designDigest(epic), featureSet: featureSetDigest,
     evidence: sortedEvidence, verifiedRef: result.verifiedRef, remoteMainRef: result.remoteMainRef, defaultBranch: result.defaultBranch, project: project ?? null,
+    ...(closePlan ? {closePlan} : {}),
   });
   const text = [
     'Epic の最終受け入れ',
@@ -57,6 +59,8 @@ export function completionApprovalView(epic: EpicDocV1, featureSetDigest: Sha256
     'Feature:', ...sortedFeatures.map(f => `- #${f.number} ${f.doc.featureKey}: ${f.doc.criteria.map(c => `${c.id}(${c.requirementIds.join('+')})`).join(', ')}`),
     '証拠（参照とハッシュのみ確認。内容の真正性は保証しません）:', ...sortedEvidence.map(e => `- ${e.relativePath} sha256 ${e.sha256}`),
     `Project: ${project ? `${project.projectId} の item ${project.itemId} の ${project.statusFieldId} を ${project.doneOptionId} にする` : '変更しない'}`,
+    ...(closePlan ? [...closePlan.close.map(id => `Project を閉じる: ${id}`), ...closePlan.alreadyClosed.map(id => `閉じない: ${id}（既に閉じている）`),
+      ...closePlan.skipped.map(s => s.projectId ? `閉じない: ${s.projectId}（別の Issue が混ざっている）` : 'Project の記録なし')] : []),
     '受け入れると、Epic の本文と Stage を完了にし、Issue を閉じます。',
   ].join('\n');
   return {contentDigest, text};

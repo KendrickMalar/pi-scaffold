@@ -22,7 +22,7 @@ export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinitionLike;
 import type {HerdrPort} from '../../src/handoff/herdr-client.js';
 export interface FakeHerdrLike { calls: {command: string; args: unknown}[] }
 export interface Scenario {
-  gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | (() => boolean); child?: boolean;
+  gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | ((title: string, message: string) => boolean); child?: boolean;
   /** ctx.cwd of the session (default /synthetic/repo). */
   cwd?: string;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
@@ -100,7 +100,7 @@ export async function createHarness(createTool: CreateTool, {scenario = {}}: {sc
     cwd: scenario.cwd ?? '/synthetic/repo', mode: scenario.interactive === false ? 'print' : 'tui', hasUI: scenario.interactive !== false,
     isProjectTrusted: () => scenario.trusted !== false,
     executeTool: (name: string, args: unknown, options?: {signal?: AbortSignal}) => gh.execute(name, args, options),
-    ui: {confirm: async () => { confirmCalls++; const c = scenario.confirm ?? true; return typeof c === 'function' ? c() : c; }},
+    ui: {confirm: async (title: string, message: string) => { confirmCalls++; const c = scenario.confirm ?? true; return typeof c === 'function' ? c(title, message) : c; }},
     tools: (scenario.tools ?? []).map(name => ({name})),
     sessionManager: {getSessionId: () => 'session-harness', getLeafId: () => 'leaf-harness', getEntries: () => scenario.sessionEntries ?? []},
     modelRegistry: {getAvailable: () => (scenario.availableModels ?? []).map(m => ({provider: m.split('/')[0], id: m.split('/').slice(1).join('/')}))},
