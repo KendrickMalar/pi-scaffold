@@ -23,6 +23,7 @@ export type DependenciesApplyInput = MutationInput & {plan: DependencyPlan; proj
 /** dependencyDigest is the value a Wave plan must carry (scaffold_waves_verify / scaffold_waves_apply) for the saved plan. */
 export interface DependenciesApplyData { addedEdges: Edge[]; unchangedEdges: Edge[]; mermaid: string; projectItems: number[]; dependencyDigest: string }
 const PROJECT_RE = /^PVT_[A-Za-z0-9_-]{1,200}$/;
+const MAX_PROJECT_IDS = 10;
 
 export function decodeDependenciesApplyInput(value: unknown): Decoded<DependenciesApplyInput> {
   return decodeMutationInput<{plan: DependencyPlan; projectId?: string; design?: DesignRef}>(value, {
@@ -99,6 +100,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     if (epicSnap.value.bodySha256 !== input.expectedBodySha256) pre.push(problem('STALE_BODY', 'expectedBodySha256', 'The Epic body changed; read it again.'));
     if (epic.revision !== input.expectedRevision) pre.push(problem('STALE_REVISION', 'expectedRevision', `The Epic is at revision ${epic.revision}.`));
   }
+  if (input.projectId && !(epic.projectIds ?? []).includes(input.projectId) && (epic.projectIds ?? []).length >= MAX_PROJECT_IDS) pre.push(problem('LIMIT_EXCEEDED', 'projectId', `The Epic already records ${MAX_PROJECT_IDS} Projects.`));
   if (pre.length) return blocked(pre);
   const knownCreated = (await journal.list()).filter(r => r.operation === 'scaffold_feature_create' && !r.abandonedAt)
     .flatMap(r => { const n = (r.steps.find(s => s.name === 'submit' && s.phase === 'done')?.data ?? r.steps.find(s => s.name === 'found')?.data) as {number?: number} | undefined; return n?.number ? [{number: n.number, createOperationId: r.operationId}] : []; });
@@ -118,6 +120,12 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
   }
   const wantDesign = input.design ?? null;
   const designDone = (d: EpicDocV1) => !wantDesign || canonicalJson(d.design) === canonicalJson(wantDesign);
+  // The Project is recorded on the Epic (appended, never replacing) so scaffold_epic_complete can close it later.
+  const projectDone = (d: EpicDocV1) => !input.projectId || (d.projectIds ?? []).includes(input.projectId);
+  const withSaved = (d: EpicDocV1): EpicDocV1 => ({
+    ...d, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {}),
+    ...(projectDone(d) ? {} : {projectIds: [...(d.projectIds ?? []), input.projectId!]}),
+  });
   let projectBefore: number[] | undefined;
   if (input.projectId) {
     const items = await call.bridge.call('gh_project_items', {projectId: input.projectId}, decodeItems(input.repo), call.scope);
@@ -135,8 +143,8 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
     payloadDigest: taggedDigest('dependencies-apply', payload), journal, scope: call.scope,
   }, async run => {
     // 保存不能な入力は、依存やProjectへ書き込む前に拒否する。最後のfresh readは維持する。
-    if (canonicalJson(epic.dependencyPlan) !== canonicalJson(input.plan) || !designDone(epic)) {
-      const capacity = patchDoc(epicSnap.value, {...epic, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {})});
+    if (canonicalJson(epic.dependencyPlan) !== canonicalJson(input.plan) || !designDone(epic) || !projectDone(epic)) {
+      const capacity = patchDoc(epicSnap.value, withSaved(epic));
       if (!capacity.ok) return run.stop(capacity.problems);
     }
     // The Epic plan as this operation first saw it; the final save only replaces that (or an identical) plan.
@@ -201,21 +209,22 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
       const now = await readFeatureSet(input.repo, input.epicIssue, call.bridge, call.scope, {workflowId: epic.workflowId});
       if (!now.ok) moved.push(...now.problems);
       else if (JSON.stringify(now.value.features.map(f => f.number).sort((a, b) => a - b)) !== JSON.stringify(input.plan.nodes.map(n => n.issue).sort((a, b) => a - b))) moved.push(problem('FEATURE_SET_CHANGED', 'plan.nodes', 'The Epic\'s Features changed meanwhile; the plan no longer covers exactly them.'));
+      if (!projectDone(doc) && (doc.projectIds ?? []).length >= MAX_PROJECT_IDS) moved.push(problem('LIMIT_EXCEEDED', 'projectId', `The Epic already records ${MAX_PROJECT_IDS} Projects.`));
       if (moved.length) return run.stop(moved);
       const changePath = join(dir, 'epic-body.json');
-      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan) || !designDone(doc) || pending('epic-body')) {
-        const edit = patchDoc(fresh.value, {...doc, dependencyPlan: input.plan, ...(wantDesign ? {design: wantDesign} : {})});
+      if (canonicalJson(doc.dependencyPlan) !== canonicalJson(input.plan) || !designDone(doc) || !projectDone(doc) || pending('epic-body')) {
+        const edit = patchDoc(fresh.value, withSaved(doc));
         if (!edit.ok) return run.stop(edit.problems);
         const expected = edit.value;
         await writeOwnedFile(changePath, JSON.stringify(expected), {root: call.namespaceRoot});
         await run.write('epic-body', () => call.bridge.call('gh_issue_edit_if_current', {changePath}, () => true as const, call.scope), {
-          reconcile: async () => { const s = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope); if (!s.ok) return 'unknown'; return canonicalJson((s.value.doc as EpicDocV1).dependencyPlan) === canonicalJson(input.plan) && designDone(s.value.doc as EpicDocV1) ? 'applied' : s.value.bodySha256 === expected.expectedBodySha256 ? 'not-applied' : 'unknown'; },
+          reconcile: async () => { const s = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope); if (!s.ok) return 'unknown'; return canonicalJson((s.value.doc as EpicDocV1).dependencyPlan) === canonicalJson(input.plan) && designDone(s.value.doc as EpicDocV1) && projectDone(s.value.doc as EpicDocV1) ? 'applied' : s.value.bodySha256 === expected.expectedBodySha256 ? 'not-applied' : 'unknown'; },
         });
       }
     }
     const final = await readIssue(input.repo, input.epicIssue, call.bridge, call.scope);
     if (!final.ok) return run.stop(final.problems);
-    if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan) || !designDone(final.value.doc as EpicDocV1)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
+    if (canonicalJson((final.value.doc as EpicDocV1).dependencyPlan) !== canonicalJson(input.plan) || !designDone(final.value.doc as EpicDocV1) || !projectDone(final.value.doc as EpicDocV1)) return run.stop([problem('PLAN_NOT_SAVED', 'epicIssue', 'The Epic does not show this dependency plan.')]);
     const wrote = run.record.steps.some(s => !s.note && s.phase === 'done');
     return {status: wrote ? 'applied' : 'noop', data: {addedEdges: added, unchangedEdges: plannedEdges.filter(e => !has(added, e)), mermaid, projectItems, dependencyDigest: dependencyPlanDigest(input.plan)!}};
   });

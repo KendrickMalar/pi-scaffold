@@ -419,3 +419,48 @@ test('an Epic save that landed but returned unknown is reconciled on resume and 
   assert.equal(gh.count('gh_issue_edit_if_current'), edits, 'the Epic body is not edited again');
   assert.deepEqual(docOf(gh).dependencyPlan, plan([[11, 12], [12, 13]]));
 });
+
+test('a projectId is recorded on the Epic once', async t => {
+  const gh = world();
+  const h = await harness(t, gh);
+  const p = params(gh, undefined, {projectId: PROJECT});
+  const first = await h.invoke(p);
+  assert.equal(first.r.status, 'applied', JSON.stringify(first.r.problems));
+  assert.deepEqual(docOf(gh).projectIds, [PROJECT]);
+  const body = gh.issues.get(10)!.body;
+  const again = await h.invoke({...p, operationId: 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2', expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(body)});
+  assert.equal(again.r.status, 'noop', JSON.stringify(again.r));
+  assert.equal(gh.issues.get(10)!.body, body);
+});
+
+test('a second Project is appended, not replacing the first', async t => {
+  const gh = world({epic: epicDoc(d => { d.projectIds = ['PVT_first']; })});
+  gh.projects.set('PVT_first', []);
+  const out = await (await harness(t, gh)).invoke(params(gh, undefined, {projectId: PROJECT}));
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.deepEqual(docOf(gh).projectIds, ['PVT_first', PROJECT]);
+});
+
+test('without projectId the Epic gets no projectIds key', async t => {
+  const gh = world();
+  const out = await (await harness(t, gh)).invoke();
+  assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
+  assert.equal('projectIds' in docOf(gh), false);
+});
+
+test('recording projectIds leaves dependencyDigest unchanged', async t => {
+  const a = world(), b = world();
+  const withP = await (await harness(t, a)).invoke(params(a, undefined, {projectId: PROJECT}));
+  const without = await (await harness(t, b)).invoke();
+  assert.equal((withP.r.data as {dependencyDigest: string}).dependencyDigest, (without.r.data as {dependencyDigest: string}).dependencyDigest);
+});
+
+test('a full projectIds list blocks before any change', async t => {
+  const ids = Array.from({length: 10}, (_, i) => `PVT_old${i}`);
+  const gh = world({epic: epicDoc(d => { d.projectIds = ids; })});
+  const before = gh.issues.get(10)!.body;
+  const out = await (await harness(t, gh)).invoke(params(gh, undefined, {projectId: PROJECT}));
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(x => x.code === 'LIMIT_EXCEEDED' && x.path === 'projectId'));
+  noChanges(gh, before);
+});
