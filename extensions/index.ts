@@ -23,7 +23,7 @@ export default function (pi: ExtensionAPI) {
   // enforce-worktree (dotfiles) announces the linked worktree it redirects to; scaffold_stage_check reads pinned docs there.
   // Hosts without the shared bus (claude-scaffold) simply keep ctx.cwd.
   pi.events?.on(ACTIVE_WORKTREE_CHANNEL, setActiveWorktree);
-  pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a pi-scaffold stage handoff.'});
+  pi.registerFlag('scaffold-handoff', {type: 'string', description: 'Internal: owned handoff packet path written by a deterministic-scaffold stage handoff.'});
 
   let accepted: {packetPath: string; sessionId: string} | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
@@ -50,7 +50,7 @@ export default function (pi: ExtensionAPI) {
       void watcher.resume().catch(() => undefined);
     } catch (e) {
       watcher = undefined;
-      ctx.ui.notify(`pi-scaffold: 下位の監視を開始できませんでした（${(e as Error).message}）。`, 'warning');
+      ctx.ui.notify(`deterministic-scaffold: 下位の監視を開始できませんでした（${(e as Error).message}）。`, 'warning');
     }
   };
 
@@ -75,12 +75,12 @@ export default function (pi: ExtensionAPI) {
         // The session stage for agentDecisionStages: only this session, this packet's repo/workflow.
         const {repo, workflowId, targetStage} = r.value.packet;
         runtime.handoff = {sessionId, repo, workflowId, targetStage};
-        ctx.ui.notify('pi-scaffold: 工程の引き継ぎを受け付けました。', 'info');
+        ctx.ui.notify('deterministic-scaffold: 工程の引き継ぎを受け付けました。', 'info');
         return;
       }
       // pi-profile may record its Profile snapshot after this handler; retry briefly for that case only.
       if (++attempts < 10 && r.problems.every(p => p.code === 'RECEIVER_PROFILE_MISMATCH')) { retry = setTimeout(() => void attempt(), 200); return; }
-      ctx.ui.notify('pi-scaffold: 引き継ぎを受け付けませんでした: ' + formatProblemCodes(r.problems), 'error');
+      ctx.ui.notify('deterministic-scaffold: 引き継ぎを受け付けませんでした: ' + formatProblemCodes(r.problems), 'error');
     };
     void attempt();
   });

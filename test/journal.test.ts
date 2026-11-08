@@ -5,15 +5,15 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {OperationJournal} from '../src/core/journal.js';
 import {withOperation, RuntimeScope, type OperationRun} from '../src/core/lifecycle.js';
-import type {GhOutcome} from '../src/ports/pi-gh.js';
+import type {GhOutcome} from '../src/ports/deterministic-gh.js';
 import {makeScope} from './helpers/scope.js';
 import {OPERATION_ID, WORKFLOW_ID, SHA_A, SHA_B} from './helpers/docs.js';
 
 const OTHER_OP = '77777777-7777-4777-8777-777777777777';
 async function setup(t: {after(fn: () => Promise<void>): void}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-journal-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-journal-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const root = join(dir, 'pi-scaffold');
+  const root = join(dir, 'deterministic-scaffold');
   return {root, journal: new OperationJournal({root, workflowStateRoot: join(root, 'state', 'repo', WORKFLOW_ID)})};
 }
 const ok = (data: unknown = {}): GhOutcome<unknown> => ({status: 'ok', data, problems: [], isError: false});

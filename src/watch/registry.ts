@@ -29,7 +29,7 @@ export class WatchRegistry {
   private readonly root: string;
   readonly path: string;
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(agentDir: string, scaffoldDir?: string) { this.root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir); this.path = join(this.root, 'state', 'watches.json'); }
+  constructor(agentDir: string, scaffoldDir?: string) { this.root = resolveScaffoldDir({DETERMINISTIC_SCAFFOLD_DIR: scaffoldDir}, agentDir); this.path = join(this.root, 'state', 'watches.json'); }
 
   /** Runs one read-modify-write after the previous one settles; a failed write does not block later ones. */
   private serialized<T>(fn: () => Promise<T>): Promise<T> {

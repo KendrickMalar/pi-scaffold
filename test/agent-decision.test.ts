@@ -35,11 +35,11 @@ test('the blocked question tools are one exported list', () => {
 });
 
 async function guardFor(t: {after(fn: () => Promise<void>): void}, value: OwnerPolicy | undefined, accepted: AcceptedHandoff | undefined) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-guard-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-guard-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const agentDir = join(dir, 'agent');
-  await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700});
-  if (value) await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify(value), {mode: 0o600});
+  await mkdir(join(agentDir, 'deterministic-scaffold'), {recursive: true, mode: 0o700});
+  if (value) await writeFile(join(agentDir, 'deterministic-scaffold', 'policy.json'), JSON.stringify(value), {mode: 0o600});
   const runtime: {agentDir: string; handoff?: AcceptedHandoff} = {agentDir, ...(accepted ? {handoff: accepted} : {})};
   const guard = questionGuard(runtime);
   return (toolName: string, sessionId = 's1', input?: unknown) => guard({toolName, ...(input !== undefined ? {input} : {})}, {sessionManager: {getSessionId: () => sessionId}});

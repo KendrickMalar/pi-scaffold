@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, taggedDigest, wavePlanDigest} from '../src/core/digests.js';
@@ -24,7 +24,7 @@ const FEATURE_BASE = ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'];
 
 function world(opts: {labels?: Record<number, string[]>; savedPlan?: WavePlan | null; epicLabels?: string[]; extraLabels?: Record<number, string[]>; withoutWaveDefs?: boolean} = {}) {
   const defs = labelDefinitions().filter(d => !(opts.withoutWaveDefs && /^Wave: (2|3)$/.test(d.name)));
-  const gh = new FakePiGh().seedLabels(defs).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(defs).enableProposals();
   const epic: EpicDocV1 = {...populatedDoc(), stage: 'basic-design', dependencyPlan, wavePlan: opts.savedPlan ?? null, handoff: null};
   gh.add({number: 10, title: 'Epic', body: '外のメモ\n\n' + renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [...ISSUES]});
   for (const n of ISSUES) {
@@ -34,21 +34,21 @@ function world(opts: {labels?: Record<number, string[]>; savedPlan?: WavePlan | 
   gh.issues.get(13)!.blockedBy = [11];
   return gh;
 }
-const epicDoc = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh, p: unknown = plan(TARGET), extra: Record<string, unknown> = {}) => ({
+const epicDoc = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh, p: unknown = plan(TARGET), extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OP, expectedRevision: epicDoc(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), plan: p, ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/waves-apply.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: scenario.defaultParams ?? params(gh), ...scenario}});
   t.after(h.dispose);
   return h;
 }
 type Data = {appliedIssues: number[]; unchangedIssues: number[]; pendingIssues: number[]; wavePlanDigest: string};
-const labelEdits = (gh: FakePiGh) => gh.calls.filter(c => c.name === 'gh_issue_labels_if_current');
-const labelCreates = (gh: FakePiGh) => gh.calls.filter(c => c.name === 'gh_labels_apply' || c.name === 'gh_label_create');
-const noChange = (gh: FakePiGh, epicBefore: string) => { assert.equal(labelEdits(gh).length, 0); assert.equal(labelCreates(gh).length, 0); assert.equal(gh.issues.get(10)!.body, epicBefore); };
-const waveOf = (gh: FakePiGh, n: number) => gh.issues.get(n)!.labels.filter(l => l.startsWith('Wave'));
+const labelEdits = (gh: FakeDeterministicGh) => gh.calls.filter(c => c.name === 'gh_issue_labels_if_current');
+const labelCreates = (gh: FakeDeterministicGh) => gh.calls.filter(c => c.name === 'gh_labels_apply' || c.name === 'gh_label_create');
+const noChange = (gh: FakeDeterministicGh, epicBefore: string) => { assert.equal(labelEdits(gh).length, 0); assert.equal(labelCreates(gh).length, 0); assert.equal(gh.issues.get(10)!.body, epicBefore); };
+const waveOf = (gh: FakeDeterministicGh, n: number) => gh.issues.get(n)!.labels.filter(l => l.startsWith('Wave'));
 
 
 test('保存予定本文が64KiBを超えるWave計画はラベル定義・Issue変更前に拒否する', async t => {
@@ -195,7 +195,7 @@ test('an unknown 3rd label change stops the 4th; resume reconciles without re-ap
 
 test('labels all match but the Epic save fails: partial, never applied', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_edit_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const out = await (await harness(t, gh)).invoke();
   assert.notEqual(out.r.status, 'applied');
   assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
@@ -233,7 +233,7 @@ test('a label change reported as applied but not visible is caught by the read-b
   const gh = world();
   gh.overrides.set('gh_issue_labels_if_current', args => {
     const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8'));
-    return c.issue === 12 ? FakePiGh.ok({issue: 12}, 'applied') : undefined;
+    return c.issue === 12 ? FakeDeterministicGh.ok({issue: 12}, 'applied') : undefined;
   });
   const out = await (await harness(t, gh)).invoke();
   assert.notEqual(out.r.status, 'applied');

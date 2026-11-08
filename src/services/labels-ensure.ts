@@ -1,6 +1,6 @@
 // #3 scaffold_labels_ensure: compare all 211 managed label definitions with one gh_labels_list read, create the
 // missing ones (and, only when asked, update mismatching ones), then read the whole list back before success.
-// Only label-create/label-edit (and, with pi-gh's `labels-create-many` feature, batched creation) are used; Issue
+// Only label-create/label-edit (and, with deterministic-gh's `labels-create-many` feature, batched creation) are used; Issue
 // labels are never touched.
 import {join} from 'node:path';
 import {StrictReader, isRepoRef, isUuid, problem, type Decoded, type Problem, type ScaffoldResult} from '../core/contracts.js';
@@ -9,7 +9,7 @@ import {taggedDigest} from '../core/digests.js';
 import {writeOwnedFile} from '../core/files.js';
 import {definitionsDigest, labelDefinitions, type LabelDefinition} from '../core/label-definitions.js';
 import type {ToolCall} from '../core/runtime.js';
-import type {GhOutcome} from '../ports/pi-gh.js';
+import type {GhOutcome} from '../ports/deterministic-gh.js';
 
 export const LABELS_ENSURE = 'scaffold_labels_ensure';
 export interface LabelsEnsureInput { repo: string; operationId: string; onMismatch?: 'block' | 'update' }
@@ -40,7 +40,7 @@ function decodeLabelList(d: unknown): LabelIndex | undefined {
   return index;
 }
 
-/** One complete read of the repository's labels (pi-gh gh_labels_list). */
+/** One complete read of the repository's labels (deterministic-gh gh_labels_list). */
 export async function readLabels(call: ToolCall, repo: string): Promise<{labels: LabelIndex} | {error: Problem[]}> {
   const r = await call.bridge.call('gh_labels_list', {repo}, decodeLabelList, call.scope);
   if (r.status === 'ok') return {labels: r.data!};
@@ -73,7 +73,7 @@ function reconcileWith(def: LabelDefinition, call: ToolCall, repo: string, kind:
   };
 }
 
-/** Labels per label-create-many change: keeps one pi-gh call well inside the call limit. */
+/** Labels per label-create-many change: keeps one deterministic-gh call well inside the call limit. */
 export const CREATE_BATCH = 40;
 const planStep = (id: number) => `create-many-plan:${id}`, batchStep = (id: number) => `create-many:${id}`;
 const plans = (run: OperationRun) => run.record.steps.filter(s => s.name.startsWith('create-many-plan:')).map(s => ({id: Number(s.name.slice('create-many-plan:'.length)), names: s.data as string[]}));
@@ -86,7 +86,7 @@ async function applyMany(defs: LabelDefinition[], call: ToolCall, changePath: st
 }
 /**
  * An uncertain batch is settled from a fresh read: none of its labels exist → not applied (the same batch is sent
- * again); any of them exist → applied (pi-gh stops at the first uncertain write, so the rest are simply still
+ * again); any of them exist → applied (deterministic-gh stops at the first uncertain write, so the rest are simply still
  * missing and go into a new batch, judged like every other label by the rules and the final read-back).
  */
 function reconcileMany(names: string[], call: ToolCall, repo: string): Reconcile {
@@ -122,7 +122,7 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
   const operation = LABELS_ENSURE;
   const caps = await call.bridge.requireCapabilities(['gh_labels_list', 'gh_labels_apply'], call.scope);
   if (!caps.ok) return {status: caps.problems.some(p => p.code === 'STALE_SCOPE') ? 'cancelled' : 'blocked', operation, problems: caps.problems};
-  // pi-gh 0.7.0+ creates many labels in one change (one listing before and after instead of per label).
+  // deterministic-gh 0.7.0+ creates many labels in one change (one listing before and after instead of per label).
   const batching = (await call.bridge.requireCapabilities([], call.scope, ['labels-create-many'])).ok;
   const context = await call.repoContext(input.repo, null);
   if (!context.ok) return {status: 'blocked', operation, problems: context.problems};

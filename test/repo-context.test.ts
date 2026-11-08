@@ -27,7 +27,7 @@ test('derives the context from trust, origin, profile snapshot and policy', asyn
   assert.equal(r.value.profileId, 'developer');
   assert.equal(r.value.profileInstructionsDigest, sha256Text('開発用の指示（架空）'));
   assert.match(r.value.accountBinding!, /^[0-9a-f]{64}$/);
-  assert.ok(r.value.workflowStateRoot.startsWith('/synthetic/agent/pi-scaffold/state/'));
+  assert.ok(r.value.workflowStateRoot.startsWith('/synthetic/agent/deterministic-scaffold/state/'));
   assert.ok(r.value.workflowStateRoot.endsWith('/' + WORKFLOW_ID));
 });
 
@@ -71,7 +71,7 @@ test('GitHub remotes parse in https, scp and ssh forms only for github.com', () 
 });
 
 test('the git reader reads a real worktree with fixed argv only', async t => {
-  const dir = await realpath(await mkdtemp(join(tmpdir(), 'pi-scaffold-git-')));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'deterministic-scaffold-git-')));
   t.after(() => rm(dir, {recursive: true, force: true}));
   execFileSync('git', ['init', '-q', dir]);
   execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', 'https://github.com/example/demo.git']);

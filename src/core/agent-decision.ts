@@ -15,7 +15,7 @@ export const AGENT_DECISION_BLOCKED_TOOLS: readonly string[] = ['ask_user', 'Ask
 
 const STAGE_NAME: Partial<Record<Stage, string>> = {setup: '準備（Setup）', 'basic-design': '基本設計（Basic design）', implementation: '実装（Implementation）', verification: '検証（Verification）'};
 export const QUESTION_BLOCK_REASON = (stage: Stage) =>
-  `pi-scaffold: この${STAGE_NAME[stage] ?? stage}工程では人間に質問できません（owner policy）。人に聞いてよいのは仕様策定の工程だけです。` +
+  `deterministic-scaffold: この${STAGE_NAME[stage] ?? stage}工程では人間に質問できません（owner policy）。人に聞いてよいのは仕様策定の工程だけです。` +
   '承認済みの仕様・設計の意図の範囲なら自分で決めて進め、判断した内容と理由を Issue と最終報告に記録してください。' +
   '仕様の意図を変える必要があるときは scaffold_specification_revise で仕様を改訂してください（影響する Feature は Blocked になります）。下位の担当なら、親への質問として返してください。';
 

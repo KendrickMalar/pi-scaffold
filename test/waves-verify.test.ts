@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {taggedDigest} from '../src/core/digests.js';
 import {labelDefinitions} from '../src/core/label-definitions.js';
@@ -18,7 +18,7 @@ const plan = (waves: Record<number, number>, over: Partial<WavePlan> = {}): Wave
 const WAVES = {11: 1, 12: 1, 13: 2};
 
 function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>; closed?: number[]; extraChild?: boolean; noDependencyPlan?: boolean; scopes?: Record<number, string[]>} = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const epic: EpicDocV1 = {...populatedDoc(), stage: 'basic-design', dependencyPlan: opts.noDependencyPlan ? null : dependencyPlan, wavePlan: opts.saved === undefined ? plan(WAVES) : opts.saved, handoff: null};
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [11, 12, 13]});
   for (const n of [11, 12, 13]) {
@@ -29,14 +29,14 @@ function world(opts: {saved?: WavePlan | null; labels?: Record<number, string[]>
   if (opts.extraChild) { gh.add({number: 14, title: 'stray', body: 'no managed block', labels: [], state: 'open'}); gh.issues.get(10)!.subIssues!.push(14); }
   return gh;
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/waves-verify.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: {repo: 'example/demo', epicIssue: 10}, ...scenario}});
   t.after(h.dispose);
   return h;
 }
 type Data = {passed: boolean; checks: string[]; featureSetDigest: string | null; dependencyDigest: string | null; wavePlanDigest: string | null};
-const writes = (gh: FakePiGh) => gh.writes;
+const writes = (gh: FakeDeterministicGh) => gh.writes;
 
 test('a consistent saved plan, labels and dependencies pass with zero writes', async t => {
   const gh = world();
@@ -113,9 +113,9 @@ test('GitHub dependencies that differ from the saved dependency plan do not pass
 });
 
 for (const [label, change] of [
-  ['a label', (gh: FakePiGh) => { gh.issues.get(12)!.labels = gh.issues.get(12)!.labels.filter(l => !l.startsWith('Wave')).concat('Wave: 2'); }],
-  ['the Feature set', (gh: FakePiGh) => { gh.issues.get(10)!.subIssues = [11, 12]; }],
-  ['a dependency', (gh: FakePiGh) => { gh.issues.get(12)!.blockedBy = [11]; }],
+  ['a label', (gh: FakeDeterministicGh) => { gh.issues.get(12)!.labels = gh.issues.get(12)!.labels.filter(l => !l.startsWith('Wave')).concat('Wave: 2'); }],
+  ['the Feature set', (gh: FakeDeterministicGh) => { gh.issues.get(10)!.subIssues = [11, 12]; }],
+  ['a dependency', (gh: FakeDeterministicGh) => { gh.issues.get(12)!.blockedBy = [11]; }],
 ] as const) {
   test(`${label} changing while reading never passes`, async t => {
     const gh = world();

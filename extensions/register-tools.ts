@@ -28,7 +28,7 @@ export function registerTools(pi: ExtensionAPI, runtime: ScaffoldRuntime): strin
   const names: string[] = [];
   for (const create of TOOL_FACTORIES) {
     const tool = create(runtime);
-    if (names.includes(tool.name)) throw new Error(`Duplicate pi-scaffold tool ${tool.name}.`);
+    if (names.includes(tool.name)) throw new Error(`Duplicate deterministic-scaffold tool ${tool.name}.`);
     pi.registerTool(tool);
     names.push(tool.name);
   }

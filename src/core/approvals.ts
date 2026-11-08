@@ -70,7 +70,7 @@ export class ApprovalStore {
     const viewDigest = approvalViewDigest(kind, view);
     const message = `${view.text}\n\n――――\n種別: ${KIND_LABEL[kind]}\n対象: ${context.repo} / workflow ${workflowId}\n内容digest: ${viewDigest}`;
     let accepted = false;
-    try { accepted = await ui.confirm(`pi-scaffold: ${KIND_LABEL[kind]}`, message, {signal: scope.signal}); } catch { accepted = false; }
+    try { accepted = await ui.confirm(`deterministic-scaffold: ${KIND_LABEL[kind]}`, message, {signal: scope.signal}); } catch { accepted = false; }
     if (!accepted || !scope.isCurrent()) return {operation, status: 'cancelled', problems: [problem(accepted ? 'STALE_SCOPE' : 'DECLINED', kind, accepted ? 'Session changed during confirmation; nothing was recorded.' : 'Not approved.')]};
     return this.record(kind, workflowId, viewDigest, context, scope, {});
   }

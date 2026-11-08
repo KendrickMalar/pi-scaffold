@@ -4,7 +4,7 @@ import {mkdtemp, readFile, readdir, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderEpicVisible} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, specBaseDigest, specificationDigest} from '../src/core/digests.js';
@@ -24,23 +24,23 @@ function specDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
   return d;
 }
 function world(doc = specDoc(), wrap = true) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: wrap ? BEFORE + renderEpicBlock(doc) + AFTER : renderEpicBlock(doc), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification'], state: 'open'});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision,
   expectedBodySha256: sha256Text(gh.issues.get(10)!.body),
   facts: [], requirements: [], criteria: [], constraints: docOf(gh).constraints, outOfScope: docOf(gh).outOfScope, decisions: [], ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/specification-update.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: scenario.defaultParams ?? params(gh), ...scenario}});
   t.after(h.dispose);
   return h;
 }
-const edits = (gh: FakePiGh) => gh.count('gh_issue_edit_if_current');
+const edits = (gh: FakeDeterministicGh) => gh.count('gh_issue_edit_if_current');
 type Data = {revision: number; specDigest: string; missingFields: string[]};
 const req = (id: string, description: string) => ({id, description});
 const ac = (id: string, requirementIds: string[], verification = '手動で確認', expectedResult = '期待どおり') => ({id, requirementIds, verification, expectedResult});
@@ -130,8 +130,8 @@ test('a setup-stage Epic is blocked (the specification session has not started)'
 
 test('a stale revision, a stale body hash or a visible/JSON mismatch writes nothing, outside notes included', async t => {
   for (const make of [
-    (gh: FakePiGh) => params(gh, {expectedRevision: 2, requirements: [req('REQ003', 'x')]}),
-    (gh: FakePiGh) => params(gh, {expectedBodySha256: 'f'.repeat(64), requirements: [req('REQ003', 'x')]}),
+    (gh: FakeDeterministicGh) => params(gh, {expectedRevision: 2, requirements: [req('REQ003', 'x')]}),
+    (gh: FakeDeterministicGh) => params(gh, {expectedBodySha256: 'f'.repeat(64), requirements: [req('REQ003', 'x')]}),
   ]) {
     const gh = world(); const before = gh.issues.get(10)!.body;
     const out = await (await harness(t, gh)).invoke(make(gh));
@@ -202,7 +202,7 @@ test('changing a requirement bumps revision once, keeps IDs and outside bytes, r
   assert.notEqual(specBaseDigest(doc), specBaseDigest(start));
   assert.ok(doc.research.every(r => r.state === 'pending' && r.claim === null && r.conclusion === null && !r.evidenceRefs.length && !r.limitations.length), JSON.stringify(doc.research));
   assert.deepEqual(doc.research.map(r => r.researchId), start.research.map(r => r.researchId), 'research questions are kept, only progress resets');
-  const dir = join(h.agentDir, 'pi-scaffold');
+  const dir = join(h.agentDir, 'deterministic-scaffold');
   const files = await findFiles(dir, f => f.includes('research-history'));
   assert.equal(files.length, 1, files.join(','));
   const history = JSON.parse(await readFile(files[0]!, 'utf8'));
@@ -221,7 +221,7 @@ test('changing only decisions changes specDigest but keeps the research baseline
   assert.equal(specBaseDigest(doc), specBaseDigest(start));
   assert.notEqual(specificationDigest(doc), specificationDigest(start));
   assert.deepEqual(doc.research, start.research);
-  assert.deepEqual(await findFiles(join(h.agentDir, 'pi-scaffold'), f => f.includes('research-history')), []);
+  assert.deepEqual(await findFiles(join(h.agentDir, 'deterministic-scaffold'), f => f.includes('research-history')), []);
 });
 
 test('an AC may reference a REQ added in the same patch; existing records not in the patch are untouched', async t => {
@@ -262,9 +262,9 @@ test('constraints null given explicitly is reflected (null = not set)', async t 
 });
 
 test('an approval recorded for the old specification is not found after a change', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-spec-approval-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-spec-approval-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const root = join(dir, 'pi-scaffold'), start = specDoc();
+  const root = join(dir, 'deterministic-scaffold'), start = specDoc();
   const context: RepoContext = {repo: 'example/demo', repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', workflowStateRoot: join(root, 'state', 'r', start.workflowId), accountBinding: SHA_A, profileId: 'developer', profileInstructionsDigest: SHA_B};
   const store = new ApprovalStore(root);
   const old = await store.confirmContent('specification', start.workflowId, {contentDigest: specificationDigest(start), text: '仕様（架空）'}, context, {interactive: true, confirm: async () => true}, makeScope());
@@ -282,7 +282,7 @@ test('an approval recorded for the old specification is not found after a change
 test('a write that failed before reaching GitHub is retried only after all checks pass again', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
   const h = await harness(t, gh);
   const p = params(gh, {requirements: [req('REQ003', 'x')]});
   assert.equal((await h.invoke(p)).r.status, 'blocked');

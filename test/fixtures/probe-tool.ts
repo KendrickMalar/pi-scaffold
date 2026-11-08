@@ -3,7 +3,7 @@ import {Type} from '@earendil-works/pi-ai';
 import {join} from 'node:path';
 import {defineScaffoldTool, mutationInputFields} from '../../extensions/tool-kit.ts';
 import {decodeMutationInput, problem, type MutationInput} from '../../dist/src/core/contracts.js';
-import {readIssue} from '../../dist/src/ports/pi-gh.js';
+import {readIssue} from '../../dist/src/ports/deterministic-gh.js';
 import {withOperation} from '../../dist/src/core/lifecycle.js';
 import {taggedDigest} from '../../dist/src/core/digests.js';
 import {writeOwnedFile} from '../../dist/src/core/files.js';
@@ -11,7 +11,7 @@ import type {ScaffoldRuntime} from '../../dist/src/core/runtime.js';
 
 export function createTool(runtime: ScaffoldRuntime) {
   return defineScaffoldTool<MutationInput>(runtime, {
-    name: 'scaffold_test_probe', label: 'Foundation probe (test only)', description: 'Test-only probe of the pi-scaffold foundation.',
+    name: 'scaffold_test_probe', label: 'Foundation probe (test only)', description: 'Test-only probe of the deterministic-scaffold foundation.',
     parameters: Type.Object(mutationInputFields, {additionalProperties: false}),
     executionMode: 'sequential', readOnly: false,
     decode: raw => decodeMutationInput(raw),

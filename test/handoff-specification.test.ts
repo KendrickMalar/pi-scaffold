@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {stat, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {renderEpicBlock, composeManagedBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
@@ -21,11 +21,11 @@ const TOOLS = ['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current', 'g
 
 function epicBody(mutate: (d: EpicDocV1) => void = () => {}) { const d = initialDoc(); mutate(d); return renderEpicBlock(d); }
 function world(body = epicBody(), labels = ['Type: Scaffold', 'Scope: Epic'], title = '一覧をCSVで保存できるようにする') {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title, body, labels, state: 'open'});
   return gh;
 }
-const params = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const params = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: 1,
   expectedBodySha256: sha256Text(gh.issues.get(10)!.body), expectedStage: 'setup', nextStage: 'specification', ...extra,
 });
@@ -41,7 +41,7 @@ function receiver(herdr: FakeHerdr, agentDir: () => string, opts: {ready?: boole
   herdr.onPrompt = async (_pane, text) => { if (opts.started !== false) await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'target-session', prompt: text}); };
   return {packetPath: () => packetPath};
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, herdr: FakeHerdr, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, herdr: FakeHerdr, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/handoff-specification.ts');
   const h = await createHarness(createTool, {scenario: {gh, herdr, policy, sessionEntries: [profile()], environment, tools: TOOLS, waitMs: 300, pollMs: 10, defaultParams: params(gh), ...scenario}});
   t.after(h.dispose);
@@ -63,7 +63,7 @@ test('a valid setup Epic is handed to a new Specification session and only start
   assert.deepEqual([tab.workspaceId, tab.cwd], ['w9', '/synthetic/repo']);
   const run = herdr.calls.find(c => c.command === 'paneRun')!.args as {paneId: string; command: string};
   assert.equal(run.paneId, 'w9:p2', 'runs only in the root pane of the created tab');
-  const launch = /^env PI_CODING_AGENT_DIR='([A-Za-z0-9._\/:@+-]+)' PI_SCAFFOLD_DIR='([A-Za-z0-9._\/:@+-]+)' PI_BROWSER_ACCOUNT=(kuno|muu|rbx) pi-profile launch --profile developer -- --scaffold-handoff '([A-Za-z0-9._\/:@+-]+)' --model 'example-provider\/planner-1' --thinking 'medium'$/.exec(run.command);
+  const launch = /^env PI_CODING_AGENT_DIR='([A-Za-z0-9._\/:@+-]+)' DETERMINISTIC_SCAFFOLD_DIR='([A-Za-z0-9._\/:@+-]+)' PI_BROWSER_ACCOUNT=(kuno|muu|rbx) pi-profile launch --profile developer -- --scaffold-handoff '([A-Za-z0-9._\/:@+-]+)' --model 'example-provider\/planner-1' --thinking 'medium'$/.exec(run.command);
   assert.ok(launch, run.command);
   assert.equal(launch[1], h.runtime.agentDir, 'original auth directory is explicit');
   assert.equal(launch[2], h.runtime.scaffoldDir, 'selected storage directory is explicit');
@@ -499,9 +499,9 @@ test('a receiver whose Profile instructions changed since the sender started acc
   assert.ok(d.profileChanged, 'profileChanged is reported');
   assert.notEqual(d.profileChanged!.senderInstructionsDigest, d.profileChanged!.receiverInstructionsDigest);
   const {readdir, readFile} = await import('node:fs/promises');
-  const files = (await readdir(join(agentDir, 'pi-scaffold'), {recursive: true}) as string[]).filter(f => f.endsWith('ready.json'));
+  const files = (await readdir(join(agentDir, 'deterministic-scaffold'), {recursive: true}) as string[]).filter(f => f.endsWith('ready.json'));
   assert.equal(files.length, 1);
-  const ready = JSON.parse(await readFile(join(agentDir, 'pi-scaffold', files[0]!), 'utf8')) as {senderInstructionsDigest?: string; receiverInstructionsDigest?: string};
+  const ready = JSON.parse(await readFile(join(agentDir, 'deterministic-scaffold', files[0]!), 'utf8')) as {senderInstructionsDigest?: string; receiverInstructionsDigest?: string};
   assert.deepEqual([ready.senderInstructionsDigest, ready.receiverInstructionsDigest], [d.profileChanged!.senderInstructionsDigest, d.profileChanged!.receiverInstructionsDigest]);
 });
 

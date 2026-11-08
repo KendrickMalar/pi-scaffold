@@ -15,7 +15,7 @@ export function buildLaunchCommand(o: LaunchValues): string {
   // The Profile id comes from the fixed allowlist, so it is written unquoted (the developer command stays as before).
   return [...(o.agentDir !== undefined || o.scaffoldDir !== undefined || o.browserAccount !== undefined ? ['env',
     ...(o.agentDir !== undefined ? [`PI_CODING_AGENT_DIR=${quote(o.agentDir)}`] : []),
-    ...(o.scaffoldDir !== undefined ? [`PI_SCAFFOLD_DIR=${quote(o.scaffoldDir)}`] : []),
+    ...(o.scaffoldDir !== undefined ? [`DETERMINISTIC_SCAFFOLD_DIR=${quote(o.scaffoldDir)}`] : []),
     ...(o.browserAccount !== undefined ? [`PI_BROWSER_ACCOUNT=${o.browserAccount}`] : [])] : []), `pi-profile launch --profile ${o.profileId ?? 'developer'} -- --scaffold-handoff`, quote(o.packetPath),
     ...(o.model ? ['--model', quote(o.model)] : []), ...(o.model && o.thinking ? ['--thinking', quote(o.thinking)] : [])].join(' ');
 }

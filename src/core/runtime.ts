@@ -9,7 +9,7 @@ import {ApprovalStore, type AgentApprovalOptions, type ApprovalUi} from './appro
 import {loadOwnerPolicy, repoAgentApproves, type OwnerPolicy} from './model-bindings.js';
 import {resolveAgentDecisionStage, type AcceptedHandoff} from './agent-decision.js';
 import {deriveRepoContext, resolveAgentDir, resolveScaffoldDir} from './repo-context.js';
-import {PiGhBridge, type ToolExecutor} from '../ports/pi-gh.js';
+import {DeterministicGhBridge, type ToolExecutor} from '../ports/deterministic-gh.js';
 import {createGitReader, type GitReader} from '../ports/git-read.js';
 import {createHerdrCli, type HerdrPort} from '../handoff/herdr-client.js';
 import type {WatchEntry} from '../watch/decide.js';
@@ -51,7 +51,7 @@ export interface ScaffoldRuntime {
 export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<string, string | undefined>; home?: string} = {}): ScaffoldRuntime {
   const env = options.env ?? process.env;
   const agentDir = options.agentDir ?? resolveAgentDir(env, options.home ?? homedir());
-  const scaffoldDir = resolveScaffoldDir(options.scaffoldDir === undefined ? env : {PI_SCAFFOLD_DIR: options.scaffoldDir}, agentDir);
+  const scaffoldDir = resolveScaffoldDir(options.scaffoldDir === undefined ? env : {DETERMINISTIC_SCAFFOLD_DIR: options.scaffoldDir}, agentDir);
   return {
     scaffoldDir,
     scope: options.scope ?? new RuntimeScope(),
@@ -68,13 +68,13 @@ export function createRuntime(options: Partial<ScaffoldRuntime> & {env?: Record<
 
 /** Per-call services handed to a tool's run(). */
 export class ToolCall {
-  readonly bridge: PiGhBridge;
+  readonly bridge: DeterministicGhBridge;
   readonly namespaceRoot: string;
   readonly approvals: ApprovalStore;
   /** Time after which a tool stops starting new steps (an in-flight approval is not cut). */
   readonly deadline: number;
   constructor(readonly runtime: ScaffoldRuntime, readonly env: ToolEnv, readonly scope: CallScope) {
-    this.bridge = new PiGhBridge(env.executeTool, {interactiveWrites: env.approvalUi.interactive, ...(runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {})});
+    this.bridge = new DeterministicGhBridge(env.executeTool, {interactiveWrites: env.approvalUi.interactive, ...(runtime.timeoutMs !== undefined ? {timeoutMs: runtime.timeoutMs} : {})});
     this.namespaceRoot = runtime.scaffoldDir;
     this.approvals = new ApprovalStore(this.namespaceRoot);
     this.deadline = this.now() + (runtime.budgetMs ?? LIMITS.callTimeoutMs);

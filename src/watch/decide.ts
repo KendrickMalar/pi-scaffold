@@ -6,7 +6,7 @@ export const CHECK_INTERVAL_MS = 60_000;
 export const RETRY_DELAYS_MS = [60_000, 300_000, 900_000] as const;
 export const MAX_AUTO_CONTINUE = RETRY_DELAYS_MS.length;
 export const HERDR_FAILURE_LIMIT = 3;
-export const CONTINUE_PROMPT = 'pi-scaffold: 一時的なエラーで止まったため再開します。直前の作業を続けてください。';
+export const CONTINUE_PROMPT = 'deterministic-scaffold: 一時的なエラーで止まったため再開します。直前の作業を続けてください。';
 const MESSAGE_CHARS = 120;
 
 export interface WatchEntry {
@@ -31,7 +31,7 @@ export type WatchAction =
   | {type: 'prompt'; text: string; errorAt: number}
   | {type: 'stop'};
 
-export const noticeHead = (e: WatchEntry) => `pi-scaffold: Epic #${e.epicIssue}（${e.repo}・${e.targetStage}）`;
+export const noticeHead = (e: WatchEntry) => `deterministic-scaffold: Epic #${e.epicIssue}（${e.repo}・${e.targetStage}）`;
 const minutes = (ms: number) => `${Math.round(ms / 60_000)}分`;
 const cut = (s: string) => s.length > MESSAGE_CHARS ? `${s.slice(0, MESSAGE_CHARS)}…` : s;
 

@@ -1,5 +1,5 @@
 // Every running Herdr session, read through the CLI with fixed argv (no shell). Pane ids repeat across sessions,
-// so a pane is always (socket, paneId). Changes go through the existing pi-scaffold Herdr client per socket.
+// so a pane is always (socket, paneId). Changes go through the existing deterministic-scaffold Herdr client per socket.
 import {execFile} from 'node:child_process';
 import {createHerdrCli, type HerdrPort} from '../handoff/herdr-client.js';
 import type {EpicObservation, Target} from './types.js';

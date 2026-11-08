@@ -7,7 +7,7 @@ import {blobKey, checkDesignReady, startApprovalView} from '../core/design-gate.
 import {prepareLabelEdit} from '../core/label-policy.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {verifyWavesReading} from './waves-verify.js';
 
 export const HANDOFF_IMPLEMENTATION = 'scaffold_handoff_implementation';

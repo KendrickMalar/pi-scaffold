@@ -52,7 +52,7 @@ export async function deriveRepoContext(input: RepoContextInput): Promise<Decode
   const authMode = repoPolicyFor(input.policy, input.repo)?.authMode;
   return okValue({
     repo: input.repo, repoRoot: identity.repoRoot, gitCommonDir: identity.gitCommonDir,
-    workflowStateRoot: join(resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), 'state', repoHash(input.repo), input.workflowId ?? '_repo'),
+    workflowStateRoot: join(resolveScaffoldDir({DETERMINISTIC_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), 'state', repoHash(input.repo), input.workflowId ?? '_repo'),
     accountBinding: authMode === 'file-backed' ? taggedDigest('account-binding', {agentDir: input.agentDirRealpath, authMode}) : null,
     profileId: profile.snapshot?.id ?? null, profileInstructionsDigest: profile.snapshot?.instructionsDigest ?? null,
   });

@@ -10,7 +10,7 @@ import type {EpicDocV1, EvidenceReportV1, FeatureSnapshot} from '../src/core/con
 import {populatedDoc, featureDoc} from './helpers/docs.js';
 
 test('refs are checked against a real git history: ancestors pass, unrelated and missing commits do not', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-evidence-git-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-evidence-git-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const env = {...process.env, GIT_AUTHOR_NAME: 'f', GIT_AUTHOR_EMAIL: 'f@example.com', GIT_COMMITTER_NAME: 'f', GIT_COMMITTER_EMAIL: 'f@example.com'};
   const git = (...a: string[]) => execFileSync('git', ['-C', dir, ...a], {env}).toString().trim();

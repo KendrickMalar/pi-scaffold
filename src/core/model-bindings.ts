@@ -1,4 +1,4 @@
-// Owner policy (<scaffoldDir>/policy.json; default <agentDir>/pi-scaffold): per-repo allowed model tuples and auth mode.
+// Owner policy (<scaffoldDir>/policy.json; default <agentDir>/deterministic-scaffold): per-repo allowed model tuples and auth mode.
 // Only provider/id/thinking are handled; no model descriptors, auth.json or settings.json are read or changed.
 import {join} from 'node:path';
 import {resolveScaffoldDir} from './scaffold-dir.js';
@@ -74,7 +74,7 @@ export function decodeOwnerPolicy(value: unknown): Decoded<OwnerPolicy> {
 
 /**
  * The agent policy sidecar (<scaffoldDir>/policy.agent.json): `agentApprovals` and `questionBlockedStages` per policy key.
- * It lives beside policy.json so that policy.json keeps the older form, which earlier pi-scaffold versions still accept;
+ * It lives beside policy.json so that policy.json keeps the older form, which earlier deterministic-scaffold versions still accept;
  * only this version reads the sidecar. An entry adds to the policy.json entry of exactly the same key and nothing else.
  */
 export interface AgentPolicySidecar { version: 1; repos: Record<string, Pick<RepoPolicy, 'agentApprovals' | 'questionBlockedStages'>> }
@@ -112,7 +112,7 @@ export async function loadOwnerPolicy(agentDir: string, scaffoldDir?: string): P
   let root: string;
   const read = async (name: string) => readOwnedJson(join(root, name), {root, maxBytes: 64 * 1024});
   try {
-    root = resolveScaffoldDir({PI_SCAFFOLD_DIR: scaffoldDir}, agentDir);
+    root = resolveScaffoldDir({DETERMINISTIC_SCAFFOLD_DIR: scaffoldDir}, agentDir);
     const policy = decodeOwnerPolicy(await read('policy.json'));
     if (!policy.ok) return policy;
     let sidecar: Decoded<AgentPolicySidecar> | undefined;

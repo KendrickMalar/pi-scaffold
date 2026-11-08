@@ -26,10 +26,10 @@ test('npm pack ships exactly the runtime: extensions, built core, resources — 
     }
   }
   const forbidden = [/^test\//, /^dist\/test\//, /^scripts\//, /^\.superpowers\//, /^node_modules\//, /(^|\/)(journal|state|approvals|evidence)\//, /policy\.json$/, /auth\.json$/,
-    /pi-gh-permissions\.json$/, /(^|\/)profiles?\//, /\.(pem|key|env)$/, /probe-(tool|extension)\.ts$/, /tsconfig/];
+    /deterministic-gh-permissions\.json$/, /(^|\/)profiles?\//, /\.(pem|key|env)$/, /probe-(tool|extension)\.ts$/, /tsconfig/];
   for (const f of files) for (const re of forbidden) assert.ok(!re.test(f), `${f} must not be published (${re})`);
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.name, '@papillon6814/pi-scaffold'); assert.equal(pkg.license, 'MIT');
+  assert.equal(pkg.name, 'deterministic-scaffold'); assert.equal(pkg.license, 'MIT');
   assert.deepEqual(pkg.pi.extensions, ['extensions/index.ts']);
   assert.equal(pkg.scripts.prepack, 'npm run build', 'a pack always contains a fresh build');
   assert.match(pkg.scripts.build, /rmSync\('dist\/src'/, 'the build empties dist/src first');

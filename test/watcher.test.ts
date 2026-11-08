@@ -15,7 +15,7 @@ const mine = (paneId = 'w9:p2') => ({kind: 'id', value: `s-${paneId}`});
 const fetchFailed: TailResult = {kind: 'error', transient: true, message: 'fetch failed', at: 100};
 
 async function setup(t: {after(fn: () => Promise<void>): void}, opts: {owner?: string} = {}) {
-  const agentDir = await mkdtemp(join(tmpdir(), 'pi-scaffold-watcher-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-watcher-'));
   t.after(() => rm(agentDir, {recursive: true, force: true}));
   const herdr = new FakeHerdr();
   const registry = new WatchRegistry(agentDir);

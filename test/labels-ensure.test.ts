@@ -4,19 +4,19 @@ import assert from 'node:assert/strict';
 import {labelDefinitions, waveLabelDefinition, FIXED_LABEL_DEFINITIONS} from '../src/core/label-definitions.js';
 import {FIXED_LABEL_NAMES} from '../src/core/label-policy.js';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh, PI_GH_020_OPERATIONS} from './helpers/fake-pi-gh.js';
-import type {ToolOutcome} from '../src/ports/pi-gh.js';
+import {FakeDeterministicGh, DETERMINISTIC_GH_020_OPERATIONS} from './helpers/fake-deterministic-gh.js';
+import type {ToolOutcome} from '../src/ports/deterministic-gh.js';
 import {OPERATION_ID} from './helpers/docs.js';
 
 const params = (extra: Record<string, unknown> = {}) => ({repo: 'example/demo', operationId: OPERATION_ID, ...extra});
 const all = () => labelDefinitions().map(d => ({...d}));
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/labels-ensure.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: params(), ...scenario}});
   t.after(h.dispose);
   return h;
 }
-const applies = (gh: FakePiGh) => gh.count('gh_labels_apply');
+const applies = (gh: FakeDeterministicGh) => gh.count('gh_labels_apply');
 
 test('211 definitions: 11 fixed names and Wave 1..200, each once', () => {
   const defs = labelDefinitions();
@@ -32,7 +32,7 @@ test('211 definitions: 11 fixed names and Wave 1..200, each once', () => {
 });
 
 test('all 211 already match: no writes and noop', async t => {
-  const gh = new FakePiGh().seedLabels(all());
+  const gh = new FakeDeterministicGh().seedLabels(all());
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'noop', JSON.stringify(out.r.problems));
   assert.equal(out.ghWrites, 0);
@@ -41,7 +41,7 @@ test('all 211 already match: no writes and noop', async t => {
 });
 
 test('missing labels are created, others kept; every definition reads back; no Issue label changes', async t => {
-  const gh = new FakePiGh().seedLabels(all().filter(d => !['Blocked', 'Wave: 7'].includes(d.name))).seedLabels([{name: 'bug', color: 'd73a4a', description: '不具合'}]);
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => !['Blocked', 'Wave: 7'].includes(d.name))).seedLabels([{name: 'bug', color: 'd73a4a', description: '不具合'}]);
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.deepEqual((out.r.data as {created: string[]}).created.sort(), ['Blocked', 'Wave: 7']);
@@ -56,7 +56,7 @@ test('missing labels are created, others kept; every definition reads back; no I
 for (const [label, patch] of [['color', {color: 'ffffff'}], ['description', {description: '別の説明'}], ['case', {name: 'type: scaffold'}]] as const) {
   test(`a ${label} difference blocks by default without overwriting anything`, async t => {
     const defs = all(); Object.assign(defs[0]!, patch);
-    const gh = new FakePiGh().seedLabels(defs.filter(d => d.name !== 'Wave: 9'));
+    const gh = new FakeDeterministicGh().seedLabels(defs.filter(d => d.name !== 'Wave: 9'));
     const out = await (await harness(t, gh)).invoke();
     assert.equal(out.r.status, 'blocked');
     assert.ok(out.r.problems.some(p => p.code === 'LABEL_MISMATCH' && p.path.includes('Type: Scaffold')));
@@ -66,7 +66,7 @@ for (const [label, patch] of [['color', {color: 'ffffff'}], ['description', {des
 
 test('onMismatch=update edits only the mismatching definition', async t => {
   const defs = all(); defs[0]!.color = 'ffffff'; defs[1]!.name = 'type: jig';
-  const gh = new FakePiGh().seedLabels(defs);
+  const gh = new FakeDeterministicGh().seedLabels(defs);
   const out = await (await harness(t, gh)).invoke(params({onMismatch: 'update'}));
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.deepEqual((out.r.data as {updated: string[]}).updated.sort(), ['Type: Jig', 'Type: Scaffold']);
@@ -77,16 +77,16 @@ test('onMismatch=update edits only the mismatching definition', async t => {
 
 test('update without approval/permission changes nothing', async t => {
   const defs = all(); defs[0]!.color = 'ffffff';
-  const gh = new FakePiGh().seedLabels(defs);
-  gh.overrides.set('gh_labels_apply', () => FakePiGh.err('rejected', 'APPROVAL_UI_REQUIRED'));
+  const gh = new FakeDeterministicGh().seedLabels(defs);
+  gh.overrides.set('gh_labels_apply', () => FakeDeterministicGh.err('rejected', 'APPROVAL_UI_REQUIRED'));
   const out = await (await harness(t, gh)).invoke(params({onMismatch: 'update'}));
   assert.equal(out.r.status, 'blocked');
   assert.equal(gh.labels.get('type: scaffold')?.color, 'ffffff');
 });
 
 test('a failed label listing never leads to creation', async t => {
-  const gh = new FakePiGh();
-  gh.overrides.set('gh_labels_list', () => FakePiGh.err('rejected', 'GITHUB_LIMIT'));
+  const gh = new FakeDeterministicGh();
+  gh.overrides.set('gh_labels_list', () => FakeDeterministicGh.err('rejected', 'GITHUB_LIMIT'));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'blocked');
   assert.ok(out.r.problems.some(p => p.code === 'GITHUB_LIMIT'));
@@ -95,7 +95,7 @@ test('a failed label listing never leads to creation', async t => {
 
 test('the call budget pauses as partial and the same operation resumes without recreating', async t => {
   let clock = 0;
-  const gh = new FakePiGh().seedLabels(all().slice(0, 100));
+  const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 100));
   gh.onCall = () => { clock += 1000; };
   const h = await harness(t, gh, {budgetMs: 30_000, now: () => clock});
   const first = await h.invoke();
@@ -110,7 +110,7 @@ test('the call budget pauses as partial and the same operation resumes without r
 });
 
 test('an unknown create stops later applies and is reconciled on resume', async t => {
-  const gh = new FakePiGh().seedLabels(all().slice(0, 205));
+  const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 205));
   let creates = 0;
   gh.overrides.set('gh_labels_apply', () => { creates++; return creates === 3 ? {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} : undefined; });
   const h = await harness(t, gh);
@@ -125,15 +125,15 @@ test('an unknown create stops later applies and is reconciled on resume', async 
 });
 
 test('a label created concurrently (LABEL_EXISTS) is not treated as success', async t => {
-  const gh = new FakePiGh().seedLabels(all().slice(0, 210));
-  gh.overrides.set('gh_labels_apply', () => FakePiGh.err('rejected', 'LABEL_EXISTS'));
+  const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 210));
+  gh.overrides.set('gh_labels_apply', () => FakeDeterministicGh.err('rejected', 'LABEL_EXISTS'));
   const out = await (await harness(t, gh)).invoke();
   assert.notEqual(out.r.status, 'applied');
   assert.ok(out.r.problems.some(p => p.code === 'LABEL_EXISTS'));
 });
 
 test('input is strict: no partial wave selection, unknown keys or modes', async t => {
-  const gh = new FakePiGh();
+  const gh = new FakeDeterministicGh();
   const h = await harness(t, gh);
   for (const bad of [params({waves: [1, 2]}), params({onMismatch: 'replace'}), params({approved: true}), {repo: 'example/demo'}, params({operationId: 'x'})]) {
     const out = await h.invoke(bad);
@@ -143,10 +143,10 @@ test('input is strict: no partial wave selection, unknown keys or modes', async 
   }
 });
 
-test('untrusted projects and missing pi-gh label tools stop before any GitHub call', async t => {
-  const gh = new FakePiGh();
+test('untrusted projects and missing deterministic-gh label tools stop before any GitHub call', async t => {
+  const gh = new FakeDeterministicGh();
   assert.ok((await (await harness(t, gh, {trusted: false})).invoke()).r.problems.some(p => p.code === 'UNTRUSTED_PROJECT'));
-  const old = new FakePiGh(); old.operations = old.operations.filter(o => o !== 'gh_labels_apply');
+  const old = new FakeDeterministicGh(); old.operations = old.operations.filter(o => o !== 'gh_labels_apply');
   const out = await (await harness(t, old)).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING'));
   assert.equal(old.count('gh_labels_list'), 0);
@@ -154,7 +154,7 @@ test('untrusted projects and missing pi-gh label tools stop before any GitHub ca
 
 test('an update that was applied but reported unknown is reconciled, not stuck', async t => {
   const defs = all(); defs[0]!.color = 'ffffff';
-  const gh = new FakePiGh().seedLabels(defs);
+  const gh = new FakeDeterministicGh().seedLabels(defs);
   let first = true;
   gh.overrides.set('gh_labels_apply', () => { if (!first) return undefined; first = false; gh.labels.set('type: scaffold', {...gh.labels.get('type: scaffold')!, color: '7057ff'}); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome; });
   const h = await harness(t, gh);
@@ -168,7 +168,7 @@ test('an update that was applied but reported unknown is reconciled, not stuck',
 
 test('a label created by someone else meanwhile does not dead-end the operation', async t => {
   let clock = 0;
-  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
   gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
   const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
   const first = await h.invoke();
@@ -181,7 +181,7 @@ test('a label created by someone else meanwhile does not dead-end the operation'
 
 test('labels deleted while paused are detected on resume, never reported unchanged', async t => {
   let clock = 0;
-  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
   gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
   const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
   assert.equal((await h.invoke()).r.status, 'partial');
@@ -196,7 +196,7 @@ test('labels deleted while paused are detected on resume, never reported unchang
 });
 
 test('success requires a final read-back of every definition', async t => {
-  const gh = new FakePiGh().seedLabels(all().filter(d => d.name !== 'Wave: 1'));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => d.name !== 'Wave: 1'));
   let lists = 0;
   gh.overrides.set('gh_labels_list', () => { lists++; if (lists === 2) gh.labels.delete('blocked'); return undefined; });
   const out = await (await harness(t, gh)).invoke();
@@ -204,8 +204,8 @@ test('success requires a final read-back of every definition', async t => {
   assert.ok(out.r.problems.some(p => p.code === 'LABEL_READBACK_MISMATCH'));
 });
 
-test('pi-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t => {
-  const old = new FakePiGh(); old.operations = [...PI_GH_020_OPERATIONS];
+test('deterministic-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t => {
+  const old = new FakeDeterministicGh(); old.operations = [...DETERMINISTIC_GH_020_OPERATIONS];
   const out = await (await harness(t, old)).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING' && p.path === 'gh_labels_list'));
   assert.equal(old.calls.filter(c => c.name !== 'gh_capabilities').length, 0);
@@ -213,7 +213,7 @@ test('pi-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t
 
 test('a paused operation is not dead-ended by a label someone else changed meanwhile', async t => {
   let clock = 0;
-  const gh = new FakePiGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => !['Wave: 199', 'Wave: 200'].includes(d.name)));
   gh.onCall = name => { if (name === 'gh_labels_apply') clock += 100_000; };
   const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
   assert.equal((await h.invoke()).r.status, 'partial');
@@ -230,7 +230,7 @@ test('a paused operation is not dead-ended by a label someone else changed meanw
 });
 
 test('an uncertain create followed by a different same-name label resolves to the mismatch rule', async t => {
-  const gh = new FakePiGh().seedLabels(all().filter(d => d.name !== 'Blocked'));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => d.name !== 'Blocked'));
   gh.overrides.set('gh_labels_apply', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome));
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'unknown');
@@ -246,7 +246,7 @@ test('an uncertain create followed by a different same-name label resolves to th
 
 test('uncertain steps are reconciled before the budget pause, so the status is partial, not unknown', async t => {
   let clock = 0;
-  const gh = new FakePiGh().seedLabels(all().filter(d => !['Blocked', 'Wave: 200'].includes(d.name)));
+  const gh = new FakeDeterministicGh().seedLabels(all().filter(d => !['Blocked', 'Wave: 200'].includes(d.name)));
   let n = 0;
   gh.overrides.set('gh_labels_apply', () => { n++; if (n === 1) { clock += 100_000; return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true} as ToolOutcome; } return undefined; });
   const h = await harness(t, gh, {budgetMs: 50_000, now: () => clock});
@@ -258,9 +258,9 @@ test('uncertain steps are reconciled before the budget pause, so the status is p
   assert.ok(!resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
 });
 
-// pi-gh 0.7.0+ (`labels-create-many`): missing labels are created in batches instead of one change per label.
-const batching = () => { const gh = new FakePiGh(); gh.features = [...gh.features, 'labels-create-many']; return gh; };
-const perLabelCreates = (gh: FakePiGh) => gh.labelChanges.filter(c => c.operation === 'label-create').length;
+// deterministic-gh 0.7.0+ (`labels-create-many`): missing labels are created in batches instead of one change per label.
+const batching = () => { const gh = new FakeDeterministicGh(); gh.features = [...gh.features, 'labels-create-many']; return gh; };
+const perLabelCreates = (gh: FakeDeterministicGh) => gh.labelChanges.filter(c => c.operation === 'label-create').length;
 
 test('with labels-create-many, all 211 are created in batches of at most 40, then read back', async t => {
   const gh = batching();
@@ -344,8 +344,8 @@ test('a mismatching label with onMismatch=update is still edited one by one whil
   assert.deepEqual((out.r.data as {updated: string[]}).updated, [defs[0]!.name]);
 });
 
-test('without the labels-create-many feature (pi-gh 0.6.0 and older) labels are created one by one as before', async t => {
-  const gh = new FakePiGh().seedLabels(all().slice(0, 205));
+test('without the labels-create-many feature (deterministic-gh 0.6.0 and older) labels are created one by one as before', async t => {
+  const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 205));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.equal(perLabelCreates(gh), 6);

@@ -4,7 +4,7 @@ import {mkdir, symlink, writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {dirname, join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
@@ -31,15 +31,15 @@ function feature(epic: EpicDocV1, n: number): FeatureDocV1 {
     createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
 }
 function world(opts: {epic?: EpicDocV1; closed?: number[]; epicLabels?: string[]} = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Implementation'], state: 'open', subIssues: [...ISSUES]});
   for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: Implementation', 'Wave: 1'], state: opts.closed?.includes(n) ? 'closed' : 'open'});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
 type Report = {version: 1; workflowId: string; featureIssue: number; productRef: string; suiteRef: string; criteria: {id: string; status: string; command: string; exitCode: number | null; logPath: string; logSha256: string}[]};
-const evidenceRoot = (agentDir: string) => join(agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'evidence');
+const evidenceRoot = (agentDir: string) => join(agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'evidence');
 async function owned(path: string, text: string) { await mkdir(dirname(path), {recursive: true, mode: 0o700}); await writeFile(path, text, {mode: 0o600}); }
 /** Writes reports and logs into the owned evidence root; returns the evidenceRefs input. */
 async function writeEvidence(agentDir: string, mutate: (reports: Report[]) => void = () => {}, opts: {skipLogs?: string[]} = {}) {
@@ -62,7 +62,7 @@ function receiver(herdr: FakeHerdr, agentDir: () => string, seen: {packet?: Reco
   };
   herdr.onPrompt = async (_pane, text) => { await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'verify-session', prompt: text}); };
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/handoff-verification.ts');
   const herdr = new FakeHerdr(); const seen: {packet?: Record<string, unknown>} = {};
   let agentDir = '';
@@ -72,15 +72,15 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
   t.after(h.dispose);
   return {h, herdr, seen};
 }
-const params = (gh: FakePiGh, evidenceRefs: unknown, extra: Record<string, unknown> = {}) => ({
+const params = (gh: FakeDeterministicGh, evidenceRefs: unknown, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body),
   integrationRef: INTEGRATION, evidenceRefs, ...extra,
 });
-const noLaunch = (herdr: FakeHerdr, gh: FakePiGh) => {
+const noLaunch = (herdr: FakeHerdr, gh: FakeDeterministicGh) => {
   assert.equal(herdr.tabCreates, 0); assert.equal(herdr.count('paneRun'), 0);
   assert.equal(gh.conditionalChanges.length, 0); assert.equal(gh.count('gh_issue_close_if_current') + gh.count('gh_issue_close'), 0);
 };
-async function expectBlocked(t: {after(fn: () => Promise<void>): void}, mutate: (r: Report[]) => void, code: string, opts: {skipLogs?: string[]; extra?: Record<string, unknown>; gh?: FakePiGh; refs?: (refs: {relativePath: string; sha256: string}[], agentDir: string) => Promise<unknown> | unknown} = {}) {
+async function expectBlocked(t: {after(fn: () => Promise<void>): void}, mutate: (r: Report[]) => void, code: string, opts: {skipLogs?: string[]; extra?: Record<string, unknown>; gh?: FakeDeterministicGh; refs?: (refs: {relativePath: string; sha256: string}[], agentDir: string) => Promise<unknown> | unknown} = {}) {
   const gh = opts.gh ?? world();
   const {h, herdr} = await harness(t, gh);
   let refs: unknown = await writeEvidence(h.agentDir, mutate, opts);

@@ -8,7 +8,7 @@ import {INITIAL_PROGRESS, type WatchEntry} from '../src/watch/decide.js';
 
 const entry = (paneId = 'w9:p2', owner = 'parent'): WatchEntry => ({ownerSessionId: owner, paneId, tabId: 'w9:t2', workspaceId: 'w9', targetSessionId: `s-${paneId}`, cwd: '/synthetic/repo', repo: 'example/demo', epicIssue: 10, targetStage: 'specification', addedAt: '2026-10-11T00:00:00.000Z'});
 async function registry(t: {after(fn: () => Promise<void>): void}) {
-  const agentDir = await mkdtemp(join(tmpdir(), 'pi-scaffold-watch-'));
+  const agentDir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-watch-'));
   t.after(() => rm(agentDir, {recursive: true, force: true}));
   return new WatchRegistry(agentDir);
 }

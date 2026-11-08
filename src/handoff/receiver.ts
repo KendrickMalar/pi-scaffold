@@ -16,7 +16,7 @@ export interface ReceiverInput {
   sessionEntries: readonly unknown[]; toolNames: readonly string[]; policy: OwnerPolicy | undefined;
 }
 export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded<{packet: HandoffPacketV1; packetSha256: string}>> {
-  const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir);
+  const root = resolveScaffoldDir({DETERMINISTIC_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir);
   const read = await readPacket(input.packetPath, root);
   if (!read.ok) return read;
   const {packet, sha256} = read.value;
@@ -46,7 +46,7 @@ export async function acceptStartupPacket(input: ReceiverInput): Promise<Decoded
 /** Called on the first agent turn of the accepting session. Only that session can record the start. */
 export const promptTag = (nonceSha256: string) => `scaffold-${nonceSha256.slice(0, 12)}`;
 export async function recordTurnStarted(input: {packetPath: string; agentDir: string; scaffoldDir?: string; sessionId: string; prompt: string}): Promise<boolean> {
-  const root = resolveScaffoldDir({PI_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), dir = dirname(input.packetPath);
+  const root = resolveScaffoldDir({DETERMINISTIC_SCAFFOLD_DIR: input.scaffoldDir}, input.agentDir), dir = dirname(input.packetPath);
   const ready = await readReceipt(dir, 'receiver-ready', root);
   // Only the fixed stage prompt (carrying this packet's tag) starts the handoff turn.
   if (!ready || !input.prompt.includes(promptTag(ready.nonceSha256))) return false;

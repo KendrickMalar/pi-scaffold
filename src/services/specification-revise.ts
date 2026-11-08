@@ -17,7 +17,7 @@ import {withOperation} from '../core/lifecycle.js';
 import {reduceSpecification, type SpecificationPatch} from '../core/specification.js';
 import {checkSpecificationReady, specificationApprovalView} from '../core/specification-gate.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
+import {readIssue, DETERMINISTIC_GH_MASK} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {SPECIFICATION_PATCH_FIELDS} from './specification-update.js';
 
@@ -50,7 +50,7 @@ interface Plan { changedIds: string[]; affected: number[]; labelEdits: {issue: n
 export async function reviseSpecification(input: SpecificationReviseInput, call: ToolCall): Promise<ScaffoldResult<SpecificationReviseData>> {
   const operation = SPECIFICATION_REVISE;
   const blocked = (problems: Problem[]): ScaffoldResult<SpecificationReviseData> => ({status: 'blocked', operation, problems});
-  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
+  if (JSON.stringify(input).includes(DETERMINISTIC_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${DETERMINISTIC_GH_MASK}", which deterministic-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_subissues_list'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);

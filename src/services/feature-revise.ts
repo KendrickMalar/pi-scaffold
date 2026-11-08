@@ -12,7 +12,7 @@ import {readOwnedJson, writeOwnedFile} from '../core/files.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import {withOperation} from '../core/lifecycle.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
+import {readIssue, DETERMINISTIC_GH_MASK} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {checkCriteria, verifyDesignRef} from './feature-create.js';
 import {REVISABLE_STAGES} from './specification-revise.js';
@@ -35,7 +35,7 @@ interface Plan { edit: boolean; release: {changePath: string; expectedLabelsSha2
 export async function reviseFeature(input: FeatureReviseInput, call: ToolCall): Promise<ScaffoldResult<FeatureReviseData>> {
   const operation = FEATURE_REVISE;
   const blocked = (problems: Problem[]): ScaffoldResult<FeatureReviseData> => ({status: 'blocked', operation, problems});
-  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Feature could not be read back. Rephrase it.`)]);
+  if (JSON.stringify(input).includes(DETERMINISTIC_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${DETERMINISTIC_GH_MASK}", which deterministic-gh uses for redaction; the Feature could not be read back. Rephrase it.`)]);
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_subissues_list'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);

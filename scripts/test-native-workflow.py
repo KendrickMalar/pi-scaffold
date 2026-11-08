@@ -6,7 +6,7 @@ Pi agent dir/Profile, a stateful fake `gh` (fictional example/demo data), a loop
 The three approvals are given in a real Pi TUI dialog; the four handoffs open real new tabs. Only `git ls-remote` is
 answered locally (as origin would) so nothing touches the network. Never touches the user's Herdr, Pi settings or GitHub.
 
-  python3 scripts/test-native-workflow.py --pi-gh /path/to/pi-gh-0.5.0 --pi-profile /path/to/pi-profile
+  python3 scripts/test-native-workflow.py --deterministic-gh /path/to/deterministic-gh-0.5.0 --pi-profile /path/to/pi-profile
 """
 import argparse, fcntl, hashlib, http.server, json, os, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, threading, time, unittest
 from pathlib import Path
@@ -53,7 +53,7 @@ class Workflow(unittest.TestCase):
                     name, args = owner.call
                     delta = {'role': 'assistant', 'tool_calls': [{'index': 0, 'id': f'call-{len(owner.requests)}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}; end = 'tool_calls'
                 else:
-                    delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'pi-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
+                    delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'deterministic-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
                 for d, finish in [(delta, None), ({}, end)]:
                     ev = {'id': 'x', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'fixture', 'choices': [{'index': 0, 'delta': d, 'finish_reason': finish}]}
                     self.wfile.write(('data: ' + json.dumps(ev) + '\n\n').encode())
@@ -69,11 +69,11 @@ class Workflow(unittest.TestCase):
         dev = self.agent / 'profiles/development'; dev.mkdir(parents=True)
         (dev / 'profile.json').write_text(json.dumps({'id': 'developer', 'label': 'Development', 'description': '開発（試験用）', 'order': 30, 'enabled': True}))
         (dev / 'instructions.md').write_text('試験用の開発Profile（架空）\n')
-        (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.pi_gh).resolve()), str(ROOT)]}))
-        (self.agent / 'pi-scaffold').mkdir(mode=0o700)
-        pol = self.agent / 'pi-scaffold/policy.json'
+        (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.deterministic_gh).resolve()), str(ROOT)]}))
+        (self.agent / 'deterministic-scaffold').mkdir(mode=0o700)
+        pol = self.agent / 'deterministic-scaffold/policy.json'
         pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': [{'model': MODEL, 'thinking': 'medium', 'tier': 'basic', 'roles': ['coding-manager', 'coder', 'tester']}]}}})); pol.chmod(0o600)
-        grant = self.agent / 'pi-gh-permissions.json'
+        grant = self.agent / 'deterministic-gh-permissions.json'
         grant.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'allowHeadless': True, 'allowChild': False, 'operations': [
             'gh_label_create', 'gh_issue_submit', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current', 'gh_subissue_add', 'gh_dependency_add']}]})); grant.chmod(0o600)
         for cmd in (['pi-profile', 'packages', 'install', '--profile', 'developer'], ['herdr', 'integration', 'install', 'pi']):
@@ -256,7 +256,7 @@ class Workflow(unittest.TestCase):
         integration = self.commit('src/api/csv.ts', 'export const csv = () => "";\n', 'integration')
         wf = self.doc(1)['workflowId']
         repo_hash = self.node("import {repoHash} from './dist/src/core/repo-context.js';process.stdout.write(repoHash('example/demo'))")
-        evidence_root = self.agent / 'pi-scaffold' / 'state' / repo_hash / wf / 'evidence'
+        evidence_root = self.agent / 'deterministic-scaffold' / 'state' / repo_hash / wf / 'evidence'
         for d in (evidence_root, evidence_root / 'logs', evidence_root / 'reports'): d.mkdir(mode=0o700, parents=True, exist_ok=True); d.chmod(0o700)
         def evidence(prefix):
             refs = []
@@ -301,14 +301,14 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.issue(f2).get('blocked_by'), [f1])
         tabs = [t for t in self.herdr('tab', 'list')['result']['tabs'] if t['label'].startswith('scaffold-')]
         self.assertEqual(len(tabs), 4, 'one new tab per handoff (specification, basic-design, implementation, verification)')
-        approvals = sorted(p.parent.name for p in (self.agent / 'pi-scaffold/state').rglob('approvals/*/*.json'))
+        approvals = sorted(p.parent.name for p in (self.agent / 'deterministic-scaffold/state').rglob('approvals/*/*.json'))
         self.assertEqual(approvals, ['epic-completion', 'implementation-start', 'specification'])
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
-    parser.add_argument('--pi-gh', required=True)
+    parser.add_argument('--deterministic-gh', required=True)
     parser.add_argument('--pi-profile', required=True)
     OPTIONS = parser.parse_args()
     result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([Workflow('test_one_epic_through_all_fourteen_tools')]))

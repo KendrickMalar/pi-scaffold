@@ -61,7 +61,7 @@ export class StageWatcher {
 
   private async owned(): Promise<WatchRecord[]> {
     const {records, corrupt} = await this.deps.registry.load();
-    if (corrupt && !this.corruptNotified) { this.corruptNotified = true; this.deps.notify('pi-scaffold: 監視台帳に読めない項目があったため、読み飛ばしました。', 'warning'); }
+    if (corrupt && !this.corruptNotified) { this.corruptNotified = true; this.deps.notify('deterministic-scaffold: 監視台帳に読めない項目があったため、読み飛ばしました。', 'warning'); }
     return records.filter(r => r.entry.ownerSessionId === this.deps.ownerSessionId);
   }
 
@@ -72,12 +72,12 @@ export class StageWatcher {
     try { v = await this.deps.herdr.version(); }
     catch {
       this.versionFailures += 1;
-      if (this.versionFailures === HERDR_FAILURE_LIMIT) this.deps.notify(`pi-scaffold: Herdr に ${HERDR_FAILURE_LIMIT} 回続けて接続できませんでした。下位の監視は接続できるまで待ちます。`, 'warning');
+      if (this.versionFailures === HERDR_FAILURE_LIMIT) this.deps.notify(`deterministic-scaffold: Herdr に ${HERDR_FAILURE_LIMIT} 回続けて接続できませんでした。下位の監視は接続できるまで待ちます。`, 'warning');
       return 'skip';
     }
     this.versionFailures = 0;
     this.herdr = isSupportedHerdr(v) ? 'ok' : 'unsupported';
-    if (this.herdr === 'unsupported') this.deps.notify(`pi-scaffold: Herdr ${v.version}/protocol ${v.protocol} は未検証のため、下位の監視を止めました（必要: ${supportedHerdrLabel()}）。`, 'warning');
+    if (this.herdr === 'unsupported') this.deps.notify(`deterministic-scaffold: Herdr ${v.version}/protocol ${v.protocol} は未検証のため、下位の監視を止めました（必要: ${supportedHerdrLabel()}）。`, 'warning');
     return this.herdr;
   }
 
@@ -95,7 +95,7 @@ export class StageWatcher {
         // One broken watch must not stop the others; the next check retries it.
         try { await this.check(record); }
         catch (e) {
-          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`pi-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
+          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`deterministic-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
         }
       }
     } finally { this.running = false; }
@@ -140,7 +140,7 @@ export class StageWatcher {
         // Persist the count BEFORE typing: a lost save after a send could otherwise cause a second "continue".
         try { await this.deps.registry.update({entry, progress: next}); }
         catch (e) {
-          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`pi-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
+          if (!this.registryNotified) { this.registryNotified = true; this.deps.notify(`deterministic-scaffold: 監視台帳を更新できませんでした（${(e as Error).message}）。次回の確認で再試行します。`, 'warning'); }
           return;
         }
         record = {entry, progress: next}; // saved: compare later writes against this

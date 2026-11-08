@@ -7,8 +7,8 @@ export function createTool(runtime: ScaffoldRuntime) {
   return defineScaffoldTool<LabelsEnsureInput>(runtime, {
     name: LABELS_ENSURE,
     label: 'Scaffold: 管理ラベルの準備',
-    description: 'Check the 211 Scaffold management labels (11 fixed + Wave: 1..200) in a repository and create only the missing ones through pi-gh. '
-      + 'Differences in color/description/case block by default (onMismatch "update" edits them, still through pi-gh approval). '
+    description: 'Check the 211 Scaffold management labels (11 fixed + Wave: 1..200) in a repository and create only the missing ones through deterministic-gh. '
+      + 'Differences in color/description/case block by default (onMismatch "update" edits them, still through deterministic-gh approval). '
       + 'Never renames or deletes other labels and never changes Issue labels. Long runs return partial; call again with the same operationId to continue.',
     parameters: Type.Object({
       repo: Type.String({pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$', description: 'OWNER/REPO (must match the origin of the trusted working directory).'}),

@@ -16,7 +16,7 @@ import {prepareLabelEdit} from '../core/label-policy.js';
 import {evidenceRootOf, readEvidence} from '../core/evidence.js';
 import {checkCompletion, completionApprovalView, type CompletionResult} from '../core/completion-gate.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {readEpicTree} from '../ports/epic-tree.js';
 import {linked, planProjectClose, type ProjectClosePlan} from '../core/project-close-plan.js';
@@ -238,7 +238,7 @@ export async function completeEpic(input: EpicCompleteInput, call: ToolCall): Pr
           const state = await readProjectState(projectId);
           if (state.status !== 'ok') return run.stop([problem('PROJECT_UNREADABLE', `projectIds[${projectId}]`, `The recorded Project ${projectId} could not be read.`)]);
           if (!linked(state.data!.repositories, input.repo)) {
-            // Not a failure: pi-gh closes only a Project linked to the repo; it is left open and reported for a human to close.
+            // Not a failure: deterministic-gh closes only a Project linked to the repo; it is left open and reported for a human to close.
             plan = {...plan, close: plan.close.filter(id => id !== projectId), skipped: [...plan.skipped, {projectId, reason: 'not-linked'}]};
             run.note('projects-plan', plan);
             continue;

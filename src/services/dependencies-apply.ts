@@ -13,7 +13,7 @@ import {withOperation} from '../core/lifecycle.js';
 import {renderDependencyMermaid, validateDependencyGraph, type Edge} from '../core/dependency-graph.js';
 import {editScopeProblems} from '../core/wave-plan.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {verifyDesignRef} from './feature-create.js';
 
@@ -167,7 +167,7 @@ export async function applyDependencies(input: DependenciesApplyInput, call: Too
         reconcile: async () => { const b = await blockersOf(e.to); return b === undefined ? 'unknown' : b.includes(e.from) ? 'applied' : 'not-applied'; },
       });
     }
-    // Added = edges this operation created (pi-gh reports an already-present edge as noop, which records no data).
+    // Added = edges this operation created (deterministic-gh reports an already-present edge as noop, which records no data).
     const added = plannedEdges.filter(e => run.record.steps.some(s => s.name === `edge:${e.from}->${e.to}` && s.phase === 'done' && s.data === true));
     // A change an earlier run sent without a confirmed outcome must be settled through run.write (its reconcile reads
     // GitHub), even when GitHub already shows it; skipping it would leave the operation uncertain forever.

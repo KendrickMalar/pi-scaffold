@@ -17,17 +17,17 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const profile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '開発用（架空）'}};
 
 async function boot(t: {after(fn: () => Promise<void>): void}, opts: {stages: string[]; targetStage: Stage; withPacket?: boolean; field?: 'agentDecisionStages' | 'questionBlockedStages'}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-ext-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-ext-'));
   const agentDir = await realpath(dir).then(d => join(d, 'agent')), cwd = join(dir, 'repo');
-  await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700}); await mkdir(cwd);
-  await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], [opts.field ?? 'agentDecisionStages']: opts.stages}}}), {mode: 0o600});
+  await mkdir(join(agentDir, 'deterministic-scaffold'), {recursive: true, mode: 0o700}); await mkdir(cwd);
+  await writeFile(join(agentDir, 'deterministic-scaffold', 'policy.json'), JSON.stringify({version: 1, repos: {'example/demo': {authMode: 'file-backed', models: [], [opts.field ?? 'agentDecisionStages']: opts.stages}}}), {mode: 0o600});
   const snapshot = readProfileSnapshot([profile]).snapshot!;
   const packet: HandoffPacketV1 = {
     version: 1, nonce: 'c'.repeat(64), workflowId: WORKFLOW_ID, repo: 'example/demo', epicIssue: 10, sourceStage: 'basic-design', targetStage: opts.targetStage,
     artifactDigests: {epicBodySha256: SHA_A, epicLabelsSha256: SHA_A}, cwd, profileId: 'developer', profileInstructionsDigest: snapshot.instructionsDigest,
     accountBinding: taggedDigest('account-binding', {agentDir, authMode: 'file-backed'}), requiredTools: [], resourceRefs: [],
   };
-  const {path} = await writePacket(join(agentDir, 'pi-scaffold', 'state', 'x', 'handoff', 'op'), packet, join(agentDir, 'pi-scaffold'));
+  const {path} = await writePacket(join(agentDir, 'deterministic-scaffold', 'state', 'x', 'handoff', 'op'), packet, join(agentDir, 'deterministic-scaffold'));
   const saved = {agent: process.env.PI_CODING_AGENT_DIR, herdr: process.env.HERDR_ENV};
   process.env.PI_CODING_AGENT_DIR = agentDir; delete process.env.HERDR_ENV;
   t.after(async () => {

@@ -3,7 +3,7 @@ import {readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {renderEpicBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
@@ -33,12 +33,12 @@ function readyDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
   return d;
 }
 function world(doc = readyDoc(), labels = LABELS, outside = '') {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: outside + renderEpicBlock(doc), labels: [...labels], state: 'open'});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), ...extra,
 });
 function receiver(herdr: FakeHerdr, agentDir: () => string, cwd = '/synthetic/repo') {
@@ -50,7 +50,7 @@ function receiver(herdr: FakeHerdr, agentDir: () => string, cwd = '/synthetic/re
   };
   herdr.onPrompt = async (_pane, text) => { await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'design-session', prompt: text}); };
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, herdr = new FakeHerdr(), scenario: Scenario = {}, receiverCwd?: string) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, herdr = new FakeHerdr(), scenario: Scenario = {}, receiverCwd?: string) {
   const {createTool} = await loadToolModule('extensions/tools/handoff-basic-design.ts');
   let agentDir = '';
   receiver(herdr, () => agentDir, receiverCwd);
@@ -59,7 +59,7 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
   t.after(h.dispose);
   return {h, herdr};
 }
-const noLaunch = (herdr: FakeHerdr, gh: FakePiGh) => {
+const noLaunch = (herdr: FakeHerdr, gh: FakeDeterministicGh) => {
   assert.equal(herdr.tabCreates, 0); assert.equal(herdr.count('paneRun'), 0); assert.equal(herdr.count('agentPrompt'), 0);
   assert.equal(gh.conditionalChanges.length, 0, 'no Stage/body change');
 };
@@ -270,7 +270,7 @@ test('the approval is re-checked at the stage commit itself (body unchanged, app
   const herdr = new FakeHerdr();
   const {h} = await harness(t, gh, herdr);
   const run = herdr.onPaneRun!;
-  herdr.onPaneRun = async (p, c) => { await run(p, c); await rm(join(h.agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), readyDoc().workflowId, 'approvals'), {recursive: true, force: true}); };
+  herdr.onPaneRun = async (p, c) => { await run(p, c); await rm(join(h.agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), readyDoc().workflowId, 'approvals'), {recursive: true, force: true}); };
   const before = gh.issues.get(10)!.body;
   const out = await h.invoke();
   assert.notEqual(out.r.status, 'applied');
@@ -331,7 +331,7 @@ test('a missing write capability the handoff needs later stops before the approv
   }
 });
 
-const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'pi-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'pi-scaffold', f));
+const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'deterministic-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'deterministic-scaffold', f));
 const otherProfile = profile('developer', '別の指示文（架空）');
 
 test('an approval of the same specification recorded under another profile is asked again; Yes overwrites it, No keeps it', async t => {

@@ -33,7 +33,7 @@ test('discover: a handoff with a ready receiver becomes a target, with its owner
 });
 
 test('discover: a pi scaffold dir under ~/.pi/agent* gives its targets that agent directory', async t => {
-  const home = await scaffoldDir(t), dir = join(home, '.pi', 'agent-rbx', 'pi-scaffold');
+  const home = await scaffoldDir(t), dir = join(home, '.pi', 'agent-rbx', 'deterministic-scaffold');
   await handoff(dir, 'op1', packet(), ready('s1'));
   const [pi] = await discoverTargets([{dir, agent: 'pi'}], NOW);
   assert.equal(pi?.agentDir, join(home, '.pi', 'agent-rbx'));

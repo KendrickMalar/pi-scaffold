@@ -1,9 +1,9 @@
 // Session-bound cancellation and the single place where operations record intent, steps and stops.
 import {problem, type CallScope, type Problem, type ScaffoldResult, type ScaffoldStatus, type Sha256, type UUID} from './contracts.js';
 import type {OperationJournal, OperationRecord} from './journal.js';
-import type {GhOutcome} from '../ports/pi-gh.js';
+import type {GhOutcome} from '../ports/deterministic-gh.js';
 
-/** Generation counter invalidated on session switch/fork/tree/reload/shutdown. Mirrors pi-gh's scope. */
+/** Generation counter invalidated on session switch/fork/tree/reload/shutdown. Mirrors deterministic-gh's scope. */
 export class RuntimeScope {
   private generation = 0;
   private leases = new Set<AbortController>();

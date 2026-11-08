@@ -33,7 +33,7 @@ class FakeFleet implements Fleet {
 async function setup(t: {after(fn: () => Promise<void>): void}, readyExtra: Record<string, unknown> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'watchdog-run-'));
   t.after(() => rm(root, {recursive: true, force: true}));
-  const dir = join(root, 'pi-scaffold'), op = join(dir, 'state', 'h', 'wf', 'handoff', 'op1');
+  const dir = join(root, 'deterministic-scaffold'), op = join(dir, 'state', 'h', 'wf', 'handoff', 'op1');
   await mkdir(op, {recursive: true});
   await writeFile(join(op, 'packet.json'), JSON.stringify({repo: 'example/demo', epicIssue: 7, targetStage: 'implementation', cwd: '/repo'}));
   await writeFile(join(op, 'ready.json'), JSON.stringify({phase: 'receiver-ready', sessionId: 's1', at: '2026-10-18T00:00:00.000Z', ...readyExtra}));
@@ -180,11 +180,11 @@ test('two later conversations in the handoff tab: rebind-ambiguous, nothing type
 test('the session that handed off another stage in the same cwd is never taken as a successor', async t => {
   const s = await setup(t, {nonceSha256: NONCE});
   // A later handoff (another Epic, same cwd) whose sender runs in an untagged tab: seen on 2026-10-18 for launchd-manager.
-  const op2 = join(s.root, 'pi-scaffold', 'state', 'h', 'wf2', 'handoff', 'op2');
+  const op2 = join(s.root, 'deterministic-scaffold', 'state', 'h', 'wf2', 'handoff', 'op2');
   await mkdir(op2, {recursive: true});
   await writeFile(join(op2, 'packet.json'), JSON.stringify({repo: 'example/demo', epicIssue: 9, targetStage: 'specification', cwd: '/repo'}));
   await writeFile(join(op2, 'ready.json'), JSON.stringify({phase: 'receiver-ready', sessionId: 's4', at: '2026-10-18T00:31:00.000Z'}));
-  await writeFile(join(s.root, 'pi-scaffold', 'state', 'watches.json'), JSON.stringify({version: 1, watches: [{entry: {targetSessionId: 's4', ownerSessionId: 's2'}}]}));
+  await writeFile(join(s.root, 'deterministic-scaffold', 'state', 'watches.json'), JSON.stringify({version: 1, watches: [{entry: {targetSessionId: 's4', ownerSessionId: 's2'}}]}));
   s.fleet.panesBySocket.set('/s.sock', [
     {socket: '/s.sock', paneId: 'w1:p2', agent: 'pi', status: 'idle', sessionValue: LATER, revision: 2, cwd: '/repo', tabLabel: '1'},
     {socket: '/s.sock', paneId: 'w1:p3', agent: 'pi', status: 'idle', sessionValue: '/sessions/--repo--/2026-10-18T00-31-00-000Z_s4.jsonl', revision: 2, cwd: '/repo', tabLabel: 'scaffold-other'},
@@ -224,12 +224,12 @@ test('a Herdr session that cannot be read is logged and the others still run', a
 
 test('roots: explicit list, or every Pi agent dir and the Claude scaffold dir that exist', async t => {
   const {resolveRoots} = await import('../src/watchdog/main.js');
-  assert.deepEqual(resolveRoots({SCAFFOLD_WATCHDOG_ROOTS: 'pi=/a/pi-scaffold, claude=/b/pi-scaffold'}, '/home'), [{agent: 'pi', dir: '/a/pi-scaffold'}, {agent: 'claude', dir: '/b/pi-scaffold'}]);
+  assert.deepEqual(resolveRoots({SCAFFOLD_WATCHDOG_ROOTS: 'pi=/a/deterministic-scaffold, claude=/b/deterministic-scaffold'}, '/home'), [{agent: 'pi', dir: '/a/deterministic-scaffold'}, {agent: 'claude', dir: '/b/deterministic-scaffold'}]);
   assert.throws(() => resolveRoots({SCAFFOLD_WATCHDOG_ROOTS: 'codex=/a'}, '/home'), /pi=\/abs\/path/);
   const home = await mkdtemp(join(tmpdir(), 'watchdog-home-'));
   t.after(() => rm(home, {recursive: true, force: true}));
-  for (const d of ['.pi/agent/pi-scaffold', '.pi/agent-muu/pi-scaffold', '.pi/agent-rbx', '.claude/scaffold/pi-scaffold']) await mkdir(join(home, d), {recursive: true});
-  assert.deepEqual(resolveRoots({}, home), [{agent: 'pi', dir: join(home, '.pi/agent/pi-scaffold')}, {agent: 'pi', dir: join(home, '.pi/agent-muu/pi-scaffold')}, {agent: 'claude', dir: join(home, '.claude/scaffold/pi-scaffold')}]);
+  for (const d of ['.pi/agent/deterministic-scaffold', '.pi/agent-muu/deterministic-scaffold', '.pi/agent-rbx', '.claude/scaffold/deterministic-scaffold']) await mkdir(join(home, d), {recursive: true});
+  assert.deepEqual(resolveRoots({}, home), [{agent: 'pi', dir: join(home, '.pi/agent/deterministic-scaffold')}, {agent: 'pi', dir: join(home, '.pi/agent-muu/deterministic-scaffold')}, {agent: 'claude', dir: join(home, '.claude/scaffold/deterministic-scaffold')}]);
 });
 
 test('reconcile runs with the user temp dir, where Pi keeps pi-subagents runs, even when launchd sets no TMPDIR', async () => {

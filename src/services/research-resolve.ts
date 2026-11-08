@@ -11,7 +11,7 @@ import {OwnedFileError, ownedPath, readOwnedFile, writeOwnedFile} from '../core/
 import {withOperation} from '../core/lifecycle.js';
 import {applyResolution, checkResolution, parseEvidenceRef, showsResolution, type ResearchResolution} from '../core/research.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 
 export const RESEARCH_RESOLVE = 'scaffold_research_resolve';
 export type ResearchResolveInput = MutationInput & {resolutions: ResearchResolution[]};
@@ -129,7 +129,7 @@ export async function resolveResearch(input: ResearchResolveInput, call: ToolCal
         reconcile: async () => { const s = await reread(run.stop); return showsResolution(s.doc as EpicDocV1, res) ? 'applied' : s.bodySha256 === expected!.expectedBodySha256 ? 'not-applied' : 'unknown'; },
       });
     }
-    // Each item was confirmed by pi-gh's conditional edit or by reconciliation; later edits by others are not ours to undo.
+    // Each item was confirmed by deterministic-gh's conditional edit or by reconciliation; later edits by others are not ours to undo.
     const doc = (await reread(run.stop)).doc as EpicDocV1;
     return {status: 'applied', data: {
       resolvedIds: input.resolutions.filter(r => r.disposition === 'resolved').map(r => r.researchId),

@@ -12,7 +12,7 @@ import type {GitReader} from '../../src/ports/git-read.js';
 import type {OwnerPolicy} from '../../src/core/model-bindings.js';
 import type {AcceptedHandoff} from '../../src/core/agent-decision.js';
 import type {ScaffoldResult} from '../../src/core/contracts.js';
-import {FakePiGh} from './fake-pi-gh.js';
+import {FakeDeterministicGh} from './fake-deterministic-gh.js';
 
 export interface ToolDefinitionLike {
   name: string; parameters: TSchema; prepareArguments?: (args: unknown) => unknown; outputSchema?: TSchema; executionMode?: string;
@@ -22,7 +22,7 @@ export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinitionLike;
 import type {HerdrPort} from '../../src/handoff/herdr-client.js';
 export interface FakeHerdrLike { calls: {command: string; args: unknown}[] }
 export interface Scenario {
-  gh?: FakePiGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | ((title: string, message: string) => boolean); child?: boolean;
+  gh?: FakeDeterministicGh; trusted?: boolean; interactive?: boolean; confirm?: boolean | ((title: string, message: string) => boolean); child?: boolean;
   /** ctx.cwd of the session (default /synthetic/repo). */
   cwd?: string;
   origin?: string; sessionEntries?: unknown[]; policy?: OwnerPolicy; availableModels?: string[]; scopedModels?: string[];
@@ -63,11 +63,11 @@ export async function loadToolModule(relativePath: string): Promise<{createTool:
 }
 
 export async function createHarness(createTool: CreateTool, {scenario = {}}: {scenario?: Scenario} = {}) {
-  const home = await mkdtemp(join(tmpdir(), 'pi-scaffold-harness-'));
+  const home = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-harness-'));
   const agentDir = scenario.agentDir ?? join(home, 'agent');
-  await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700});
-  if (scenario.policy) await writeFile(join(agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify(scenario.policy), {mode: 0o600});
-  const gh = scenario.gh ?? new FakePiGh();
+  await mkdir(join(agentDir, 'deterministic-scaffold'), {recursive: true, mode: 0o700});
+  if (scenario.policy) await writeFile(join(agentDir, 'deterministic-scaffold', 'policy.json'), JSON.stringify(scenario.policy), {mode: 0o600});
+  const gh = scenario.gh ?? new FakeDeterministicGh();
   const herdr = scenario.herdr ?? {calls: []};
   const git: GitReader = {
     listWorktrees: async () => scenario.worktrees ?? [],

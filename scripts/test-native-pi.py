@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Native Pi acceptance for the pi-scaffold foundation (#2).
+"""Native Pi acceptance for the deterministic-scaffold foundation (#2).
 
-Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh 0.5.0+ package.
-Also covers /tree and /fork while a nested pi-gh call is held in flight, and /reload being refused mid-call.
+Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real deterministic-gh 0.5.0+ package.
+Also covers /tree and /fork while a nested deterministic-gh call is held in flight, and /reload being refused mid-call.
 Never touches the user's agent directory, credentials or GitHub.
 
-  python3 scripts/test-native-pi.py --pi-gh /path/to/pi-gh [--pi node_modules/.bin/pi] [--case NAME]
+  python3 scripts/test-native-pi.py --deterministic-gh /path/to/deterministic-gh [--pi node_modules/.bin/pi] [--case NAME]
 """
 import argparse, fcntl, hashlib, http.server, json, os, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, threading, time, unittest
 from pathlib import Path
@@ -73,14 +73,14 @@ class Child:
 
 class Acceptance(unittest.TestCase):
     def setUp(self):
-        self.home = Path(tempfile.mkdtemp(prefix='pi-scaffold-native-')).resolve()
+        self.home = Path(tempfile.mkdtemp(prefix='deterministic-scaffold-native-')).resolve()
         self.agent = self.home / 'agent'; self.agent.mkdir()
         self.cwd = self.home / 'repo'; self.cwd.mkdir()
         self.state = self.home / 'gh-state'; self.state.mkdir()
         self.requests, self.children, self.calls = [], [], 0
-        self.pi_gh = Path(OPTIONS.pi_gh).resolve()
-        version = tuple(int(x) for x in json.loads((self.pi_gh / 'package.json').read_text())['version'].split('.')[:2])
-        self.assertGreaterEqual(version, (0, 5), 'pi-gh 0.5.0+ (gh_labels_list, issue-list-labels, *_if_current) is required')
+        self.deterministic_gh = Path(OPTIONS.deterministic_gh).resolve()
+        version = tuple(int(x) for x in json.loads((self.deterministic_gh / 'package.json').read_text())['version'].split('.')[:2])
+        self.assertGreaterEqual(version, (0, 5), 'deterministic-gh 0.5.0+ (gh_labels_list, issue-list-labels, *_if_current) is required')
         subprocess.run(['git', 'init', '-q', str(self.cwd)], check=True)
         subprocess.run(['git', '-C', str(self.cwd), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         body = subprocess.check_output(['node', '--input-type=module', '-e',
@@ -133,8 +133,8 @@ class Acceptance(unittest.TestCase):
         args.update(over); return args
 
     def args(self, *more, probe=True, trust=True):
-        # --package loads pi-scaffold from an unpacked `npm pack` tarball instead of the checkout (the published artifact).
-        ext = ['-e', str(self.pi_gh), '-e', str(Path(OPTIONS.package).resolve() if OPTIONS.package else ROOT)] + (['-e', str(ROOT / 'test/fixtures/probe-extension.ts')] if probe else [])
+        # --package loads deterministic-scaffold from an unpacked `npm pack` tarball instead of the checkout (the published artifact).
+        ext = ['-e', str(self.deterministic_gh), '-e', str(Path(OPTIONS.package).resolve() if OPTIONS.package else ROOT)] + (['-e', str(ROOT / 'test/fixtures/probe-extension.ts')] if probe else [])
         return [OPTIONS.pi, '--offline', '--no-extensions', '--no-skills', '--no-prompt-templates', '--approve' if trust else '--no-approve', *ext, '--model', 'owned-fixture/fixture', *more]
 
     def run_print(self, **kw):
@@ -173,7 +173,7 @@ class Acceptance(unittest.TestCase):
 
     def grant(self):
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
 
     def tearDown(self):
@@ -192,7 +192,7 @@ class Acceptance(unittest.TestCase):
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
         self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_complete', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_feature_revise', 'scaffold_handoff_basic_design', 'scaffold_handoff_implementation', 'scaffold_handoff_specification', 'scaffold_handoff_verification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_revise', 'scaffold_specification_update', 'scaffold_stage_check', 'scaffold_waves_apply', 'scaffold_waves_verify'], 'only accepted scaffold tools are registered')
-        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 28, 'pi-gh 0.12.0 registers 28 tools')
+        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 28, 'deterministic-gh 0.12.0 registers 28 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
         self.run_print()
@@ -206,7 +206,7 @@ class Acceptance(unittest.TestCase):
         r = self.last_result()
         self.assertEqual(r['status'], 'applied', r)
         writes = self.writes(); self.assertEqual(len(writes), 1); self.assertTrue(writes[0]['patch']['body'].endswith('(probe)'))
-        journal = list((self.agent / 'pi-scaffold/state').rglob(OPERATION_ID + '.json'))
+        journal = list((self.agent / 'deterministic-scaffold/state').rglob(OPERATION_ID + '.json'))
         self.assertTrue(journal and all((p.stat().st_mode & 0o777) == 0o600 for p in journal), journal)
         self.requests.clear(); self.run_print()
         self.assertEqual(self.last_result()['status'], 'noop'); self.assertEqual(len(self.writes()), 1)
@@ -256,7 +256,7 @@ class Acceptance(unittest.TestCase):
         seeded = [d for d in defs if d['name'] not in ('Blocked', 'Wave: 200')]
         (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(seeded)]))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_label_create'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         self.tool, self.tool_args = 'scaffold_labels_ensure', {'repo': 'example/demo', 'operationId': OPERATION_ID}
         statuses = []
@@ -279,10 +279,10 @@ class Acceptance(unittest.TestCase):
         defs = self.label_defs()
         (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(defs)]))
 
-    def test_epic_draft_prepare_then_publish_through_real_pi_gh(self):
+    def test_epic_draft_prepare_then_publish_through_real_deterministic_gh(self):
         self.seed_all_labels()
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_submit'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         op = '55555555-5555-4555-8555-555555555555'
         self.tool = 'scaffold_epic_draft_create'
@@ -312,9 +312,9 @@ class Acceptance(unittest.TestCase):
         results = ''.join(self.tool_results())
         self.assertIn('Validation failed', results)
         self.assertNotIn('"status":"prepared"', results)
-        self.assertFalse(list((self.agent / 'pi-scaffold').rglob('draft.json')) if (self.agent / 'pi-scaffold').exists() else [], 'the tool body never ran')
+        self.assertFalse(list((self.agent / 'deterministic-scaffold').rglob('draft.json')) if (self.agent / 'deterministic-scaffold').exists() else [], 'the tool body never ran')
 
-    def test_specification_update_through_real_pi_gh(self):
+    def test_specification_update_through_real_deterministic_gh(self):
         body = subprocess.check_output(['node', '--input-type=module', '-e',
             "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';"
             "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'));d.stage='specification';"
@@ -322,7 +322,7 @@ class Acceptance(unittest.TestCase):
         issue = json.loads((self.state / 'issue-10.json').read_text()); issue['body'] = body
         (self.state / 'issue-10.json').write_text(json.dumps(issue))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         self.tool = 'scaffold_specification_update'
         self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': 1, 'expectedBodySha256': hashlib.sha256(body.encode()).hexdigest(),
@@ -342,7 +342,7 @@ class Acceptance(unittest.TestCase):
         self.assertIn('criteria.REQ001', json.dumps(results[0]['data']['missingFields']))
         self.assertIn('questions.Q101.answer', results[0]['data']['missingFields'])
 
-    def test_research_begin_through_real_pi_gh(self):
+    def test_research_begin_through_real_deterministic_gh(self):
         body = subprocess.check_output(['node', '--input-type=module', '-e',
             "import {renderEpicBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';"
             "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.initial.json','utf8'));d.stage='specification';"
@@ -351,7 +351,7 @@ class Acceptance(unittest.TestCase):
         issue = json.loads((self.state / 'issue-10.json').read_text()); issue['body'] = body
         (self.state / 'issue-10.json').write_text(json.dumps(issue))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         self.tool = 'scaffold_research_begin'
         self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': 1, 'expectedBodySha256': hashlib.sha256(body.encode()).hexdigest(), 'researchIds': ['R001']}
@@ -368,8 +368,8 @@ class Acceptance(unittest.TestCase):
         after = json.loads((self.state / 'issue-10.json').read_text())['body']
         self.assertIn('"state": "in_progress"', after); self.assertIn(f'"operationId": "{OPERATION_ID}"', after)
 
-    def test_research_begin_then_resolve_through_real_pi_gh(self):
-        self.test_research_begin_through_real_pi_gh()
+    def test_research_begin_then_resolve_through_real_deterministic_gh(self):
+        self.test_research_begin_through_real_deterministic_gh()
         body = json.loads((self.state / 'issue-10.json').read_text())['body']
         self.tool = 'scaffold_research_resolve'
         resolve_op = '99999999-9999-4999-8999-999999999999'
@@ -387,7 +387,7 @@ class Acceptance(unittest.TestCase):
         after = json.loads((self.state / 'issue-10.json').read_text())['body']
         self.assertIn('"state": "resolved"', after); self.assertIn('結論：p95で4.2秒（架空）', after)
 
-    def test_feature_create_through_real_pi_gh(self):
+    def test_feature_create_through_real_deterministic_gh(self):
         self.seed_all_labels()
         env_git = dict(self.env, GIT_AUTHOR_NAME='fixture', GIT_AUTHOR_EMAIL='fixture@example.com', GIT_COMMITTER_NAME='fixture', GIT_COMMITTER_EMAIL='fixture@example.com')
         design = '# 基本設計（架空）\nCSV出力の構成\n'
@@ -406,20 +406,20 @@ class Acceptance(unittest.TestCase):
             "const d=JSON.parse(readFileSync('test/fixtures/epic-v1.populated.json','utf8'));d.stage='basic-design';d.design=null;d.dependencyPlan=null;d.wavePlan=null;d.handoff=null;"
             "d.questions=d.questions.map(q=>({...q,answer:q.answer??'回答',sourceRef:q.sourceRef??'hearing-1'}));"
             "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));d.constraints=d.constraints??[];d.outOfScope=[];"
-            "const root=join(agent,'pi-scaffold');const ctx={repo:'example/demo',repoRoot:'',gitCommonDir:'',workflowStateRoot:join(root,'state',repoHash('example/demo'),d.workflowId),"
+            "const root=join(agent,'deterministic-scaffold');const ctx={repo:'example/demo',repoRoot:'',gitCommonDir:'',workflowStateRoot:join(root,'state',repoHash('example/demo'),d.workflowId),"
             "accountBinding:taggedDigest('account-binding',{agentDir:await realpath(agent),authMode:'file-backed'}),profileId:'developer',profileInstructionsDigest:sha256Text(instr)};"
             "const scope={sessionId:'native-setup',leafId:'l',generation:0,signal:new AbortController().signal,isCurrent:()=>true};"
             "const r=await new ApprovalStore(root).confirmContent('specification',d.workflowId,specificationApprovalView(d),ctx,{interactive:true,confirm:async()=>true},scope);"
             "if(r.status!=='validated')throw new Error(JSON.stringify(r));process.stdout.write(JSON.stringify({body:renderEpicBlock(d),revision:d.revision,criterion:d.criteria[0]}));")
-        (self.agent / 'pi-scaffold').mkdir(mode=0o700, exist_ok=True)
-        pol = self.agent / 'pi-scaffold/policy.json'
+        (self.agent / 'deterministic-scaffold').mkdir(mode=0o700, exist_ok=True)
+        pol = self.agent / 'deterministic-scaffold/policy.json'
         pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': [{'model': 'owned-fixture/fixture', 'thinking': t, 'tier': 'basic', 'roles': [r]} for r, t in [('coding-manager', 'medium'), ('coder', 'high'), ('tester', 'low')]]}}})); pol.chmod(0o600)
         made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', script, str(self.agent), instructions], cwd=ROOT, text=True))
         issue = json.loads((self.state / 'issue-10.json').read_text()); issue['body'] = made['body']
         issue['labels'] = [l for l in json.loads((self.state / 'labels.json').read_text()) if l['name'] in ('Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign')]
         (self.state / 'issue-10.json').write_text(json.dumps(issue))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_submit', 'gh_subissue_add'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         self.tool = 'scaffold_feature_create'
         b = lambda t: {'model': 'owned-fixture/fixture', 'thinking': t, 'reason': '架空の理由'}
@@ -444,7 +444,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(sorted(l['name'] for l in feature['labels']), ['Scope: Feature', 'Stage: BasicDesign', 'Type: Scaffold'])
         self.assertIn('"kind": "feature"', feature['body']); self.assertIn('"parentEpic": 10', feature['body'])
 
-    def test_dependencies_apply_through_real_pi_gh(self):
+    def test_dependencies_apply_through_real_deterministic_gh(self):
         self.seed_all_labels()
         made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
             "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {readFileSync} from 'node:fs';"
@@ -461,7 +461,7 @@ class Acceptance(unittest.TestCase):
                 'labels': pick(('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign')), 'html_url': f'https://github.com/example/demo/issues/{n}'}))
         (self.state / 'project-PVT_fixture1.json').write_text('[12]')
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_dependency_add', 'gh_issue_edit_if_current', 'gh_project_add_issue'], 'allowHeadless': True, 'allowChild': True, 'projectIds': ['PVT_fixture1']}]})); p.chmod(0o600)
         self.tool = 'scaffold_dependencies_apply'
         node = lambda n: {'featureKey': f'F00{n - 10}', 'issue': n, 'contracts': [], 'startConditions': [], 'editScope': [f'src/f{n}/']}
@@ -482,7 +482,7 @@ class Acceptance(unittest.TestCase):
         self.assertEqual(len([w for w in writes if 'blockedBy' in w]), 2); self.assertEqual(len([w for w in writes if 'projectAdd' in w]), 2)
         self.assertIn('```mermaid', issue(10)['body']); self.assertIn('"dependencyPlan": {', issue(10)['body'])
 
-    def test_waves_verify_through_real_pi_gh(self):
+    def test_waves_verify_through_real_deterministic_gh(self):
         self.seed_all_labels()
         made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
             "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {taggedDigest} from './dist/src/core/digests.js';import {readFileSync} from 'node:fs';"
@@ -517,7 +517,7 @@ class Acceptance(unittest.TestCase):
         self.assertFalse(res['data']['passed']); self.assertIn('DEPENDENCY_ORDER', json.dumps(res)); self.assertFalse(res['data']['matchesSavedPlan'])
         self.assertEqual(self.writes(), [])
 
-    def test_waves_apply_through_real_pi_gh(self):
+    def test_waves_apply_through_real_deterministic_gh(self):
         defs = self.label_defs()
         (self.state / 'labels.json').write_text(json.dumps([{'id': i + 1, 'node_id': f'LA_{i + 1}', **d} for i, d in enumerate(d for d in defs if d['name'] != 'Wave: 2')]))
         made = json.loads(subprocess.check_output(['node', '--input-type=module', '-e',
@@ -537,7 +537,7 @@ class Acceptance(unittest.TestCase):
             (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': made['features'][str(n)], 'state': 'open',
                 'labels': pick(('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign')), 'html_url': f'https://github.com/example/demo/issues/{n}', **({'blocked_by': [11]} if n == 13 else {})}))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_label_create', 'gh_issue_labels_if_current', 'gh_issue_edit_if_current'], 'allowHeadless': True, 'allowChild': True}]})); p.chmod(0o600)
         self.tool = 'scaffold_waves_apply'
         self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': made['revision'], 'expectedBodySha256': hashlib.sha256(made['epic'].encode()).hexdigest(), 'plan': made['plan']}
@@ -555,7 +555,7 @@ class Acceptance(unittest.TestCase):
         self.assertIn('"wavePlan": {', json.loads((self.state / 'issue-10.json').read_text())['body'])
         self.assertEqual(len([w for w in self.writes() if 'patch' in w and 'labels' in w['patch']]), 3)
 
-    def test_epic_complete_through_real_pi_gh(self):
+    def test_epic_complete_through_real_deterministic_gh(self):
         self.seed_all_labels()
         genv = dict(self.env, GIT_AUTHOR_NAME='f', GIT_AUTHOR_EMAIL='f@example.com', GIT_COMMITTER_NAME='f', GIT_COMMITTER_EMAIL='f@example.com')
         (self.cwd / 'app.txt').write_text('verified\n')
@@ -566,8 +566,8 @@ class Acceptance(unittest.TestCase):
         (self.bin / 'git').write_text(f'#!/bin/sh\nif [ "$1" = ls-remote ]; then printf "ref: refs/heads/main\\tHEAD\\n{verified}\\tHEAD\\n"; exit 0; fi\nexec "{real_git}" "$@"\n'); (self.bin / 'git').chmod(0o755)
         instructions = '開発用（架空）'
         self.env['OWNED_PROFILE_INSTRUCTIONS'] = instructions
-        (self.agent / 'pi-scaffold').mkdir(mode=0o700, exist_ok=True)
-        pol = self.agent / 'pi-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': []}}})); pol.chmod(0o600)
+        (self.agent / 'deterministic-scaffold').mkdir(mode=0o700, exist_ok=True)
+        pol = self.agent / 'deterministic-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': []}}})); pol.chmod(0o600)
         script = (
             "import {renderEpicBlock, renderFeatureBlock} from './dist/src/core/epic-render.js';import {readFileSync, mkdirSync, writeFileSync, chmodSync} from 'node:fs';import {realpath} from 'node:fs/promises';import {join, dirname} from 'node:path';"
             "import {ApprovalStore} from './dist/src/core/approvals.js';import {completionApprovalView} from './dist/src/core/completion-gate.js';import {taggedDigest, sha256Text} from './dist/src/core/digests.js';import {repoHash} from './dist/src/core/repo-context.js';"
@@ -577,7 +577,7 @@ class Acceptance(unittest.TestCase):
             "d.research=d.research.map(r=>({...r,state:'resolved',claim:null,conclusion:r.conclusion??'結論',evidenceRefs:r.evidenceRefs.length?r.evidenceRefs:['https://example.com/e']}));"
             "const b={model:'p/m',thinking:'low',reason:'r'};"
             "const fdoc={version:1,kind:'feature',workflowId:d.workflowId,revision:1,createOperationId:'eeeeeeee-eeee-4eee-8eee-000000000011',featureKey:'F001',parentEpic:10,stage:'implementation',purpose:'架空',editScope:['src/'],outOfScope:[],designRef:{path:'docs/d.md',sha256:'a'.repeat(64),gitRef:'c'.repeat(40)},criteria:[{id:'AC101',requirementIds:['REQ001','REQ002'],verification:'v',expectedResult:'e'}],bindings:{'coding-manager':b,coder:b,tester:b},evidenceRefs:[]};"
-            "const root=join(agent,'pi-scaffold');const wf=join(root,'state',repoHash('example/demo'),d.workflowId);const ev=join(wf,'evidence');"
+            "const root=join(agent,'deterministic-scaffold');const wf=join(root,'state',repoHash('example/demo'),d.workflowId);const ev=join(wf,'evidence');"
             "for (const p of [join(root,'state'),join(root,'state',repoHash('example/demo')),wf,ev,join(ev,'final')]) { mkdirSync(p,{recursive:true,mode:0o700}); chmodSync(p,0o700); }"
             "writeFileSync(join(ev,'final','11.log'),'final ok\\n',{mode:0o600});"
             "const report=JSON.stringify({version:1,workflowId:d.workflowId,featureIssue:11,productRef:verified,suiteRef:verified,criteria:[{id:'AC101',status:'pass',command:'npm test',exitCode:0,logPath:'final/11.log',logSha256:sha256Text('final ok\\n')}]});"
@@ -594,7 +594,7 @@ class Acceptance(unittest.TestCase):
         (self.state / 'project-PVT_fixture1.json').write_text('[10, 11]')
         (self.state / 'project-PVT_fixture1-fields.json').write_text(json.dumps([{'__typename': 'ProjectV2SingleSelectField', 'id': 'PVTSSF_status', 'name': 'Status', 'dataType': 'SINGLE_SELECT', 'options': [{'id': 'opt_todo', 'name': 'Todo'}, {'id': 'opt_done', 'name': 'Done'}]}]))
         d = self.home / '.pi/agent'; d.mkdir(parents=True, exist_ok=True)
-        p = d / 'pi-gh-permissions.json'
+        p = d / 'deterministic-gh-permissions.json'
         p.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'gh_issue_close_if_current', 'gh_project_field_update', 'gh_project_close'], 'allowHeadless': True, 'allowChild': True, 'projectIds': ['PVT_fixture1']}]})); p.chmod(0o600)
         self.tool = 'scaffold_epic_complete'
         self.tool_args = {'repo': 'example/demo', 'epicIssue': 10, 'operationId': OPERATION_ID, 'expectedRevision': made['revision'], 'expectedBodySha256': hashlib.sha256(made['epic'].encode()).hexdigest(),
@@ -622,42 +622,42 @@ class Acceptance(unittest.TestCase):
         c.wait(lambda: 'OWNED_SESSION_READY' in c.text()); c.send('/owned-ready\r'); c.wait(lambda: 'OWNED_READY' in c.text())
         return c
 
-    def test_tui_direct_pi_gh_approval_baseline(self):
+    def test_tui_direct_deterministic_gh_approval_baseline(self):
         change = self.cwd / 'change.json'
         change.write_text(json.dumps({'version': 1, 'repo': 'example/demo', 'operation': 'issue-edit', 'issue': 10, 'body': self.body + '\n(direct)'}))
         self.tool, self.tool_args = 'gh_issue_edit', {'changePath': str(change)}
         c = Child(self.args(), self.env, self.cwd); self.children.append(c)
         c.wait(lambda: 'OWNED_SESSION_READY' in c.text()); c.send('/owned-ready\r'); c.wait(lambda: 'OWNED_READY' in c.text())
-        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'pi-gh review:' in c.text(), 30)
+        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'deterministic-gh review:' in c.text(), 30)
         c.send('\x1b[C'); c.wait(lambda: '[Approve]' in c.text(), 30)
         c.send('\r'); self.wait_result(c, 1)
         self.assertEqual(len(self.writes()), 1, self.tool_results()[-1][:300])
 
     def test_tui_nested_approval_cancel_then_approve(self):
         c = self.tui()
-        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'pi-gh review:' in c.text(), 30)
+        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'deterministic-gh review:' in c.text(), 30)
         c.send('\x1b'); self.wait_result(c, 1)
         self.assertEqual(self.last_result()['status'], 'blocked'); self.assertEqual(self.writes(), [])
         self.tool_args['operationId'] = '44444444-4444-4444-8444-444444444444'
-        mark = len(c.data); c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'pi-gh review:' in c.text(mark), 30)
+        mark = len(c.data); c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'deterministic-gh review:' in c.text(mark), 30)
         c.send('\x1b[C'); c.wait(lambda: '[Approve]' in c.text(mark), 30)
         c.send('\r'); self.wait_result(c, 2)
         self.assertEqual(self.last_result()['status'], 'applied', self.last_result()); self.assertEqual(len(self.writes()), 1)
 
     def test_tui_nested_approval_cancel_then_approve_after_reload(self):
         c = self.tui()
-        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'pi-gh review:' in c.text(), 30)
+        c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'deterministic-gh review:' in c.text(), 30)
         c.send('\x1b'); self.wait_result(c, 1)
         self.assertEqual(self.last_result()['status'], 'blocked'); self.assertEqual(self.writes(), [])
         mark = len(c.data); c.send('/reload\r'); c.wait(lambda: 'eloaded' in c.text(mark), 30)
         self.tool_args['operationId'] = '44444444-4444-4444-8444-444444444444'
-        mark = len(c.data); c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'pi-gh review:' in c.text(mark), 30)
+        mark = len(c.data); c.send('OWNED_TOOL_REQUEST\r'); c.wait(lambda: 'deterministic-gh review:' in c.text(mark), 30)
         c.send('\x1b[C'); c.wait(lambda: '[Approve]' in c.text(mark), 30)
         c.send('\r'); self.wait_result(c, 2)
         self.assertEqual(self.last_result()['status'], 'applied'); self.assertEqual(len(self.writes()), 1)
 
 
-    # --- reload/tree/fork cancellation while a nested pi-gh call is in flight ------------------
+    # --- reload/tree/fork cancellation while a nested deterministic-gh call is in flight ------------------
 
     def session_tool_result(self, call_id):
         for f in (self.agent / 'sessions').rglob('*.jsonl'):
@@ -768,7 +768,7 @@ class Acceptance(unittest.TestCase):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
-    parser.add_argument('--pi-gh', default=os.environ.get('PI_SCAFFOLD_PI_GH'), required=os.environ.get('PI_SCAFFOLD_PI_GH') is None)
+    parser.add_argument('--deterministic-gh', default=os.environ.get('DETERMINISTIC_SCAFFOLD_GH'), required=os.environ.get('DETERMINISTIC_SCAFFOLD_GH') is None)
     parser.add_argument('--case')
     parser.add_argument('--package', help='directory of an unpacked `npm pack` tarball to load instead of the checkout')
     OPTIONS = parser.parse_args()
