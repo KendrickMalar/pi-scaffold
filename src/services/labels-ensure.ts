@@ -122,7 +122,7 @@ export async function ensureLabels(input: LabelsEnsureInput, call: ToolCall): Pr
   const operation = LABELS_ENSURE;
   const caps = await call.bridge.requireCapabilities(['gh_labels_list', 'gh_labels_apply'], call.scope);
   if (!caps.ok) return {status: caps.problems.some(p => p.code === 'STALE_SCOPE') ? 'cancelled' : 'blocked', operation, problems: caps.problems};
-  // deterministic-gh 0.7.0+ creates many labels in one change (one listing before and after instead of per label).
+  // pi-gh 0.7.0+ creates many labels in one change (one listing before and after instead of per label).
   const batching = (await call.bridge.requireCapabilities([], call.scope, ['labels-create-many'])).ok;
   const context = await call.repoContext(input.repo, null);
   if (!context.ok) return {status: 'blocked', operation, problems: context.problems};

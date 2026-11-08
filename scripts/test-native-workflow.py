@@ -6,7 +6,7 @@ Pi agent dir/Profile, a stateful fake `gh` (fictional example/demo data), a loop
 The three approvals are given in a real Pi TUI dialog; the four handoffs open real new tabs. Only `git ls-remote` is
 answered locally (as origin would) so nothing touches the network. Never touches the user's Herdr, Pi settings or GitHub.
 
-  python3 scripts/test-native-workflow.py --deterministic-gh /path/to/deterministic-gh-0.5.0 --pi-profile /path/to/pi-profile
+  python3 scripts/test-native-workflow.py --deterministic-gh /path/to/deterministic-gh-0.13.0 --pi-profile /path/to/pi-profile
 """
 import argparse, fcntl, hashlib, http.server, json, os, pty, re, select, shutil, signal, struct, subprocess, tempfile, termios, threading, time, unittest
 from pathlib import Path

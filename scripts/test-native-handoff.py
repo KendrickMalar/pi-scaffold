@@ -6,7 +6,7 @@ its own Pi agent dir/profiles, a stateful fake `gh`, and a loopback model. It ne
 Herdr sessions, tabs, Pi settings or GitHub. The synthetic HOME lives under /tmp because macOS limits
 UNIX socket paths to ~104 bytes; the session is stopped and the directory removed afterwards.
 
-  python3 scripts/test-native-handoff.py --deterministic-gh /path/to/deterministic-gh-0.5.0 --pi-profile /path/to/pi-profile
+  python3 scripts/test-native-handoff.py --deterministic-gh /path/to/deterministic-gh-0.13.0 --pi-profile /path/to/pi-profile
 """
 import argparse, fcntl, hashlib, http.server, json, os, pty, select, shutil, signal, struct, subprocess, tempfile, termios, threading, time, unittest
 from pathlib import Path

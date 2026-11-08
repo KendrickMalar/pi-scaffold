@@ -1,4 +1,4 @@
-// In-memory stand-in for a loaded deterministic-gh 0.2.0 reached through ctx.executeTool(). Fictional data only.
+// In-memory stand-in for a loaded pi-gh 0.2.0 reached through ctx.executeTool(). Fictional data only.
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('hex');
@@ -27,7 +27,7 @@ export class FakeDeterministicGh {
   features: string[] = ['issue-list-labels'];
   loaded = true;
   readonly overrides = new Map<string, Override>();
-  /** Names sent in each label-create-many change (deterministic-gh 0.7.0 feature `labels-create-many`). */
+  /** Names sent in each label-create-many change (pi-gh 0.7.0 feature `labels-create-many`). */
   readonly labelBatches: string[][] = [];
   /** Repository labels keyed by lower-case name, like GitHub. */
   readonly labels = new Map<string, FakeLabel & {id: number}>();
@@ -140,7 +140,7 @@ export class FakeDeterministicGh {
         fieldValues: {nodes: Object.entries(this.itemValues.get(`PVTI_${n}`) ?? {}).map(([fieldId, optionId]) => ({__typename: 'ProjectV2ItemFieldSingleSelectValue', optionId, field: {id: fieldId}}))}})), ...(this.projectExtraItems.get((args as {projectId: string}).projectId) ?? [])]});
     }
     if (name === 'gh_subissue_add') {
-      // deterministic-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
+      // pi-gh 0.5.0: {version, repo, operation:'subissue-add', issue (parent), relatedIssue (child)}; noop when already attached.
       const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as Record<string, unknown>;
       if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'issue', 'relatedIssue'].includes(k))) return FakeDeterministicGh.err('rejected', 'UNKNOWN_KEY');
       const parent = this.issues.get(c.issue as number), child = this.issues.get(c.relatedIssue as number);
@@ -155,12 +155,12 @@ export class FakeDeterministicGh {
     return FakeDeterministicGh.ok({repo: this.repo}, 'applied');
   };
 
-  /** deterministic-gh 0.5.0 *_if_current semantics: desired state → noop, then precondition, then apply. */
+  /** pi-gh 0.5.0 *_if_current semantics: desired state → noop, then precondition, then apply. */
   private conditional(name: string, args: {changePath: string}): ToolOutcome {
     const c = JSON.parse(readFileSync(args.changePath, 'utf8')) as {repo: string; operation: string; issue: number; body?: string; add?: string[]; remove?: string[]; expectedBodySha256?: string; expectedLabelsSha256?: string};
     const i = this.issues.get(c.issue);
     if (!i || c.repo !== this.repo || c.operation !== name.replace(/^gh_/, '').replace(/_/g, '-')) return FakeDeterministicGh.err('rejected', 'ARGUMENT');
-    // Like deterministic-gh 0.5.0, a change file with any key outside its contract is rejected (UNKNOWN_KEY).
+    // Like pi-gh 0.5.0, a change file with any key outside its contract is rejected (UNKNOWN_KEY).
     const allowed = {'issue-edit-if-current': ['body', 'expectedBodySha256'], 'issue-labels-if-current': ['add', 'remove', 'expectedLabelsSha256'], 'issue-close-if-current': ['expectedBodySha256', 'reason']}[c.operation] ?? [];
     if (Object.keys(c).some(k => !['version', 'repo', 'operation', 'issue', ...allowed].includes(k))) return FakeDeterministicGh.err('rejected', 'UNKNOWN_KEY');
     if (c.operation === 'issue-edit-if-current') {
@@ -182,7 +182,7 @@ export class FakeDeterministicGh {
     return FakeDeterministicGh.ok({repo: this.repo, operation: name}, 'applied');
   }
 
-  /** Mirrors deterministic-gh 0.3.0 validateDraft/renderIssue closely enough for deterministic-scaffold tests (fictional data only). */
+  /** Mirrors pi-gh 0.3.0 validateDraft/renderIssue closely enough for deterministic-scaffold tests (fictional data only). */
   private issue(name: string, args: {draftPath: string; templatePath: string}): ToolOutcome {
     const draft = JSON.parse(readFileSync(args.draftPath, 'utf8')) as {template: string; repo: string; title: string; labels?: string[]; parentIssue?: number; fields: Record<string, string>; agents: Record<string, {model: string; thinking: string; reason: string}>};
     const template = readFileSync(args.templatePath, 'utf8');

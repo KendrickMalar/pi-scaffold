@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Native Pi acceptance for the deterministic-scaffold foundation (#2).
 
-Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real deterministic-gh 0.5.0+ package.
+Synthetic HOME, loopback model, stateful fake `gh`, real Pi and a real pi-gh 0.5.0+ package.
 Also covers /tree and /fork while a nested deterministic-gh call is held in flight, and /reload being refused mid-call.
 Never touches the user's agent directory, credentials or GitHub.
 
@@ -80,7 +80,7 @@ class Acceptance(unittest.TestCase):
         self.requests, self.children, self.calls = [], [], 0
         self.deterministic_gh = Path(OPTIONS.deterministic_gh).resolve()
         version = tuple(int(x) for x in json.loads((self.deterministic_gh / 'package.json').read_text())['version'].split('.')[:2])
-        self.assertGreaterEqual(version, (0, 5), 'deterministic-gh 0.5.0+ (gh_labels_list, issue-list-labels, *_if_current) is required')
+        self.assertGreaterEqual(version, (0, 5), 'pi-gh 0.5.0+ (gh_labels_list, issue-list-labels, *_if_current) is required')
         subprocess.run(['git', 'init', '-q', str(self.cwd)], check=True)
         subprocess.run(['git', '-C', str(self.cwd), 'remote', 'add', 'origin', 'https://github.com/example/demo.git'], check=True)
         body = subprocess.check_output(['node', '--input-type=module', '-e',
@@ -192,7 +192,7 @@ class Acceptance(unittest.TestCase):
         self.run_print(probe=False)
         names = [t.get('function', {}).get('name') for t in self.requests[0].get('tools', [])]
         self.assertEqual(sorted(n for n in names if n and n.startswith('scaffold_')), ['scaffold_dependencies_apply', 'scaffold_epic_complete', 'scaffold_epic_draft_create', 'scaffold_feature_create', 'scaffold_feature_revise', 'scaffold_handoff_basic_design', 'scaffold_handoff_implementation', 'scaffold_handoff_specification', 'scaffold_handoff_verification', 'scaffold_labels_ensure', 'scaffold_research_begin', 'scaffold_research_resolve', 'scaffold_specification_revise', 'scaffold_specification_update', 'scaffold_stage_check', 'scaffold_waves_apply', 'scaffold_waves_verify'], 'only accepted scaffold tools are registered')
-        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 28, 'deterministic-gh 0.12.0 registers 28 tools')
+        self.assertEqual(len([n for n in names if n and n.startswith('gh_')]), 28, 'deterministic-gh 0.13.0 registers 28 tools')
 
     def test_nested_write_without_grant_is_blocked(self):
         self.run_print()

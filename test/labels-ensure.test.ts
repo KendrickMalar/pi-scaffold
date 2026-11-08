@@ -204,7 +204,7 @@ test('success requires a final read-back of every definition', async t => {
   assert.ok(out.r.problems.some(p => p.code === 'LABEL_READBACK_MISMATCH'));
 });
 
-test('deterministic-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t => {
+test('pi-gh 0.2.0 without gh_labels_list stops with CAPABILITY_MISSING', async t => {
   const old = new FakeDeterministicGh(); old.operations = [...DETERMINISTIC_GH_020_OPERATIONS];
   const out = await (await harness(t, old)).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'CAPABILITY_MISSING' && p.path === 'gh_labels_list'));
@@ -258,7 +258,7 @@ test('uncertain steps are reconciled before the budget pause, so the status is p
   assert.ok(!resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));
 });
 
-// deterministic-gh 0.7.0+ (`labels-create-many`): missing labels are created in batches instead of one change per label.
+// pi-gh 0.7.0+ (`labels-create-many`): missing labels are created in batches instead of one change per label.
 const batching = () => { const gh = new FakeDeterministicGh(); gh.features = [...gh.features, 'labels-create-many']; return gh; };
 const perLabelCreates = (gh: FakeDeterministicGh) => gh.labelChanges.filter(c => c.operation === 'label-create').length;
 
@@ -344,7 +344,7 @@ test('a mismatching label with onMismatch=update is still edited one by one whil
   assert.deepEqual((out.r.data as {updated: string[]}).updated, [defs[0]!.name]);
 });
 
-test('without the labels-create-many feature (deterministic-gh 0.6.0 and older) labels are created one by one as before', async t => {
+test('without the labels-create-many feature (pi-gh 0.6.0 and older) labels are created one by one as before', async t => {
   const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 205));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
