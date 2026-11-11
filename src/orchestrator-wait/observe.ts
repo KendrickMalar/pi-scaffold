@@ -4,7 +4,8 @@ import type {Fleet, PaneSnapshot} from '../watchdog/herdr-fleet.js';
 import type {WaitTarget} from './targets.js';
 
 export interface TabObs {
-  /** The session is not running, the recorded pane is missing, or no agent runs in it. */
+  /** The session is not running, the recorded pane is missing, or no agent runs in it. Stage panes are still
+   *  collected: the verification parent closes the earlier stage tabs (often the recorded one) and keeps going. */
   gone: boolean;
   /** Scaffold body panes → agent_status: the recorded pane and the panes of the tab's stage tabs. */
   bodies: Record<string, string>;
@@ -41,7 +42,7 @@ export async function observe(targets: WaitTarget[], fleet: Pick<Fleet, 'sockets
       if (p.paneId === t.pane || (stage && p.tabLabel && stage.test(p.tabLabel))) bodies[p.paneId] = p.status ?? 'unknown';
     }
     const working = t.cleanupSockets.some(s => (panes.get(s) ?? []).some(p => p.status === 'working'));
-    tabs.set(t.key, {gone, bodies: gone ? {} : bodies, working});
+    tabs.set(t.key, {gone, bodies, working});
   }
   return {tabs, errors};
 }

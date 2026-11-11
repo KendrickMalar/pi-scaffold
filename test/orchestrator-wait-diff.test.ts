@@ -30,7 +30,7 @@ test('diffTab on a new tab wakes only for blocked or gone', () => {
   assert.deepEqual(diffTab(t(), undefined, obs({}, {gone: true})), ['Epic #12 pane w1:p1 gone']);
 });
 test('diffTab reports gone once', () => {
-  assert.deepEqual(diffTab(t(), obs({'w1:p1': 'working', 'w2:p1': 'working'}), obs({}, {gone: true})), ['Epic #12 pane w1:p1 gone']);
+  assert.deepEqual(diffTab(t(), obs({'w1:p1': 'working', 'w2:p1': 'working'}), obs({}, {gone: true})), ['Epic #12 pane w1:p1 gone', 'Epic #12 w2:p1 gone']);
   assert.deepEqual(diffTab(t(), obs({}, {gone: true}), obs({}, {gone: true})), []);
 });
 test('diffTab reports a vanished stage pane', () => {
@@ -40,4 +40,13 @@ test('diffTab reports cleanup progress only for cleanup_waiting', () => {
   const c = t({status: 'cleanup_waiting'});
   assert.deepEqual(diffTab(c, obs({'w1:p1': 'done'}, {working: true}), obs({'w1:p1': 'done'})), ['Epic #12 cleanup: no working agent']);
   assert.deepEqual(diffTab(t(), obs({'w1:p1': 'done'}, {working: true}), obs({'w1:p1': 'done'})), []);
+});
+test('diffTab keeps watching stage panes after the recorded pane is gone', () => {
+  const prev = obs({'w2:p1': 'working'}, {gone: true});
+  assert.deepEqual(diffTab(t(), prev, obs({'w2:p1': 'done'}, {gone: true})), ['Epic #12 w2:p1 working->done']);
+  assert.deepEqual(diffTab(t(), obs({'w1:p1': 'done', 'w2:p1': 'working'}), obs({'w2:p1': 'working'}, {gone: true})), ['Epic #12 pane w1:p1 gone']);
+});
+test('diffTab reports cleanup progress while the recorded pane is gone', () => {
+  const c = t({status: 'cleanup_waiting'});
+  assert.deepEqual(diffTab(c, obs({}, {gone: true, working: true}), obs({}, {gone: true})), ['Epic #12 cleanup: no working agent']);
 });

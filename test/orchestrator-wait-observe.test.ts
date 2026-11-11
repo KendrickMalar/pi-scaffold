@@ -82,3 +82,10 @@ test('observe sets working across cleanup sockets', async () => {
   const o = await observe([target({status: 'cleanup_waiting', cleanupSockets: ['/s/a.sock', '/s/old.sock']})], f);
   assert.equal(o.tabs.get('/s/a.sock|w1:p1')!.working, true);
 });
+
+test('observe still collects stage bodies when the recorded pane is gone', async () => {
+  const f = new FakeReader();
+  f.panesBySocket.set('/s/a.sock', [pane({paneId: 'w2:p1', status: 'working', tabLabel: 'verify-e12'})]);
+  const o = await observe([target()], f);
+  assert.deepEqual(o.tabs.get('/s/a.sock|w1:p1'), {gone: true, bodies: {'w2:p1': 'working'}, working: true});
+});

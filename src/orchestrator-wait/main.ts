@@ -1,6 +1,6 @@
 // scaffold-orchestrator-wait <state file>: what the orchestrator runs instead of `sleep 300`. See README.
 import {setTimeout as delay} from 'node:timers/promises';
-import {createHerdrFleet} from '../watchdog/herdr-fleet.js';
+import {createStrictReader, execHerdr} from './herdr.js';
 import {waitForChange, type WaitResult} from './run.js';
 
 export const INTERVAL_MS = 5_000;
@@ -18,7 +18,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv, out: (s: stri
   try {
     result = await waitForChange({
       statePath, recordPath: `${statePath}.wait.json`,
-      fleet: createHerdrFleet({bin: env.SCAFFOLD_ORCH_WAIT_HERDR ?? 'herdr'}),
+      fleet: createStrictReader({run: execHerdr(env.SCAFFOLD_ORCH_WAIT_HERDR ?? 'herdr', 15_000)}),
       now: Date.now, sleep: ms => delay(ms),
       intervalMs: positive(env.SCAFFOLD_ORCH_WAIT_INTERVAL_MS, INTERVAL_MS),
       maxWaitMs: positive(env.SCAFFOLD_ORCH_WAIT_MAX_MS, MAX_WAIT_MS),
