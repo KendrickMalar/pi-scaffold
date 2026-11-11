@@ -7,10 +7,10 @@ import type {AgentKind, Target, TargetStage} from './types.js';
 import {isScaffoldProfile} from '../handoff/profiles.js';
 import {accountOfAgentDir} from '../core/browser-account.js';
 
-export interface StateRoot { /** A scaffold dir, e.g. ~/.pi/agent/pi-scaffold */ dir: string; agent: AgentKind }
-/** Pi only: the agent directory a scaffold dir belongs to (…/.pi/agent or agent-<account>, then /pi-scaffold), so a relaunch keeps its account. */
+export interface StateRoot { /** A scaffold dir, e.g. ~/.pi/agent/deterministic-scaffold */ dir: string; agent: AgentKind }
+/** Pi only: the agent directory a scaffold dir belongs to (…/.pi/agent or agent-<account>, then /deterministic-scaffold), so a relaunch keeps its account. */
 export function agentDirOfRoot(root: StateRoot): string | undefined {
-  return root.agent === 'pi' && basename(root.dir) === 'pi-scaffold' && accountOfAgentDir(dirname(root.dir)) ? dirname(root.dir) : undefined;
+  return root.agent === 'pi' && basename(root.dir) === 'deterministic-scaffold' && accountOfAgentDir(dirname(root.dir)) ? dirname(root.dir) : undefined;
 }
 /** Handoffs older than this are not watched: an Epic left that long is not a stop to recover. */
 export const MAX_HANDOFF_AGE_MS = 14 * 24 * 60 * 60 * 1000;

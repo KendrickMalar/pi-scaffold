@@ -2,7 +2,7 @@ import test from 'node:test';
 import * as fsSync from 'node:fs';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, taggedDigest} from '../src/core/digests.js';
@@ -20,7 +20,7 @@ function epicDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
 }
 const KEYS: Record<number, string> = {11: 'F001', 12: 'F002', 13: 'F003'};
 function world(opts: {epic?: EpicDocV1; closed?: number[]; labels?: string[]; scopes?: Record<number, string[]>} = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: BEFORE + renderEpicBlock(epic), labels: opts.labels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [11, 12, 13]});
   for (const n of [11, 12, 13]) {
@@ -30,22 +30,22 @@ function world(opts: {epic?: EpicDocV1; closed?: number[]; labels?: string[]; sc
   gh.projects.set(PROJECT, []);
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
 const node = (n: number) => ({featureKey: KEYS[n]!, issue: n, contracts: [`${KEYS[n]}のAPI`], startConditions: n === 11 ? [] : ['先行Featureの契約が確定している'], editScope: [`src/${KEYS[n]}/`]});
 const plan = (edges: [number, number][]): DependencyPlan => ({version: 1, nodes: [11, 12, 13].map(node), edges: edges.map(([from, to]) => ({from, to, reason: '架空の理由'}))});
-const params = (gh: FakePiGh, edges: [number, number][] = [[11, 12], [12, 13]], extra: Record<string, unknown> = {}) => ({
+const params = (gh: FakeDeterministicGh, edges: [number, number][] = [[11, 12], [12, 13]], extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OP, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), plan: plan(edges), ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/dependencies-apply.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: scenario.defaultParams ?? params(gh), ...scenario}});
   t.after(h.dispose);
   return h;
 }
 type Data = {addedEdges: {from: number; to: number}[]; unchangedEdges: {from: number; to: number}[]; mermaid: string; projectItems: number[]};
-const depAdds = (gh: FakePiGh) => gh.calls.filter(c => c.name === 'gh_dependency_add');
-const projectCalls = (gh: FakePiGh) => gh.calls.filter(c => c.name.startsWith('gh_project_'));
-const noChanges = (gh: FakePiGh, before: string) => { assert.equal(depAdds(gh).length, 0); assert.equal(gh.count('gh_project_add_issue'), 0); assert.equal(gh.issues.get(10)!.body, before); };
+const depAdds = (gh: FakeDeterministicGh) => gh.calls.filter(c => c.name === 'gh_dependency_add');
+const projectCalls = (gh: FakeDeterministicGh) => gh.calls.filter(c => c.name.startsWith('gh_project_'));
+const noChanges = (gh: FakeDeterministicGh, before: string) => { assert.equal(depAdds(gh).length, 0); assert.equal(gh.count('gh_project_add_issue'), 0); assert.equal(gh.issues.get(10)!.body, before); };
 
 test('保存予定本文が64KiBを超える依存計画は辺・Projectの変更前に拒否する', async t => {
   const gh = world();
@@ -198,7 +198,7 @@ test('an unknown Project is blocked before any change', async t => {
 test('a failed edge stops later writes; resume adds nothing twice', async t => {
   const gh = world();
   let n = 0;
-  gh.overrides.set('gh_dependency_add', () => (++n === 2 ? FakePiGh.err('rejected', 'GITHUB_WRITE') : undefined));
+  gh.overrides.set('gh_dependency_add', () => (++n === 2 ? FakeDeterministicGh.err('rejected', 'GITHUB_WRITE') : undefined));
   const h = await harness(t, gh);
   const p = params(gh, undefined, {projectId: PROJECT});
   const first = await h.invoke(p);
@@ -260,7 +260,7 @@ test('an unknown add that did not land is reconciled as not applied and sent onc
 test('a resume decides from the current GitHub state: an edge removed by someone else meanwhile is added again', async t => {
   const gh = world(); gh.issues.get(12)!.blockedBy = [11];
   let fail = true;
-  gh.overrides.set('gh_dependency_add', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_dependency_add', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   assert.notEqual((await h.invoke()).r.status, 'applied');
   gh.issues.get(12)!.blockedBy = []; // removed by a third party
@@ -285,9 +285,9 @@ test('addedEdges lists only edges this operation actually added (a remote noop i
 
 test('the Epic is not saved when it moved on while edges were being added (stage, Blocked or a different plan)', async t => {
   for (const change of [
-    (gh: FakePiGh) => { const d = docOf(gh); d.stage = 'implementation'; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
-    (gh: FakePiGh) => { gh.issues.get(10)!.labels.push('Blocked'); },
-    (gh: FakePiGh) => { const d = docOf(gh); d.dependencyPlan = {...plan([[11, 13]])}; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
+    (gh: FakeDeterministicGh) => { const d = docOf(gh); d.stage = 'implementation'; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
+    (gh: FakeDeterministicGh) => { gh.issues.get(10)!.labels.push('Blocked'); },
+    (gh: FakeDeterministicGh) => { const d = docOf(gh); d.dependencyPlan = {...plan([[11, 13]])}; gh.issues.get(10)!.body = BEFORE + renderEpicBlock(d); },
   ]) {
     const gh = world();
     let done = false;
@@ -389,7 +389,7 @@ test('a blocked dependencies_apply returns no digest', async t => {
 
 // ---- a change that landed but returned unknown is settled on resume from GitHub, not left uncertain ----
 
-const landedButUnknown = (gh: FakePiGh, name: string) => {
+const landedButUnknown = (gh: FakeDeterministicGh, name: string) => {
   const real = gh.execute;
   gh.overrides.set(name, async args => { gh.overrides.delete(name); await real(name, args); return {result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}; });
 };

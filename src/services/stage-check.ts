@@ -2,7 +2,7 @@
 // session can do its stage — the read tools are active and the Epic's pinned docs match in this cwd. Never changes anything.
 import {StrictReader, isRepoRef, problem, type Decoded, type ScaffoldResult, type Stage} from '../core/contracts.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {pinnedDocRefs, verifyPinnedDocs} from '../core/pinned-docs.js';
 import {checkSpecificationReady} from '../core/specification-gate.js';
 import {hasPlanPending, readEpicWait, type EpicWait} from '../core/epic-wait.js';

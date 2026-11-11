@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock, renderFeatureVisible} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, specificationDigest} from '../src/core/digests.js';
@@ -36,13 +36,13 @@ function epicDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
   return d;
 }
 function world(doc = epicDoc(), labels = EPIC_LABELS) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: renderEpicBlock(doc), labels: [...labels], state: 'open'});
   return gh;
 }
-const epicOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const epicOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
 const binding = (model: string, thinking: string, reason = '架空の理由') => ({model, thinking, reason});
-const base = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const base = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OP, expectedRevision: epicOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body),
   featureKey: 'F001', title: 'CSV出力ボタン', purpose: '一覧画面からCSVを保存できるようにする。',
   editScope: ['src/export/'], outOfScope: ['PDF出力'],
@@ -54,7 +54,7 @@ const base = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
 const scenarioFor = (extra: Scenario = {}): Scenario => ({
   policy, sessionEntries: [profile], availableModels: Object.values(MODELS), blobs: {[`${COMMIT}:docs/design/export.md`]: DESIGN}, ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, extra: Scenario = {}, approve = true) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, extra: Scenario = {}, approve = true) {
   const {createTool} = await loadToolModule('extensions/tools/feature-create.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: extra.defaultParams ?? base(gh), ...scenarioFor(extra)}});
   t.after(h.dispose);
@@ -63,7 +63,7 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
 }
 /** The specification approval #9 records in the parent TUI (same workflow, account and profile). */
 async function approveSpecification(agentDir: string, doc: EpicDocV1) {
-  const root = join(agentDir, 'pi-scaffold');
+  const root = join(agentDir, 'deterministic-scaffold');
   const {sha256Text: sha} = await import('../src/core/digests.js');
   const {realpath} = await import('node:fs/promises');
   const {taggedDigest} = await import('../src/core/digests.js');
@@ -74,10 +74,10 @@ async function approveSpecification(agentDir: string, doc: EpicDocV1) {
   assert.equal(r.status, 'validated', JSON.stringify(r));
 }
 type Data = {featureKey: string; number: number; url: string; parentAttached: boolean};
-const creates = (gh: FakePiGh) => gh.count('gh_issue_submit');
-const attaches = (gh: FakePiGh) => gh.count('gh_subissue_add');
-const noSideEffects = (gh: FakePiGh) => { assert.equal(creates(gh), 0); assert.equal(attaches(gh), 0); assert.equal(gh.conditionalChanges.length, 0); };
-const featureOf = (gh: FakePiGh, n: number) => (parseIssueBody(gh.issues.get(n)!.body) as {ok: true; value: {doc: FeatureDocV1}}).value.doc;
+const creates = (gh: FakeDeterministicGh) => gh.count('gh_issue_submit');
+const attaches = (gh: FakeDeterministicGh) => gh.count('gh_subissue_add');
+const noSideEffects = (gh: FakeDeterministicGh) => { assert.equal(creates(gh), 0); assert.equal(attaches(gh), 0); assert.equal(gh.conditionalChanges.length, 0); };
+const featureOf = (gh: FakeDeterministicGh, n: number) => (parseIssueBody(gh.issues.get(n)!.body) as {ok: true; value: {doc: FeatureDocV1}}).value.doc;
 
 // ---- validation: blocked with zero create/attach/label changes ------------------------------------
 
@@ -274,7 +274,7 @@ test('stale Epic body or revision is blocked', async t => {
 
 // ---- the native Feature set ---------------------------------------------------------------------
 
-function addFeature(gh: FakePiGh, number: number, mutate: (f: FeatureDocV1) => void = () => {}, state: 'open' | 'closed' = 'open') {
+function addFeature(gh: FakeDeterministicGh, number: number, mutate: (f: FeatureDocV1) => void = () => {}, state: 'open' | 'closed' = 'open') {
   const f = featureDoc(); f.workflowId = epicOf(gh).workflowId; f.featureKey = `F${String(number).padStart(3, '0')}`; f.createOperationId = `cccccccc-cccc-4ccc-8ccc-${String(number).padStart(12, '0')}`; mutate(f);
   gh.add({number, title: `Feature ${number}`, body: renderFeatureBlock(f), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state});
   const epic = gh.issues.get(10)!; epic.subIssues = [...(epic.subIssues ?? []), number];
@@ -291,7 +291,7 @@ test('50 existing Features (closed included) block the 51st', async t => {
 
 test('an incomplete native child list or a child of another workflow/parent blocks creation', async t => {
   const gh = world();
-  gh.overrides.set('gh_subissues_list', () => FakePiGh.err('unknown', 'GITHUB_READ'));
+  gh.overrides.set('gh_subissues_list', () => FakeDeterministicGh.err('unknown', 'GITHUB_READ'));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'blocked'); assert.ok(out.r.problems.some(x => x.code === 'FEATURE_SET_INCOMPLETE'));
   noSideEffects(gh);
@@ -345,7 +345,7 @@ test('the Feature body is checked like the Epic: a direct visible edit is detect
 test('attach failure after a successful create is partial with the number; resume attaches without posting again', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_subissue_add', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_subissue_add', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial', JSON.stringify(first.r));
@@ -420,7 +420,7 @@ test('reconciling an unknown post lists only open Issues with all three Feature 
 test('after a definitely failed post, a retry re-checks the Epic the caller saw', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_issue_submit', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_issue_submit', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const p = base(gh);
   assert.equal((await h.invoke(p)).r.status, 'blocked');
@@ -434,14 +434,14 @@ test('after a definitely failed post, a retry re-checks the Epic the caller saw'
 test('a resume after create-but-not-attached only attaches, even if policy or labels changed meanwhile', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_subissue_add', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_subissue_add', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial');
   const n = (first.r.data as Data).number;
   // The owner removes the coder model and someone marks the Epic Blocked before the resume.
   const {writeFile} = await import('node:fs/promises');
-  await writeFile(join(h.agentDir, 'pi-scaffold', 'policy.json'), JSON.stringify({...policy, repos: {'example/demo': {...policy.repos['example/demo']!, models: policy.repos['example/demo']!.models.filter(m => m.model !== MODELS.coder)}}}), {mode: 0o600});
+  await writeFile(join(h.agentDir, 'deterministic-scaffold', 'policy.json'), JSON.stringify({...policy, repos: {'example/demo': {...policy.repos['example/demo']!, models: policy.repos['example/demo']!.models.filter(m => m.model !== MODELS.coder)}}}), {mode: 0o600});
   gh.issues.get(10)!.labels.push('Blocked');
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
@@ -469,7 +469,7 @@ for (const phase of ['requested', 'unknown'] as const) {
     gh.overrides.set('gh_subissue_add', () => {
       gh.overrides.delete('gh_subissue_add');
       gh.issues.get(10)!.subIssues = [gh.submitted[0]!.number];
-      return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+      return FakeDeterministicGh.err('unknown', 'WRITE_INTERRUPTED');
     });
     const h = await harness(t, gh);
     const first = await h.invoke();
@@ -477,7 +477,7 @@ for (const phase of ['requested', 'unknown'] as const) {
     const n = (first.r.data as Data).number;
     assert.deepEqual(gh.issues.get(10)!.subIssues, [n]);
     const {readFile, writeFile} = await import('node:fs/promises');
-    const path = join(h.agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), epicOf(gh).workflowId, 'operations', `${OP}.json`);
+    const path = join(h.agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), epicOf(gh).workflowId, 'operations', `${OP}.json`);
     type State = {status: string; steps: {name: string; phase: string}[]};
     const before = JSON.parse(await readFile(path, 'utf8')) as State;
     assert.equal(before.steps.find(s => s.name === 'attach')?.phase, 'unknown');
@@ -507,7 +507,7 @@ test('an unknown attach that did not take effect retries only the attach after r
   const gh = world();
   gh.overrides.set('gh_subissue_add', () => {
     gh.overrides.delete('gh_subissue_add');
-    return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+    return FakeDeterministicGh.err('unknown', 'WRITE_INTERRUPTED');
   });
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'unknown');
@@ -524,11 +524,11 @@ test('an unreadable native parent link leaves an unknown attach unresolved and b
   gh.overrides.set('gh_subissue_add', () => {
     gh.overrides.delete('gh_subissue_add');
     gh.issues.get(10)!.subIssues = [gh.submitted[0]!.number];
-    return FakePiGh.err('unknown', 'WRITE_INTERRUPTED');
+    return FakeDeterministicGh.err('unknown', 'WRITE_INTERRUPTED');
   });
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'unknown');
-  gh.overrides.set('gh_subissues_list', () => FakePiGh.err('unknown', 'GITHUB_READ'));
+  gh.overrides.set('gh_subissues_list', () => FakeDeterministicGh.err('unknown', 'GITHUB_READ'));
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'unknown', JSON.stringify(resumed.r));
   assert.ok(resumed.r.problems.some(p => p.code === 'RECONCILE_REQUIRED'));

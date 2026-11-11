@@ -1,7 +1,7 @@
 // The Feature set of an Epic is its native sub-issues (closed included). The Epic never stores its own list.
 import {LIMITS, failed, okValue, problem, type CallScope, type Decoded, type FeatureSnapshot, type Problem, type Sha256, type UUID} from '../core/contracts.js';
 import {taggedDigest} from '../core/digests.js';
-import {PiGhBridge, readIssue} from './pi-gh.js';
+import {DeterministicGhBridge, readIssue} from './deterministic-gh.js';
 
 export interface FeatureSetOptions {
   workflowId: UUID;
@@ -35,7 +35,7 @@ function checkFeature(s: Awaited<ReturnType<typeof readIssue>>, number: number, 
 }
 
 /** Reads every native child (all pages, closed included) and validates workflow/parent/classification/limits. */
-export async function readFeatureSet(repo: string, epicIssue: number, bridge: PiGhBridge, scope: CallScope, options: FeatureSetOptions): Promise<Decoded<FeatureSet>> {
+export async function readFeatureSet(repo: string, epicIssue: number, bridge: DeterministicGhBridge, scope: CallScope, options: FeatureSetOptions): Promise<Decoded<FeatureSet>> {
   const listed = await bridge.call('gh_subissues_list', {repo, issue: epicIssue}, decodeChildren, scope);
   if (listed.status !== 'ok') return failed([problem('FEATURE_SET_INCOMPLETE', 'features', 'The native sub-issue list could not be read completely.'), ...listed.problems]);
   // Sub-issues may live in another repository of the same owner; never map them onto a local number.

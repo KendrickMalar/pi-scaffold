@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir, writeFile} from 'node:fs/promises';
 import {dirname, join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderEpicVisible} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, specBaseDigest, specificationDigest} from '../src/core/digests.js';
@@ -27,27 +27,27 @@ function specDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
 }
 function claim(researchId: string, operationId: string, base: string): ResearchClaim { return {researchId, operationId, sessionId: 'research-session', specBaseDigest: base}; }
 function world(doc = specDoc()) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: BEFORE + renderEpicBlock(doc) + AFTER, labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification'], state: 'open'});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const item = (gh: FakePiGh, id: string) => docOf(gh).research.find(r => r.researchId === id)!;
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const item = (gh: FakeDeterministicGh, id: string) => docOf(gh).research.find(r => r.researchId === id)!;
 const resolved = (researchId: string, extra: Record<string, unknown> = {}) => ({
   researchId, claimOperationId: CLAIM_OP, conclusion: '既存ライブラリで対応できる', evidenceRefs: ['https://example.com/lib/readme'], limitations: ['最新版は未確認'], disposition: 'resolved', ...extra,
 });
-const params = (gh: FakePiGh, resolutions: unknown[] = [resolved('R002')], extra: Record<string, unknown> = {}) => ({
+const params = (gh: FakeDeterministicGh, resolutions: unknown[] = [resolved('R002')], extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OP, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), resolutions, ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/research-resolve.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: scenario.defaultParams ?? params(gh), ...scenario}});
   t.after(h.dispose);
   return h;
 }
 type Data = {resolvedIds: string[]; remainingIds: string[]; revision: number; specDigest: string; evidence: {ref: string; kind: string; checked: string}[]};
-const edits = (gh: FakePiGh) => gh.count('gh_issue_edit_if_current');
-async function blockedWithoutWrites(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, p: unknown, code: string, path?: string) {
+const edits = (gh: FakeDeterministicGh) => gh.count('gh_issue_edit_if_current');
+async function blockedWithoutWrites(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, p: unknown, code: string, path?: string) {
   const before = gh.issues.get(10)!.body;
   const out = await (await harness(t, gh)).invoke(p);
   assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
@@ -139,7 +139,7 @@ test('a verified local artifact is accepted as evidence (hash checked, content n
   const gh = world();
   const h = await harness(t, gh);
   const text = '# 計測ログ（架空）\np95 4.2s\n';
-  const root = join(h.agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), specDoc().workflowId);
+  const root = join(h.agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), specDoc().workflowId);
   const file = join(root, 'artifacts', 'research', 'r002.md');
   await mkdir(dirname(file), {recursive: true, mode: 0o700}); await writeFile(file, text, {mode: 0o600});
   const ref = `artifact:research/r002.md@sha256:${sha256Text(text)}`;
@@ -205,7 +205,7 @@ test('an unknown write in the middle stops before the next item and is never res
 test('a failure on the second item returns partial with the first recorded, and resumes without redoing it', async t => {
   const gh = world();
   let n = 0;
-  gh.overrides.set('gh_issue_edit_if_current', () => (++n === 2 ? FakePiGh.err('rejected', 'PRECONDITION_FAILED') : undefined));
+  gh.overrides.set('gh_issue_edit_if_current', () => (++n === 2 ? FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED') : undefined));
   const h = await harness(t, gh);
   const p = params(gh, [resolved('R002'), resolved('R003', {conclusion: '対応できる'})]);
   const first = await h.invoke(p);
@@ -242,7 +242,7 @@ test('needs-more-work also needs a conclusion so the submitted result is visible
 test('after a definite write failure, re-running the same operation re-checks the body the caller saw', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'blocked');
   gh.issues.get(10)!.body += '\n手で足したメモ';

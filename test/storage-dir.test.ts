@@ -21,7 +21,7 @@ import {renderEpicBlock} from '../src/core/epic-render.js';
 import {labelDefinitions} from '../src/core/label-definitions.js';
 import {createHarness, loadToolModule} from './helpers/harness.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {WORKFLOW_ID, OPERATION_ID, initialDoc, populatedDoc} from './helpers/docs.js';
 
 // Structural future-API signatures keep baseline compilation valid. They do not mock implementation:
@@ -43,7 +43,7 @@ async function fixture(t: Cleanup) {
   await mkdir(base, {recursive: true, mode: 0o700});
   const home = await mkdtemp(join(base, 'storage-dir-'));
   t.after(() => rm(home, {recursive: true, force: true}));
-  const agentDir = join(home, 'auth-agent'), scaffoldDir = join(home, 'shared'), legacy = join(agentDir, 'pi-scaffold');
+  const agentDir = join(home, 'auth-agent'), scaffoldDir = join(home, 'shared'), legacy = join(agentDir, 'deterministic-scaffold');
   for (const dir of [agentDir, scaffoldDir, legacy]) await mkdir(dir, {recursive: true, mode: 0o700});
   await writeFile(join(scaffoldDir, 'policy.json'), JSON.stringify(policy), {mode: 0o600});
   return {home, agentDir, scaffoldDir, legacy};
@@ -69,20 +69,26 @@ function callFor(agentDir: string, scaffoldDir?: string) {
 // Catches fallback on explicitly invalid input and accidental shell expansion.
 test('resolveScaffoldDir defaults only when absent, preserves absolute literals and rejects explicit empty/relative/control', () => {
   const resolve = resolveDir();
-  assert.equal(resolve({}, '/auth/agent'), '/auth/agent/pi-scaffold');
-  assert.equal(resolve({PI_SCAFFOLD_DIR: undefined}, '/auth/agent'), '/auth/agent/pi-scaffold');
-  for (const path of ['/shared/scaffold', '/shared/$HOME', '/shared/~/literal']) assert.equal(resolve({PI_SCAFFOLD_DIR: path}, '/auth/agent'), path);
+  assert.equal(resolve({}, '/auth/agent'), '/auth/agent/deterministic-scaffold');
+  assert.equal(resolve({DETERMINISTIC_SCAFFOLD_DIR: undefined}, '/auth/agent'), '/auth/agent/deterministic-scaffold');
+  for (const path of ['/shared/scaffold', '/shared/$HOME', '/shared/~/literal']) assert.equal(resolve({DETERMINISTIC_SCAFFOLD_DIR: path}, '/auth/agent'), path);
   for (const path of ['', 'relative', '~/scaffold', '$HOME/scaffold', '/shared/\0bad', '/shared/\nbad', '/shared/\tbad', '/shared/\rbad', '/shared/\x7fbad']) {
-    assert.throws(() => resolve({PI_SCAFFOLD_DIR: path}, '/auth/agent'), JSON.stringify(path));
+    assert.throws(() => resolve({DETERMINISTIC_SCAFFOLD_DIR: path}, '/auth/agent'), JSON.stringify(path));
   }
+});
+
+test('the old PI_SCAFFOLD_DIR is ignored (no fallback)', () => {
+  const resolve = resolveDir();
+  assert.equal(resolve({PI_SCAFFOLD_DIR: '/old/place'}, '/auth/agent'), '/auth/agent/deterministic-scaffold');
+  assert.equal(resolve({PI_SCAFFOLD_DIR: 'relative', DETERMINISTIC_SCAFFOLD_DIR: '/new/place'}, '/auth/agent'), '/new/place');
 });
 
 test('createRuntime honors env and explicit scaffoldDir without changing agentDir', async t => {
   const f = await fixture(t);
-  const fromEnv = createRuntime({env: {PI_CODING_AGENT_DIR: f.agentDir, PI_SCAFFOLD_DIR: f.scaffoldDir}, home: f.home});
+  const fromEnv = createRuntime({env: {PI_CODING_AGENT_DIR: f.agentDir, DETERMINISTIC_SCAFFOLD_DIR: f.scaffoldDir}, home: f.home});
   assert.equal(fromEnv.agentDir, f.agentDir);
-  assert.equal((fromEnv as unknown as {scaffoldDir: string}).scaffoldDir, f.scaffoldDir, 'PI_SCAFFOLD_DIR must choose the 保存先');
-  const options = {env: {PI_CODING_AGENT_DIR: f.agentDir, PI_SCAFFOLD_DIR: f.legacy}, scaffoldDir: f.scaffoldDir};
+  assert.equal((fromEnv as unknown as {scaffoldDir: string}).scaffoldDir, f.scaffoldDir, 'DETERMINISTIC_SCAFFOLD_DIR must choose the 保存先');
+  const options = {env: {PI_CODING_AGENT_DIR: f.agentDir, DETERMINISTIC_SCAFFOLD_DIR: f.legacy}, scaffoldDir: f.scaffoldDir};
   const explicit = createRuntime(options);
   assert.equal((explicit as unknown as {scaffoldDir: string}).scaffoldDir, f.scaffoldDir);
   const bad = {agentDir: f.agentDir, env: {}, scaffoldDir: ''};
@@ -236,17 +242,17 @@ test('launch safety checks include explicit auth and scaffoldDir values', () => 
 
 for (const tamper of ['none', 'nonceSha256', 'packetSha256'] as const) {
 test(`real handoff driver propagates auth/scaffoldDir and verifies receipts: ${tamper}`, async t => {
-  const f = await fixture(t), gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals(), herdr = new FakeHerdr();
+  const f = await fixture(t), gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals(), herdr = new FakeHerdr();
   gh.add({number: 10, title: '合成の目的', body: renderEpicBlock(initialDoc()), labels: ['Type: Scaffold', 'Scope: Epic'], state: 'open'});
   const tools = ['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current', 'scaffold_labels_ensure', 'scaffold_epic_draft_create', 'scaffold_handoff_specification'];
   const {createTool} = await loadToolModule('extensions/tools/handoff-specification.ts');
-  const h = await createHarness(createTool, {scenario: {agentDir: f.agentDir, gh, herdr, policy, sessionEntries: [profile()], tools, environment: {HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w9', HERDR_PANE_ID: 'w9:pA', HERDR_SOCKET_PATH: '/synthetic/herdr.sock', PI_SCAFFOLD_DIR: f.scaffoldDir}, waitMs: 300, pollMs: 10}});
+  const h = await createHarness(createTool, {scenario: {agentDir: f.agentDir, gh, herdr, policy, sessionEntries: [profile()], tools, environment: {HERDR_ENV: '1', HERDR_WORKSPACE_ID: 'w9', HERDR_PANE_ID: 'w9:pA', HERDR_SOCKET_PATH: '/synthetic/herdr.sock', DETERMINISTIC_SCAFFOLD_DIR: f.scaffoldDir}, waitMs: 300, pollMs: 10}});
   t.after(h.dispose);
   Object.assign(h.runtime, {scaffoldDir: f.scaffoldDir});
   let packetPath = '';
   herdr.onPaneRun = async (_pane, command) => {
     assert.ok(command.includes(`PI_CODING_AGENT_DIR='${f.agentDir}'`), 'original auth directory must be propagated');
-    assert.ok(command.includes(`PI_SCAFFOLD_DIR='${f.scaffoldDir}'`), 'shared 保存先 must be propagated');
+    assert.ok(command.includes(`DETERMINISTIC_SCAFFOLD_DIR='${f.scaffoldDir}'`), 'shared 保存先 must be propagated');
     packetPath = /--scaffold-handoff '([^']+)'/.exec(command)?.[1] ?? '';
     assert.ok(packetPath.startsWith(f.scaffoldDir + '/'));
     const input = {packetPath, agentDir: f.agentDir, scaffoldDir: f.scaffoldDir, cwd: '/synthetic/repo', sessionId: 'target-session', sessionEntries: [profile()], toolNames: tools, policy};
@@ -291,7 +297,7 @@ test('legacy registry also refuses insecure FS without renaming the original', a
 });
 
 test('research tool writes planned edit and journal to explicit scaffoldDir, not auth-agent', async t => {
-  const f = await fixture(t), gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const f = await fixture(t), gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const doc = populatedDoc();
   doc.stage = 'specification'; doc.revision = 3; doc.design = null; doc.dependencyPlan = null; doc.wavePlan = null; doc.handoff = null;
   gh.add({number: 10, title: '合成の目的', body: renderEpicBlock(doc), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification'], state: 'open'});

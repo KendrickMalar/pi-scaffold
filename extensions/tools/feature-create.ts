@@ -12,7 +12,7 @@ export function createTool(runtime: ScaffoldRuntime) {
     description: 'Create ONE Feature Issue of a basic-design Epic from an explicit decomposition (the tool decides nothing). Requires a valid parent '
       + 'approval of the current specification, acceptance criteria that reference the Epic\'s requirements (an Epic AC ID must keep its exact content), '
       + 'basic-tier coding-manager/coder/tester bindings allowed by the owner policy, and a design document that exists at gitRef with the given sha256. '
-      + 'Creates the Issue with the pi-gh task template under the real Epic (labels Type: Scaffold, Scope: Feature, Stage: BasicDesign), attaches it as '
+      + 'Creates the Issue with the deterministic-gh task template under the real Epic (labels Type: Scaffold, Scope: Feature, Stage: BasicDesign), attaches it as '
       + 'a native sub-issue and reads it back. Never edits the Epic, starts agents or changes models. Re-running the same operationId never posts twice. '
       + 'editScope lists repo-relative directory or file paths or globs (e.g. "src", "src/a.ts", "src/**/*.ts"; root "." is allowed). Empty, absolute ("/"), '
       + '"..", backslash, control/zero-width characters and segments ending in a dot or space are refused as UNKNOWN_SCOPE before anything is written. '

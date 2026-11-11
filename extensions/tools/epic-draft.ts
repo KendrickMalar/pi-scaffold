@@ -11,7 +11,7 @@ export function createTool(runtime: ScaffoldRuntime) {
     name: EPIC_DRAFT_CREATE,
     label: 'Scaffold: Epicの下書き作成',
     description: 'Create a strict Epic draft from the title, purpose and original request only (no requirements are invented). '
-      + 'mode "prepare" writes a local draft only; the default "publish" creates one unfinished Epic through pi-gh with labels Type: Scaffold and Scope: Epic (no Stage). '
+      + 'mode "prepare" writes a local draft only; the default "publish" creates one unfinished Epic through deterministic-gh with labels Type: Scaffold and Scope: Epic (no Stage). '
       + 'Re-running the same operationId returns the same Issue. The session model is recorded as planner, never called. Requires scaffold_labels_ensure first.',
     parameters: Type.Object({
       repo: Type.String({pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'}),

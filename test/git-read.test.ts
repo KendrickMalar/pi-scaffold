@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import {createGitReader} from '../src/ports/git-read.js';
 
 test('readBlob returns exact bytes, undefined for a missing path, and refuses a blob over the artifact limit', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-git-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-git-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const env = {...process.env, GIT_AUTHOR_NAME: 'f', GIT_AUTHOR_EMAIL: 'f@example.com', GIT_COMMITTER_NAME: 'f', GIT_COMMITTER_EMAIL: 'f@example.com'};
   execFileSync('git', ['init', '-q', dir]);

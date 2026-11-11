@@ -53,11 +53,11 @@ test('policy schema is strict', () => {
 });
 
 test('policy file must be an owner-only regular file; absence is reported as missing', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-policy-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-policy-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const agentDir = join(dir, 'agent'); await mkdir(join(agentDir, 'pi-scaffold'), {recursive: true, mode: 0o700});
+  const agentDir = join(dir, 'agent'); await mkdir(join(agentDir, 'deterministic-scaffold'), {recursive: true, mode: 0o700});
   assert.deepEqual(await loadOwnerPolicy(agentDir), {ok: true, value: undefined});
-  const path = join(agentDir, 'pi-scaffold', 'policy.json');
+  const path = join(agentDir, 'deterministic-scaffold', 'policy.json');
   await writeFile(path, JSON.stringify(policy), {mode: 0o600});
   const loaded = await loadOwnerPolicy(agentDir);
   assert.ok(loaded.ok && loaded.value?.repos['example/demo']);
@@ -140,9 +140,9 @@ test('agentApprovals and questionBlockedStages: optional, strictly decoded, besi
 
 // ---- the agent policy sidecar (policy.agent.json) ---------------------------------------------------
 async function scaffoldDirWith(t: {after(fn: () => Promise<void>): void}, files: Record<string, unknown>) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-sidecar-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-sidecar-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const agentDir = join(dir, 'agent'), root = join(agentDir, 'pi-scaffold');
+  const agentDir = join(dir, 'agent'), root = join(agentDir, 'deterministic-scaffold');
   await mkdir(root, {recursive: true, mode: 0o700});
   for (const [name, v] of Object.entries(files)) await writeFile(join(root, name), typeof v === 'string' ? v : JSON.stringify(v), {mode: 0o600});
   return agentDir;

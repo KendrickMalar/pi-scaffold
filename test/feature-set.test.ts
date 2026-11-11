@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFeatureSet} from '../src/ports/feature-set.js';
-import {PiGhBridge} from '../src/ports/pi-gh.js';
+import {DeterministicGhBridge} from '../src/ports/deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {LIMITS, type FeatureDocV1} from '../src/core/contracts.js';
-import {FakePiGh, type FakeIssue} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh, type FakeIssue} from './helpers/fake-deterministic-gh.js';
 import {makeScope} from './helpers/scope.js';
 import {initialDoc, featureDoc, WORKFLOW_ID} from './helpers/docs.js';
 
@@ -13,12 +13,12 @@ function feature(number: number, key: string, patch: Partial<FeatureDocV1> = {},
   return {number, title: `Feature ${key}`, body: renderFeatureBlock(doc), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign'], state: 'open', ...extra};
 }
 function world(children: FakeIssue[]) {
-  const gh = new FakePiGh();
+  const gh = new FakeDeterministicGh();
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(initialDoc()), labels: ['Type: Scaffold', 'Scope: Epic'], state: 'open', subIssues: children.map(c => c.number)});
   for (const c of children) gh.add(c);
-  return {gh, bridge: new PiGhBridge(gh.execute)};
+  return {gh, bridge: new DeterministicGhBridge(gh.execute)};
 }
-const read = (bridge: PiGhBridge, extra: object = {}) => readFeatureSet('example/demo', 10, bridge, makeScope(), {workflowId: WORKFLOW_ID, ...extra});
+const read = (bridge: DeterministicGhBridge, extra: object = {}) => readFeatureSet('example/demo', 10, bridge, makeScope(), {workflowId: WORKFLOW_ID, ...extra});
 
 test('native children are the feature set, including closed ones', async () => {
   const {bridge} = world([feature(11, 'F001'), feature(12, 'F002', {}, {state: 'closed'})]);
@@ -40,7 +40,7 @@ test('more than 50 children blocks without reading them', async () => {
 
 test('an incomplete child listing blocks', async () => {
   const {gh, bridge} = world([feature(11, 'F001')]);
-  gh.overrides.set('gh_subissues_list', () => FakePiGh.err('rejected', 'GITHUB_LIMIT'));
+  gh.overrides.set('gh_subissues_list', () => FakeDeterministicGh.err('rejected', 'GITHUB_LIMIT'));
   const r = await read(bridge);
   assert.ok(!r.ok && r.problems.some(p => p.code === 'FEATURE_SET_INCOMPLETE'));
 });
@@ -86,7 +86,7 @@ test('feature set digest depends only on membership', async () => {
 
 test('a sub-issue from another repository is never mistaken for a local Issue', async () => {
   const {gh, bridge} = world([feature(11, 'F001')]);
-  gh.overrides.set('gh_subissues_list', () => FakePiGh.ok([{...gh.github(gh.issues.get(11)!), html_url: 'https://github.com/example/other/issues/11', repository_url: 'https://api.github.com/repos/example/other'}]));
+  gh.overrides.set('gh_subissues_list', () => FakeDeterministicGh.ok([{...gh.github(gh.issues.get(11)!), html_url: 'https://github.com/example/other/issues/11', repository_url: 'https://api.github.com/repos/example/other'}]));
   const r = await read(bridge);
   assert.ok(!r.ok && r.problems.some(p => p.code === 'FOREIGN_CHILD'));
 });

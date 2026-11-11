@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicVisible} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {labelDefinitions} from '../src/core/label-definitions.js';
@@ -13,14 +13,14 @@ const base = () => ({
   repo: 'example/demo', operationId: OPERATION_ID, title: '一覧をCSVで保存できるようにする',
   purpose: '利用者が一覧をCSVで保存できるようにする。', originalRequest: {text: '一覧をCSVでダウンロードできるようにしたい。', sourceRefs: []},
 });
-const withLabels = () => new FakePiGh().seedLabels(labelDefinitions());
+const withLabels = () => new FakeDeterministicGh().seedLabels(labelDefinitions());
 async function harness(t: {after(fn: () => Promise<void>): void}, gh = withLabels(), scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/epic-draft.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: base(), ...scenario}});
   t.after(h.dispose);
   return h;
 }
-const submits = (gh: FakePiGh) => gh.count('gh_issue_submit');
+const submits = (gh: FakeDeterministicGh) => gh.count('gh_issue_submit');
 type Data = {draftRef: {path: string; sha256: string}; workflowId: string; missingFields: string[]; issue?: {number: number; url: string}};
 
 for (const field of ['title', 'purpose', 'originalRequest.text'] as const) {
@@ -49,7 +49,7 @@ test('prepare writes nothing remotely, returns the draft ref and never claims a 
   assert.match(data.draftRef.sha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(data.missingFields, ['background', 'requirements', 'criteria', 'constraints', 'outOfScope']);
   assert.equal(data.issue, undefined);
-  assert.equal(gh.count('gh_issue_validate'), 1, 'pi-gh validates the draft offline');
+  assert.equal(gh.count('gh_issue_validate'), 1, 'deterministic-gh validates the draft offline');
   const again = await h.invoke({...base(), mode: 'prepare'});
   assert.equal((again.r.data as Data).draftRef.sha256, data.draftRef.sha256, 'same input → same bytes');
   assert.equal((again.r.data as Data).workflowId, data.workflowId);
@@ -209,14 +209,14 @@ test('created but labels missing: partial with the number kept, and no second po
 });
 
 test('missing management labels stop before submit (run scaffold_labels_ensure first)', async t => {
-  const gh = new FakePiGh();
+  const gh = new FakeDeterministicGh();
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'blocked');
   assert.ok(out.r.problems.some(p => p.code === 'LABELS_NOT_READY'));
   assert.equal(submits(gh), 0);
 });
 
-test('untrusted projects never reach pi-gh writes', async t => {
+test('untrusted projects never reach deterministic-gh writes', async t => {
   const gh = withLabels();
   const out = await (await harness(t, gh, {trusted: false})).invoke();
   assert.ok(out.r.problems.some(p => p.code === 'UNTRUSTED_PROJECT'));
@@ -275,7 +275,7 @@ test('an unrelated Issue that merely mentions the operationId is never a candida
   assert.equal(submits(gh), 1);
 });
 
-test('candidate search is filtered to Scaffold Epics; pi-gh without the labels feature stops', async t => {
+test('candidate search is filtered to Scaffold Epics; deterministic-gh without the labels feature stops', async t => {
   const gh = withLabels();
   await (await harness(t, gh)).invoke();
   const lists = gh.calls.filter(c => c.name === 'gh_issue_list');
@@ -287,7 +287,7 @@ test('candidate search is filtered to Scaffold Epics; pi-gh without the labels f
   assert.equal(submits(old), 0);
 });
 
-test('text pi-gh would redact is refused before any write', async t => {
+test('text deterministic-gh would redact is refused before any write', async t => {
   const gh = withLabels();
   const out = await (await harness(t, gh)).invoke({...base(), purpose: '既存の値は [REDACTED] だった'});
   assert.equal(out.r.status, 'blocked');

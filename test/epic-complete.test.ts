@@ -4,7 +4,7 @@ import {mkdir, readdir, readFile, writeFile} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text} from '../src/core/digests.js';
@@ -34,7 +34,7 @@ function feature(epic: EpicDocV1, n: number): FeatureDocV1 {
     criteria: [{id: `AC10${n - 10}`, requirementIds: [n === 11 ? 'REQ001' : 'REQ002'], verification: 'v', expectedResult: 'e'}], createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
 }
 function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 'closed'; stateReason?: 'completed' | 'not_planned'; features?: Record<number, FeatureDocV1>; openIssues?: number[]} = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: 'メモ（管理外）\n\n' + renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Verification'], state: opts.state ?? 'open', ...(opts.stateReason ? {stateReason: opts.stateReason} : {}), subIssues: [...ISSUES]});
   for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(opts.features?.[n] ?? feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: Implementation', 'Wave: 1'], state: opts.openIssues?.includes(n) ? 'open' : 'closed'});
@@ -42,11 +42,11 @@ function world(opts: {epic?: EpicDocV1; epicLabels?: string[]; state?: 'open' | 
   gh.projectFields.set(PROJECT.projectId, [{id: PROJECT.statusFieldId, name: 'Status', dataType: 'SINGLE_SELECT', options: [{id: 'opt_todo', name: 'Todo'}, {id: PROJECT.doneOptionId, name: 'Done'}]}]);
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
 type Report = {version: 1; workflowId: string; featureIssue: number; productRef: string; suiteRef: string; criteria: {id: string; status: string; command: string; exitCode: number | null; logPath: string; logSha256: string}[]};
 async function owned(path: string, text: string) { await mkdir(dirname(path), {recursive: true, mode: 0o700}); await writeFile(path, text, {mode: 0o600}); }
 async function writeEvidence(agentDir: string, mutate: (r: Report[]) => void = () => {}) {
-  const root = join(agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'evidence');
+  const root = join(agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'evidence');
   const reports: Report[] = ISSUES.map(n => ({version: 1, workflowId: epicDoc().workflowId, featureIssue: n, productRef: VERIFIED, suiteRef: VERIFIED,
     criteria: feature(epicDoc(), n).criteria.map(c => ({id: c.id, status: 'pass', command: 'npm test', exitCode: 0, logPath: `final/${n}.log`, logSha256: sha256Text(`final ${n}\n`)}))}));
   mutate(reports);
@@ -55,21 +55,21 @@ async function writeEvidence(agentDir: string, mutate: (r: Report[]) => void = (
   for (const r of reports) { const text = JSON.stringify(r); await owned(join(root, `final/${r.featureIssue}.json`), text); refs.push({relativePath: `final/${r.featureIssue}.json`, sha256: sha256Text(text)}); }
   return refs;
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/epic-complete.ts');
   const h = await createHarness(createTool, {scenario: {gh, policy, sessionEntries: [profile], commits, remote: {branch: 'main', sha: MAIN}, ...scenario}});
   t.after(h.dispose);
   return h;
 }
-const params = (gh: FakePiGh, finalEvidenceRefs: unknown, extra: Record<string, unknown> = {}) => ({
+const params = (gh: FakeDeterministicGh, finalEvidenceRefs: unknown, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body),
   verifiedRef: VERIFIED, finalEvidenceRefs, ...extra,
 });
 type Data = {issueClosed: boolean; projectUpdated: boolean; verifiedRef: string; remoteMainRef: string; pendingStep: string | null};
-const closes = (gh: FakePiGh) => gh.count('gh_issue_close_if_current') + gh.count('gh_issue_close');
-const projectWrites = (gh: FakePiGh) => gh.count('gh_project_field_update');
-const nothingChanged = (gh: FakePiGh, before: string) => { assert.equal(closes(gh), 0); assert.equal(projectWrites(gh), 0); assert.equal(gh.issues.get(10)!.body, before); assert.equal(gh.conditionalChanges.length, 0); };
-async function expectBlocked(t: {after(fn: () => Promise<void>): void}, code: string, opts: {gh?: FakePiGh; scenario?: Scenario; mutate?: (r: Report[]) => void; extra?: Record<string, unknown>} = {}) {
+const closes = (gh: FakeDeterministicGh) => gh.count('gh_issue_close_if_current') + gh.count('gh_issue_close');
+const projectWrites = (gh: FakeDeterministicGh) => gh.count('gh_project_field_update');
+const nothingChanged = (gh: FakeDeterministicGh, before: string) => { assert.equal(closes(gh), 0); assert.equal(projectWrites(gh), 0); assert.equal(gh.issues.get(10)!.body, before); assert.equal(gh.conditionalChanges.length, 0); };
+async function expectBlocked(t: {after(fn: () => Promise<void>): void}, code: string, opts: {gh?: FakeDeterministicGh; scenario?: Scenario; mutate?: (r: Report[]) => void; extra?: Record<string, unknown>} = {}) {
   const gh = opts.gh ?? world(); const before = gh.issues.get(10)!.body;
   const h = await harness(t, gh, opts.scenario);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir, opts.mutate), opts.extra));
@@ -145,7 +145,7 @@ test('declining the final acceptance cancels with zero changes', async t => {
 });
 test('an acceptance recorded for an older remote default branch is not reused', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_edit_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const parent = await harness(t, gh);
   const refs = await writeEvidence(parent.agentDir);
   const first = await parent.invoke(params(gh, refs));
@@ -190,7 +190,7 @@ for (const [label, project] of [
 test('close succeeded but Project failed: partial with issueClosed; resume only updates the Project', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_project_field_update', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_project_field_update', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const input = params(gh, await writeEvidence(h.agentDir), {project: PROJECT});
   const first = await h.invoke(input);
@@ -223,7 +223,7 @@ test('an Epic that is already closed is not a success by itself: everything is c
 });
 test('no reopen, rollback or notification on failure', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_close_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_close_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.notEqual(out.r.status, 'applied');
@@ -246,7 +246,7 @@ test('an Epic someone closed by hand can still be completed, but only with the f
 test('after this operation closed the Issue, a resume only finishes the Project even if origin moved meanwhile', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_project_field_update', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_project_field_update', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const input = params(gh, await writeEvidence(h.agentDir), {project: PROJECT});
   assert.equal((await h.invoke(input)).r.status, 'partial');
@@ -258,7 +258,7 @@ test('after this operation closed the Issue, a resume only finishes the Project 
 
 test('a Project update reported as applied but not visible is caught by the read-back', async t => {
   const gh = world();
-  gh.overrides.set('gh_project_field_update', () => FakePiGh.ok({projectId: PROJECT.projectId}, 'applied'));
+  gh.overrides.set('gh_project_field_update', () => FakeDeterministicGh.ok({projectId: PROJECT.projectId}, 'applied'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: PROJECT}));
   assert.notEqual(out.r.status, 'applied');
@@ -287,7 +287,7 @@ test('Blocked always stops: also with a Completed label (no stage transition) an
   await expectBlocked(t, 'BLOCKED', {gh: world({epicLabels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Completed', 'Blocked']})});
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_issue_close_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined);
+  gh.overrides.set('gh_issue_close_if_current', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined);
   const h = await harness(t, gh);
   const input = params(gh, await writeEvidence(h.agentDir));
   assert.notEqual((await h.invoke(input)).r.status, 'applied');
@@ -315,7 +315,7 @@ test('the Project item of another Issue in the same Project is refused', async t
 
 test('a hand-closed Epic whose Project update fails reports issueClosed=true and pending project', async t => {
   const gh = world({state: 'closed'});
-  gh.overrides.set('gh_project_field_update', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  gh.overrides.set('gh_project_field_update', () => FakeDeterministicGh.err('rejected', 'GITHUB_WRITE'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir), {project: PROJECT}));
   assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
@@ -324,7 +324,7 @@ test('a hand-closed Epic whose Project update fails reports issueClosed=true and
 
 test('without a project, a failure never reports a pending Project step', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_close_if_current', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  gh.overrides.set('gh_issue_close_if_current', () => FakeDeterministicGh.err('rejected', 'GITHUB_WRITE'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.notEqual(out.r.status, 'applied');
@@ -435,12 +435,12 @@ test('a subagent child in a listed Verification session still cannot give the fi
   nothingChanged(gh, before);
 });
 
-const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'pi-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'pi-scaffold', f));
+const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'deterministic-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'deterministic-scaffold', f));
 const otherProfile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '別の指示文（架空）'}};
 
 test('a final acceptance recorded under another profile is asked again; Yes overwrites it, No keeps it and closes nothing', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_edit_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const parent = await harness(t, gh);
   const refs = await writeEvidence(parent.agentDir);
   assert.equal((await parent.invoke(params(gh, refs))).confirmCalls, 1);
@@ -459,7 +459,7 @@ test('a final acceptance recorded under another profile is asked again; Yes over
 
 test('a corrupt final acceptance record stays blocked without asking', async t => {
   const gh = world();
-  gh.overrides.set('gh_issue_edit_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_edit_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const parent = await harness(t, gh);
   const refs = await writeEvidence(parent.agentDir);
   await parent.invoke(params(gh, refs));
@@ -484,8 +484,8 @@ test('with agentApprovals epic-completion the parent gives the final acceptance 
 });
 
 for (const [step, op, count] of [
-  ['epic-body', 'gh_issue_edit_if_current', (gh: FakePiGh) => gh.count('gh_issue_edit_if_current')],
-  ['epic-labels', 'gh_issue_labels_if_current', (gh: FakePiGh) => gh.count('gh_issue_labels_if_current')],
+  ['epic-body', 'gh_issue_edit_if_current', (gh: FakeDeterministicGh) => gh.count('gh_issue_edit_if_current')],
+  ['epic-labels', 'gh_issue_labels_if_current', (gh: FakeDeterministicGh) => gh.count('gh_issue_labels_if_current')],
   ['project', 'gh_project_field_update', projectWrites],
 ] as const) test(`an ${step} change that landed but returned unknown is reconciled on resume and not resent`, async t => {
   const gh = world();
@@ -548,7 +548,7 @@ test('an Epic without projectIds completes with a not-recorded skip and no Proje
 });
 test('a failed Project close blocks with pendingStep project-close and issueClosed true', async t => {
   const gh = recordedWorld();
-  gh.overrides.set('gh_project_close', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  gh.overrides.set('gh_project_close', () => FakeDeterministicGh.err('rejected', 'GITHUB_WRITE'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
@@ -560,7 +560,7 @@ test('a failed Project close blocks with pendingStep project-close and issueClos
 test('a resume after a failed Project close closes only the remaining Projects without a second Issue close', async t => {
   const gh = recordedWorld([PROJECT.projectId, PB]);
   let fail = true;
-  gh.overrides.set('gh_project_close', args => { const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {projectId: string}; return c.projectId === PB && fail ? (fail = false, FakePiGh.err('rejected', 'GITHUB_WRITE')) : undefined; });
+  gh.overrides.set('gh_project_close', args => { const c = JSON.parse(readFileSync((args as {changePath: string}).changePath, 'utf8')) as {projectId: string}; return c.projectId === PB && fail ? (fail = false, FakeDeterministicGh.err('rejected', 'GITHUB_WRITE')) : undefined; });
   const h = await harness(t, gh);
   const input = params(gh, await writeEvidence(h.agentDir));
   const first = await h.invoke(input);
@@ -597,7 +597,7 @@ test('a tree issue reopened after the acceptance blocks with PROJECT_ITEMS_OPEN'
 });
 test('a close reported applied but not visible is caught by the read-back', async t => {
   const gh = recordedWorld();
-  gh.overrides.set('gh_project_close', () => FakePiGh.ok({projectId: PROJECT.projectId}, 'applied'));
+  gh.overrides.set('gh_project_close', () => FakeDeterministicGh.ok({projectId: PROJECT.projectId}, 'applied'));
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.notEqual(out.r.status, 'applied');
@@ -645,7 +645,7 @@ test('an already closed Project reopened after the acceptance is not reported cl
 });
 test('a partial result reports an already closed Project only when it still reads back closed', async t => {
   const gh = recordedWorld([PROJECT.projectId, PB]); gh.closedProjects.add(PROJECT.projectId);
-  gh.overrides.set('gh_project_close', () => FakePiGh.err('rejected', 'GITHUB_WRITE'));
+  gh.overrides.set('gh_project_close', () => FakeDeterministicGh.err('rejected', 'GITHUB_WRITE'));
   const h = await harness(t, gh, {confirm: () => { gh.closedProjects.delete(PROJECT.projectId); return true; }});
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.equal(out.r.status, 'partial', JSON.stringify(out.r));
@@ -656,7 +656,7 @@ test('a partial result reports an already closed Project only when it still read
 test('an open sub-issue in another repository does not block; a Project holding it is foreign-items', async t => {
   const gh = recordedWorld([PROJECT.projectId, PB]);
   gh.projectExtraItems.set(PB, [{id: 'PVTI_x5', content: {__typename: 'Issue', id: 'I_x5', number: 5, state: 'OPEN', repository: {nameWithOwner: 'other/repo'}}}]);
-  gh.overrides.set('gh_subissues_list', args => (args as {issue: number}).issue === 11 ? FakePiGh.ok([{number: 5, title: 'X', body: '', state: 'open', labels: [], html_url: 'https://github.com/other/repo/issues/5'}]) : undefined);
+  gh.overrides.set('gh_subissues_list', args => (args as {issue: number}).issue === 11 ? FakeDeterministicGh.ok([{number: 5, title: 'X', body: '', state: 'open', labels: [], html_url: 'https://github.com/other/repo/issues/5'}]) : undefined);
   const h = await harness(t, gh);
   const out = await h.invoke(params(gh, await writeEvidence(h.agentDir)));
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));

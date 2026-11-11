@@ -14,7 +14,7 @@ import type {AgentKind} from './types.js';
 
 export const INTERVAL_MS = 60_000;
 
-/** SCAFFOLD_WATCHDOG_ROOTS="pi=/a/pi-scaffold,claude=/b/pi-scaffold"; default: every ~/.pi/agent*\/pi-scaffold and ~/.claude/scaffold/pi-scaffold. */
+/** SCAFFOLD_WATCHDOG_ROOTS="pi=/a/deterministic-scaffold,claude=/b/deterministic-scaffold"; default: every ~/.pi/agent*\/deterministic-scaffold and ~/.claude/scaffold/deterministic-scaffold. */
 export function resolveRoots(env: NodeJS.ProcessEnv, home: string): StateRoot[] {
   const raw = env.SCAFFOLD_WATCHDOG_ROOTS;
   if (raw) {
@@ -29,8 +29,8 @@ export function resolveRoots(env: NodeJS.ProcessEnv, home: string): StateRoot[] 
   const pi = join(home, '.pi');
   let names: string[] = [];
   try { names = readdirSync(pi).filter(n => n === 'agent' || n.startsWith('agent-')).sort(); } catch { /* no pi */ }
-  for (const n of names) if (existsSync(join(pi, n, 'pi-scaffold'))) roots.push({agent: 'pi', dir: join(pi, n, 'pi-scaffold')});
-  const claude = join(env.CLAUDE_SCAFFOLD_STATE_DIR ?? join(home, '.claude', 'scaffold'), 'pi-scaffold');
+  for (const n of names) if (existsSync(join(pi, n, 'deterministic-scaffold'))) roots.push({agent: 'pi', dir: join(pi, n, 'deterministic-scaffold')});
+  const claude = join(env.CLAUDE_SCAFFOLD_STATE_DIR ?? join(home, '.claude', 'scaffold'), 'deterministic-scaffold');
   if (existsSync(claude)) roots.push({agent: 'claude', dir: claude});
   return roots;
 }

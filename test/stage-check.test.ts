@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {populatedDoc, featureDoc} from './helpers/docs.js';
 import {mkdir, writeFile} from 'node:fs/promises';
@@ -17,7 +17,7 @@ const WRITE = ['scaffold_feature_create', 'scaffold_dependencies_apply', 'scaffo
 async function run(tools: string[], opts: {activeTools?: string[]; pin?: boolean; feature?: boolean; pinRef?: string; cwd?: string} = {}) {
   const d = populatedDoc(); d.stage = 'basic-design';
   if (opts.pin) d.originalRequest.sourceRefs = [opts.pinRef ?? `docs/missing.md@sha256:${'a'.repeat(64)}`];
-  const gh = new FakePiGh(); gh.add({number: 10, title: 'Epic', body: renderEpicBlock(d), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open'});
+  const gh = new FakeDeterministicGh(); gh.add({number: 10, title: 'Epic', body: renderEpicBlock(d), labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open'});
   if (opts.feature) gh.add({number: 10, title: 'Feature', body: renderFeatureBlock(featureDoc()), labels: ['Type: Scaffold', 'Scope: Feature'], state: 'open'});
   const {createTool} = await loadToolModule('extensions/tools/stage-check.ts');
   const h = await createHarness(createTool, {scenario: {gh, tools, ...(opts.activeTools ? {activeTools: opts.activeTools} : {}), ...(opts.cwd ? {cwd: opts.cwd} : {})}});
@@ -81,8 +81,8 @@ function specDoc(ready: boolean) {
   if (!ready) d.criteria = [];
   return d;
 }
-async function check(doc: ReturnType<typeof populatedDoc>, opts: {labels?: string[]; blockedBy?: number[]; extra?: (gh: FakePiGh) => void} = {}) {
-  const gh = new FakePiGh();
+async function check(doc: ReturnType<typeof populatedDoc>, opts: {labels?: string[]; blockedBy?: number[]; extra?: (gh: FakeDeterministicGh) => void} = {}) {
+  const gh = new FakeDeterministicGh();
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(doc), labels: opts.labels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification'], state: 'open', blockedBy: opts.blockedBy ?? []});
   opts.extra?.(gh);
   const {createTool} = await loadToolModule('extensions/tools/stage-check.ts');
@@ -123,7 +123,7 @@ test('stage check reports planPending and open Epic blockers', async () => {
 test('an unreadable dependency list is reported in problems and does not change passed', async () => {
   const {r, data} = await check(specDoc(true), {
     labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification', 'scaffold:plan-pending'],
-    extra: gh => { gh.overrides.set('gh_dependencies_list', () => FakePiGh.err('rejected', 'GITHUB_READ')); },
+    extra: gh => { gh.overrides.set('gh_dependencies_list', () => FakeDeterministicGh.err('rejected', 'GITHUB_READ')); },
   });
   assert.equal(data.passed, true);
   assert.equal(r.status, 'validated');

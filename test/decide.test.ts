@@ -11,7 +11,7 @@ test('gone and exited notify once and stop watching', () => {
   for (const kind of ['gone', 'exited'] as const) {
     const r = run({kind});
     assert.deepEqual(types(r), ['notify', 'stop'], kind);
-    assert.match((r.actions[0] as {text: string}).text, /^pi-scaffold: Epic #10（example\/demo・specification）: /);
+    assert.match((r.actions[0] as {text: string}).text, /^deterministic-scaffold: Epic #10（example\/demo・specification）: /);
   }
 });
 

@@ -16,7 +16,7 @@ import {prepareLabelEdit, waveLabelName} from '../core/label-policy.js';
 import {canonicalWavePlan, checkWaveLabels, isWaveLike, readScopeContents, validateWavePlan, type WaveEdge} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {ensureLabelDefinition, readLabels} from './labels-ensure.js';
 import {verifyWaves} from './waves-verify.js';

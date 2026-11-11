@@ -1,4 +1,4 @@
-// Copies a bundled pi-gh Issue template into an owned directory together with a model policy built only from
+// Copies a bundled deterministic-gh Issue template into an owned directory together with a model policy built only from
 // the given bindings (relative `models.yml`). No owner settings or secrets are copied.
 import {readFileSync} from 'node:fs';
 import {join} from 'node:path';

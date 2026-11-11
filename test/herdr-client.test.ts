@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHerdrCli, HerdrError, isSupportedHerdr} from '../src/handoff/herdr-client.js';
 
 async function fakeBin(t: {after(fn: () => Promise<void>): void}, script: string) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-herdr-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-herdr-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const bin = join(dir, 'herdr');
   await writeFile(bin, `#!${process.execPath}\n${script}`); await chmod(bin, 0o755);

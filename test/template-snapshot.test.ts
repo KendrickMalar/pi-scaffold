@@ -7,13 +7,13 @@ import {buildTemplateSnapshot} from '../src/core/template-snapshot.js';
 import {ensureOwnedDir} from '../src/core/files.js';
 
 async function root(t: {after(fn: () => Promise<void>): void}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-tpl-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-tpl-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const r = join(dir, 'pi-scaffold'); await ensureOwnedDir(r, r); return r;
+  const r = join(dir, 'deterministic-scaffold'); await ensureOwnedDir(r, r); return r;
 }
 const binding = (model: string) => ({model, thinking: 'medium' as const, reason: 'r'});
 
-test('epic snapshot is pi-gh kind parent with a planner policy from the binding only', async t => {
+test('epic snapshot is deterministic-gh kind parent with a planner policy from the binding only', async t => {
   const r = await root(t);
   const s = await buildTemplateSnapshot('epic', {planner: binding('example-provider/planner-1')}, join(r, 'a'), r);
   const yml = await readFile(s.templatePath, 'utf8');

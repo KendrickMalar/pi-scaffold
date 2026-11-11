@@ -6,7 +6,7 @@ import {checkFeatureIntegration, evidenceRootOf, readEvidence} from '../core/evi
 import {prepareLabelEdit} from '../core/label-policy.js';
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 
 export const HANDOFF_VERIFICATION = 'scaffold_handoff_verification';

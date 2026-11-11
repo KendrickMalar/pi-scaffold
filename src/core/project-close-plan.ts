@@ -1,5 +1,5 @@
 // Which recorded Projects scaffold_epic_complete closes: only those linked to this repo and holding nothing but Issues of the Epic's tree in this repo.
-// A Project not linked to the repo cannot be closed through pi-gh; it is reported as not-linked for a human to close by hand.
+// A Project not linked to the repo cannot be closed through deterministic-gh; it is reported as not-linked for a human to close by hand.
 import type {TreeIssue} from '../ports/epic-tree.js';
 
 export interface ProjectClosePlan { close: string[]; alreadyClosed: string[]; skipped: {projectId: string | null; reason: 'not-recorded' | 'foreign-items' | 'not-linked'}[] }

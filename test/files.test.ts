@@ -8,9 +8,9 @@ import {readOwnedFile, readOwnedJson, writeOwnedFile, ownedPath, ensureOwnedDir,
 import {LIMITS} from '../src/core/contracts.js';
 
 async function root(t: {after(fn: () => Promise<void>): void}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-files-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-files-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const r = join(dir, 'pi-scaffold');
+  const r = join(dir, 'deterministic-scaffold');
   await ensureOwnedDir(r, r);
   return {dir, r};
 }

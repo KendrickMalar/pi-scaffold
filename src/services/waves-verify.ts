@@ -6,7 +6,7 @@ import {canonicalJson, dependencyPlanDigest, taggedDigest, wavePlanDigest} from 
 import {canonicalWavePlan, checkWaveLabels, readScopeContents, validateWavePlan, type WaveEdge, type WaveFeature} from '../core/wave-plan.js';
 import {validateDependencyGraph} from '../core/dependency-graph.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 
 export const WAVES_VERIFY = 'scaffold_waves_verify';

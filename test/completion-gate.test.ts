@@ -10,7 +10,7 @@ import type {EpicDocV1, EvidenceReportV1, FeatureSnapshot} from '../src/core/con
 import {populatedDoc, featureDoc} from './helpers/docs.js';
 
 test('real git: origin\'s default branch is read with ls-remote; containment, local presence and fetch-needed are judged without fetching', async t => {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-completion-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-completion-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const env = {...process.env, GIT_AUTHOR_NAME: 'f', GIT_AUTHOR_EMAIL: 'f@example.com', GIT_COMMITTER_NAME: 'f', GIT_COMMITTER_EMAIL: 'f@example.com'};
   const origin = join(dir, 'origin.git'), work = join(dir, 'work'), other = join(dir, 'other');

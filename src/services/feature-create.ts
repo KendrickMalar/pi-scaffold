@@ -1,5 +1,5 @@
 // #10 scaffold_feature_create: one Feature per call, from an explicit design decomposition. The Issue is created with the
-// pi-gh task template under the real Epic, attached as a native sub-issue and read back. The Epic body is never changed.
+// deterministic-gh task template under the real Epic, attached as a native sub-issue and read back. The Epic body is never changed.
 // Created-but-unattached Issues are found again through the private journal; nothing is posted twice.
 import {join} from 'node:path';
 import {
@@ -17,7 +17,7 @@ import {editScopeProblems} from '../core/wave-plan.js';
 import {checkSpecificationReady, specificationApprovalView} from '../core/specification-gate.js';
 import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/template-snapshot.js';
 import type {ToolCall} from '../core/runtime.js';
-import {decodeGithubIssue, readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
+import {decodeGithubIssue, readIssue, DETERMINISTIC_GH_MASK} from '../ports/deterministic-gh.js';
 import {readFeatureSet} from '../ports/feature-set.js';
 import {readLabels} from './labels-ensure.js';
 
@@ -89,7 +89,7 @@ const decodeCreated = (repo: string) => (d: unknown) => {
 export async function createFeature(input: FeatureCreateInput, call: ToolCall): Promise<ScaffoldResult<FeatureCreateData>> {
   const operation = FEATURE_CREATE;
   const blocked = (problems: Problem[]): ScaffoldResult<FeatureCreateData> => ({status: 'blocked', operation, problems});
-  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Feature could not be read back. Rephrase it.`)]);
+  if (JSON.stringify(input).includes(DETERMINISTIC_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${DETERMINISTIC_GH_MASK}", which deterministic-gh uses for redaction; the Feature could not be read back. Rephrase it.`)]);
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_validate', 'gh_issue_submit', 'gh_issue_list', 'gh_subissues_list', 'gh_subissue_add', 'gh_labels_list'], call.scope, ['issue-list-labels']);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);

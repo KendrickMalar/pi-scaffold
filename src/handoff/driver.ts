@@ -13,7 +13,7 @@ import {withOperation, type OperationRun} from '../core/lifecycle.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
 import {resolveBrowserAccount} from '../core/browser-account.js';
-import {readIssue, type GhOutcome} from '../ports/pi-gh.js';
+import {readIssue, type GhOutcome} from '../ports/deterministic-gh.js';
 import {HerdrError, isSupportedHerdr, supportedHerdrLabel, type HerdrPort} from './herdr-client.js';
 import {buildLaunchCommand, unsafeLaunchValues} from './launcher.js';
 import {SCAFFOLD_PROFILE_IDS, isScaffoldProfile} from './profiles.js';
@@ -27,12 +27,12 @@ export interface HandoffInput extends MutationInput { expectedStage: Stage; next
 /** `profileChanged`: the receiving session runs newer Profile instructions than this one (recorded, not refused). */
 export interface HandoffData { nonceSha256: string; tabId: string; paneId: string; targetSessionId: string; phase: string; agentAbandoned?: string[]; profileChanged?: {senderInstructionsDigest: string; receiverInstructionsDigest: string} }
 export type StageGate = (snapshot: IssueSnapshot) => Promise<GateResult>;
-/** pi-gh tools every Scaffold stage session needs, besides this package's own registered tools. */
+/** deterministic-gh tools every Scaffold stage session needs, besides this package's own registered tools. */
 export const BASE_REQUIRED_TOOLS = ['gh_capabilities', 'gh_issue_get', 'gh_issue_edit_if_current', 'gh_issue_labels_if_current'];
 const STAGE_NAMES: Partial<Record<Stage, string>> = {specification: '仕様策定（Specification）', 'basic-design': '基本設計（BasicDesign）', implementation: '詳細設計・実装（Implementation）', verification: '検証（Verification）'};
 
 export function stagePrompt(stage: Stage, repo: string, epic: number, nonceSha: string): string {
-  return `pi-scaffold: このセッションは Epic #${epic}（${repo}）の${STAGE_NAMES[stage] ?? stage}工程です。Epic を読み込み、この工程の作業を始めてください。前の会話の内容は引き継いでいません。［${promptTag(nonceSha)}］`;
+  return `deterministic-scaffold: このセッションは Epic #${epic}（${repo}）の${STAGE_NAMES[stage] ?? stage}工程です。Epic を読み込み、この工程の作業を始めてください。前の会話の内容は引き継いでいません。［${promptTag(nonceSha)}］`;
 }
 
 /** Input-bound checks that must hold until this operation itself commits the stage (re-run right before the body write). */
@@ -103,7 +103,7 @@ export async function handoffStage(input: HandoffInput, gate: StageGate, call: T
       return `- operation ${r.operationId}（状態: ${r.status}、最後の段階: ${r.steps.at(-1)?.name ?? 'なし'}${tab?.tabId ? `、タブ ${tab.tabId}` : ''}）`;
     }).join('\n');
     let ok = agentDecides;
-    if (!agentDecides) try { ok = await call.env.approvalUi.confirm('pi-scaffold: 止まっている引き継ぎを放棄しますか？', `Epic #${input.epicIssue}（${input.repo}）に、終わっていない引き継ぎがあります。\n${details}\n\n放棄すると、その引き継ぎは再開できなくなり、新しい引き継ぎを始めます。既存のタブや起動済みのPiは閉じません。GitHubのStage・本文は変えません。`, {signal: call.scope.signal}); } catch { ok = false; }
+    if (!agentDecides) try { ok = await call.env.approvalUi.confirm('deterministic-scaffold: 止まっている引き継ぎを放棄しますか？', `Epic #${input.epicIssue}（${input.repo}）に、終わっていない引き継ぎがあります。\n${details}\n\n放棄すると、その引き継ぎは再開できなくなり、新しい引き継ぎを始めます。既存のタブや起動済みのPiは閉じません。GitHubのStage・本文は変えません。`, {signal: call.scope.signal}); } catch { ok = false; }
     if (!ok || !call.scope.isCurrent()) return blocked([stuck]);
     for (const r of busy) await journal.abandon(r.operationId);
     if (agentDecides) agentAbandoned = busy.map(r => r.operationId);

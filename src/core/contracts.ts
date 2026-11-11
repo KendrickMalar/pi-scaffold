@@ -1,4 +1,4 @@
-// Shared contracts for every pi-scaffold tool. Runtime decoders mirror the TypeBox entry schemas so
+// Shared contracts for every deterministic-scaffold tool. Runtime decoders mirror the TypeBox entry schemas so
 // that services never trust input that bypassed Pi's own validation.
 
 export const LIMITS = Object.freeze({
@@ -115,7 +115,7 @@ export interface EvidenceReportV1 { version: 1; workflowId: UUID; featureIssue: 
 export interface GateResult { status: 'validated' | 'blocked'; problems: Problem[]; artifactDigests: Record<string, Sha256> }
 export interface WaveCheck { passed: boolean; checks: string[]; problems: Problem[] }
 
-/** B1/B2/B3 change artifacts. These are proposals for pi-gh; no 0.2.0 tool accepts them yet. */
+/** B1/B2/B3 change artifacts. These are proposals for deterministic-gh; no 0.2.0 tool accepts them yet. */
 export interface PreparedIssueEdit { version: 1; repo: RepoRef; operation: 'issue-edit-if-current'; issue: number; body: string; expectedBodySha256: Sha256 }
 export interface PreparedIssueLabels { version: 1; repo: RepoRef; operation: 'issue-labels-if-current'; issue: number; add: string[]; remove: string[]; expectedLabelsSha256: Sha256 }
 export interface PreparedIssueClose { version: 1; repo: RepoRef; operation: 'issue-close-if-current'; issue: number; expectedBodySha256: Sha256; reason: 'completed' }

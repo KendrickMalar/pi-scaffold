@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
@@ -48,15 +48,15 @@ function epicDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
   return d;
 }
 function world(opts: {epic?: EpicDocV1; features?: Record<number, FeatureDocV1>; epicLabels?: string[]; waveLabels?: Record<number, string>} = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   const epic = opts.epic ?? epicDoc();
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: opts.epicLabels ?? ['Type: Scaffold', 'Scope: Epic', 'Stage: BasicDesign'], state: 'open', subIssues: [...ISSUES]});
   for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(opts.features?.[n] ?? feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', opts.waveLabels?.[n] ?? `Wave: ${n - 10}`], state: 'open'});
   gh.issues.get(12)!.blockedBy = [11];
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), ...extra,
 });
 function receiver(herdr: FakeHerdr, agentDir: () => string) {
@@ -68,7 +68,7 @@ function receiver(herdr: FakeHerdr, agentDir: () => string) {
   };
   herdr.onPrompt = async (_pane, text) => { await recordTurnStarted({packetPath, agentDir: agentDir(), sessionId: 'impl-session', prompt: text}); };
 }
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, herdr = new FakeHerdr(), scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, herdr = new FakeHerdr(), scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/handoff-implementation.ts');
   let agentDir = '';
   receiver(herdr, () => agentDir);
@@ -78,11 +78,11 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
   t.after(h.dispose);
   return {h, herdr};
 }
-const noLaunch = (herdr: FakeHerdr, gh: FakePiGh) => {
+const noLaunch = (herdr: FakeHerdr, gh: FakeDeterministicGh) => {
   assert.equal(herdr.tabCreates, 0); assert.equal(herdr.count('paneRun'), 0); assert.equal(herdr.count('agentPrompt'), 0);
   assert.equal(gh.conditionalChanges.length, 0, 'no Stage/body change');
 };
-async function blockedNoLaunch(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, code?: string, scenario: Scenario = {}) {
+async function blockedNoLaunch(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, code?: string, scenario: Scenario = {}) {
   const {h, herdr} = await harness(t, gh, new FakeHerdr(), scenario);
   const out = await h.invoke();
   assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
@@ -190,7 +190,7 @@ test('the start approval is re-checked at the stage commit (approval gone while 
   const herdr = new FakeHerdr();
   const {h} = await harness(t, gh, herdr);
   const run = herdr.onPaneRun!;
-  herdr.onPaneRun = async (p, c) => { await run(p, c); await rm(join(h.agentDir, 'pi-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'approvals'), {recursive: true, force: true}); };
+  herdr.onPaneRun = async (p, c) => { await run(p, c); await rm(join(h.agentDir, 'deterministic-scaffold', 'state', repoHash('example/demo'), epicDoc().workflowId, 'approvals'), {recursive: true, force: true}); };
   const out = await h.invoke();
   assert.notEqual(out.r.status, 'applied');
   assert.ok(out.r.problems.some(p => p.code === 'APPROVAL_MISSING'), JSON.stringify(out.r.problems));
@@ -294,7 +294,7 @@ test('a step that runs past the handoff budget still pauses and resumes with the
   assert.equal(herdr.tabCreates, 1);
 });
 
-const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'pi-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'pi-scaffold', f));
+const approvalFiles = async (agentDir: string) => ((await readdir(join(agentDir, 'deterministic-scaffold'), {recursive: true})) as string[]).filter(f => /approvals[\\/].+\.json$/.test(f)).map(f => join(agentDir, 'deterministic-scaffold', f));
 const otherProfile = {type: 'custom', customType: 'startup-profile-state', data: {version: 1, id: 'developer', label: 'developer', instructions: '別の指示文（架空）'}};
 
 test('an approval of the same content recorded under another profile is asked again; Yes overwrites it, No keeps it', async t => {

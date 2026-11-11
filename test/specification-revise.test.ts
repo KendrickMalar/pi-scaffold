@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderFeatureBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text} from '../src/core/digests.js';
@@ -35,25 +35,25 @@ function feature(epic: EpicDocV1, n: number): FeatureDocV1 {
     createOperationId: `eeeeeeee-eeee-4eee-8eee-${String(n).padStart(12, '0')}`};
 }
 function world(epic = epicDoc(), extraFeatureLabels: Record<number, string[]> = {}) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: 'Epic', body: renderEpicBlock(epic), labels: ['Type: Scaffold', 'Scope: Epic', STAGE_LABEL[epic.stage as keyof typeof STAGE_LABEL]], state: 'open', subIssues: [...ISSUES]});
   for (const n of ISSUES) gh.add({number: n, title: `F${n}`, body: renderFeatureBlock(feature(epic, n)), labels: ['Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', `Wave: ${n - 10}`, ...(extraFeatureLabels[n] ?? [])], state: 'open'});
   return gh;
 }
-const docOf = <T>(gh: FakePiGh, n: number) => (parseIssueBody(gh.issues.get(n)!.body) as unknown as {ok: true; value: {doc: T}}).value.doc;
-const epicOf = (gh: FakePiGh) => docOf<EpicDocV1>(gh, 10);
-const reviseParams = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const docOf = <T>(gh: FakeDeterministicGh, n: number) => (parseIssueBody(gh.issues.get(n)!.body) as unknown as {ok: true; value: {doc: T}}).value.doc;
+const epicOf = (gh: FakeDeterministicGh) => docOf<EpicDocV1>(gh, 10);
+const reviseParams = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: epicOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body),
   reason: '実装中に、注文一覧は月単位でしか出せないと分かったため', facts: [], criteria: [], decisions: [],
   requirements: [{id: 'REQ002', description: '注文一覧を月単位でCSVに保存できる'}], ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, tool: string, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, tool: string, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule(`extensions/tools/${tool}.ts`);
   const h = await createHarness(createTool, {scenario: {gh, policy, sessionEntries: [profile], blobs: {[`${COMMIT}:docs/design.md`]: DESIGN}, ...scenario}});
   t.after(h.dispose);
   return h;
 }
-const noWrites = (gh: FakePiGh) => assert.equal(gh.conditionalChanges.length, 0);
+const noWrites = (gh: FakeDeterministicGh) => assert.equal(gh.conditionalChanges.length, 0);
 
 test('with agentApprovals the parent revises the approved specification itself; only the Feature using the changed REQ is Blocked', async t => {
   const gh = world();
@@ -146,7 +146,7 @@ test('a stale Epic body or revision is refused', async t => {
 
 // ---- scaffold_feature_revise -----------------------------------------------------------------------
 
-const featureParams = (gh: FakePiGh, n: number, extra: Record<string, unknown> = {}) => ({
+const featureParams = (gh: FakeDeterministicGh, n: number, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, featureIssue: n, operationId: OP2, expectedRevision: docOf<FeatureDocV1>(gh, n).revision, expectedBodySha256: sha256Text(gh.issues.get(n)!.body),
   criteria: [{id: `AC10${n - 10}`, requirementIds: [n === 11 ? 'REQ001' : 'REQ002'], verification: '月単位で出力する単体テスト', expectedResult: '月の境界で分かれる'}], ...extra,
 });
@@ -195,7 +195,7 @@ test('a revision interrupted after the Epic body is resumed with the same operat
   const gh = world();
   const h = await harness(t, gh, 'specification-revise', {policy: aiPolicy});
   const p = reviseParams(gh);
-  gh.overrides.set('gh_issue_labels_if_current', () => FakePiGh.err('rejected', 'PRECONDITION_FAILED'));
+  gh.overrides.set('gh_issue_labels_if_current', () => FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED'));
   const first = await h.invoke(p);
   assert.equal(first.r.status, 'partial', JSON.stringify(first.r));
   assert.equal(epicOf(gh).specRevisions?.length, 1, 'the Epic body was written');

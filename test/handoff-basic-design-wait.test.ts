@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {renderEpicBlock} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
@@ -28,13 +28,13 @@ function readyDoc(): EpicDocV1 {
   return d;
 }
 function world(labels = LABELS, blockedBy: (number | string)[] = []) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: renderEpicBlock(readyDoc()), labels: [...labels], state: 'open', blockedBy});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh) => ({repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body)});
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, opts: {holdTurn?: boolean} = {}, scenario: Scenario = {}) {
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh) => ({repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body)});
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, opts: {holdTurn?: boolean} = {}, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/handoff-basic-design.ts');
   const herdr = new FakeHerdr();
   let agentDir = '';
@@ -53,7 +53,7 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
   t.after(h.dispose);
   return {h, herdr, startTurn};
 }
-const noLaunch = (herdr: FakeHerdr, gh: FakePiGh) => {
+const noLaunch = (herdr: FakeHerdr, gh: FakeDeterministicGh) => {
   assert.equal(herdr.tabCreates, 0); assert.equal(herdr.count('paneRun'), 0); assert.equal(herdr.count('agentPrompt'), 0);
   assert.equal(gh.conditionalChanges.length, 0, 'no Stage/body change');
   assert.equal(gh.writes, 0, 'nothing written');
@@ -74,7 +74,7 @@ test('a Epic labelled scaffold:plan-pending is not handed off (PLAN_PENDING)', a
 test('an open Epic blocker stops the handoff (EPIC_WAITING) and names it', async t => {
   const gh = world();
   // A same-repo URL in another letter case is still this repo.
-  gh.overrides.set('gh_dependencies_list', () => FakePiGh.ok([blocker('Example/Demo', 20, 'open', ['Type: Scaffold', 'Scope: Epic']), blocker('example/demo', 21, 'open', ['Scope: Epic']), blocker('example/demo', 22, 'closed', ['Scope: Epic'])]));
+  gh.overrides.set('gh_dependencies_list', () => FakeDeterministicGh.ok([blocker('Example/Demo', 20, 'open', ['Type: Scaffold', 'Scope: Epic']), blocker('example/demo', 21, 'open', ['Scope: Epic']), blocker('example/demo', 22, 'closed', ['Scope: Epic'])]));
   const {h, herdr} = await harness(t, gh);
   const out = await h.invoke();
   assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));
@@ -93,7 +93,7 @@ test('a closed Epic blocker, a Feature blocker and a cross-repo blocker do not s
   gh.add({number: 21, title: '開いた Feature（架空）', body: '', labels: ['Type: Scaffold', 'Scope: Feature'], state: 'open'});
   // The cross-repo entry is an open Epic of another repository.
   gh.overrides.set('gh_dependencies_list', (args) => (args as {issue: number}).issue === 10
-    ? FakePiGh.ok([gh.github(gh.issues.get(20)!), gh.github(gh.issues.get(21)!), blocker('other/repo', 30, 'open', ['Scope: Epic'])])
+    ? FakeDeterministicGh.ok([gh.github(gh.issues.get(20)!), gh.github(gh.issues.get(21)!), blocker('other/repo', 30, 'open', ['Scope: Epic'])])
     : undefined);
   const {h} = await harness(t, gh);
   const out = await h.invoke();
@@ -119,7 +119,7 @@ test('a resumed handoff this journal committed is not stopped by the gate', asyn
 
 test('an unreadable dependency list blocks with the read problem, nothing written', async t => {
   const gh = world();
-  gh.overrides.set('gh_dependencies_list', () => FakePiGh.err('rejected', 'GITHUB_READ'));
+  gh.overrides.set('gh_dependencies_list', () => FakeDeterministicGh.err('rejected', 'GITHUB_READ'));
   const {h, herdr} = await harness(t, gh);
   const out = await h.invoke();
   assert.equal(out.r.status, 'blocked', JSON.stringify(out.r));

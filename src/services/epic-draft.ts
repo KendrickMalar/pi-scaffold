@@ -1,5 +1,5 @@
 // #4 scaffold_epic_draft_create: build a strict local Epic draft (managed block per #4 v1) and, by default,
-// create it as an unfinished Epic through pi-gh (template kind parent, labels Type: Scaffold / Scope: Epic).
+// create it as an unfinished Epic through deterministic-gh (template kind parent, labels Type: Scaffold / Scope: Epic).
 // The planner model is recorded from the session, never called. Nothing is completed or invented.
 import {join} from 'node:path';
 import {
@@ -13,7 +13,7 @@ import {OwnedFileError, readOwnedFile, writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {buildTemplateSnapshot, TEMPLATE_FIELD, TEMPLATE_IDS} from '../core/template-snapshot.js';
 import type {ToolCall} from '../core/runtime.js';
-import {decodeGithubIssue, readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
+import {decodeGithubIssue, readIssue, DETERMINISTIC_GH_MASK} from '../ports/deterministic-gh.js';
 import {readLabels} from './labels-ensure.js';
 import {PLAN_PENDING_LABEL} from '../core/epic-wait.js';
 
@@ -76,7 +76,7 @@ const decodeCreated = (repo: string) => (d: unknown) => {
 export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Promise<ScaffoldResult<EpicDraftData>> {
   const operation = EPIC_DRAFT_CREATE;
   const blocked = (problems: Problem[]): ScaffoldResult<EpicDraftData> => ({status: 'blocked', operation, problems});
-  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
+  if (JSON.stringify(input).includes(DETERMINISTIC_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${DETERMINISTIC_GH_MASK}", which deterministic-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
   const planner = call.env.currentModel();
   if (!planner) return blocked([problem('PLANNER_UNKNOWN', 'planner', 'The session model/thinking level is unknown; the planner cannot be recorded. No model is changed or called.')]);
   const mode = input.mode ?? 'publish';
@@ -168,7 +168,7 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
     const d = snap.value.doc;
     if (d.kind !== 'epic' || d.createOperationId !== input.operationId || d.workflowId !== workflowId) return run.stop([problem('EPIC_IDENTITY', 'issue', `#${number} is not the Epic created by this operation.`)], data);
     const managed = snap.value.labels.filter(l => /^(Type|Scope|Stage|Wave): /.test(l) || l === 'Blocked');
-    if (managed.slice().sort().join('\n') !== [...EPIC_LABELS].sort().join('\n')) return run.stop([problem('EPIC_LABELS_INCOMPLETE', 'labels', `#${number} has managed labels [${managed.join(', ')}] instead of exactly Type: Scaffold and Scope: Epic. Repairing them needs a conditional label change (pi-gh #6); the Epic is not created again.`)], data);
+    if (managed.slice().sort().join('\n') !== [...EPIC_LABELS].sort().join('\n')) return run.stop([problem('EPIC_LABELS_INCOMPLETE', 'labels', `#${number} has managed labels [${managed.join(', ')}] instead of exactly Type: Scaffold and Scope: Epic. Repairing them needs a conditional label change (deterministic-gh #6); the Epic is not created again.`)], data);
     return {status: reused ? 'noop' : 'applied', data};
   });
   return result as ScaffoldResult<EpicDraftData>;

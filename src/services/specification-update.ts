@@ -1,5 +1,5 @@
 // #6 scaffold_specification_update: reflect explicitly given hearing results into a specification-stage Epic.
-// One conditional body edit (pi-gh *_if_current) per operation; stale bodies and later stages write nothing.
+// One conditional body edit (deterministic-gh *_if_current) per operation; stale bodies and later stages write nothing.
 // Approvals are bound to content digests, so any content change makes earlier approvals unusable by construction.
 import {join} from 'node:path';
 import {
@@ -12,7 +12,7 @@ import {readOwnedJson, writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {reduceSpecification, specificationMissingFields, type SpecificationPatch} from '../core/specification.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue, PI_GH_MASK} from '../ports/pi-gh.js';
+import {readIssue, DETERMINISTIC_GH_MASK} from '../ports/deterministic-gh.js';
 
 export const SPECIFICATION_UPDATE = 'scaffold_specification_update';
 export type SpecificationUpdateInput = MutationInput & SpecificationPatch;
@@ -54,7 +54,7 @@ interface PlanNote { changedIds: string[]; researchReset: boolean }
 export async function updateSpecification(input: SpecificationUpdateInput, call: ToolCall): Promise<ScaffoldResult<SpecificationUpdateData>> {
   const operation = SPECIFICATION_UPDATE;
   const blocked = (problems: Problem[]): ScaffoldResult<SpecificationUpdateData> => ({status: 'blocked', operation, problems});
-  if (JSON.stringify(input).includes(PI_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${PI_GH_MASK}", which pi-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
+  if (JSON.stringify(input).includes(DETERMINISTIC_GH_MASK)) return blocked([problem('UNREADABLE_TEXT', '', `Input contains "${DETERMINISTIC_GH_MASK}", which deterministic-gh uses for redaction; the Epic could not be read back. Rephrase it.`)]);
   const caps = await call.bridge.requireCapabilities(['gh_issue_get', 'gh_issue_edit_if_current'], call.scope);
   if (!caps.ok) return blocked(caps.problems);
   const repoOnly = await call.repoContext(input.repo, null);
@@ -91,7 +91,7 @@ export async function updateSpecification(input: SpecificationUpdateInput, call:
           version: 1, operationId: input.operationId, epicIssue: input.epicIssue, revision: doc.revision, specBaseDigest: specBaseDigest(doc), research: doc.research,
         }, null, 2), {root: call.namespaceRoot});
       }
-      // The change file holds exactly pi-gh's contract; what changed is kept in the journal.
+      // The change file holds exactly deterministic-gh's contract; what changed is kept in the journal.
       await writeOwnedFile(plannedPath, JSON.stringify(edit.value), {root: call.namespaceRoot});
       run.note('plan', {changedIds: reduced.value.changedIds, researchReset: reduced.value.baseChanged && doc.research.length > 0} satisfies PlanNote);
     }

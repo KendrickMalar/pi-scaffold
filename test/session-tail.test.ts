@@ -14,7 +14,7 @@ const assistant = (stopReason: string, at: number, errorMessage?: string) => JSO
 const user = (text: string) => JSON.stringify({type: 'message', id: 'u', parentId: null, timestamp: 't', message: {role: 'user', content: [{type: 'text', text}]}});
 
 async function tmp(t: {after(fn: () => Promise<void>): void}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-tail-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-tail-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   return dir;
 }

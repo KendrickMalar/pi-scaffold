@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule} from './helpers/harness.js';
-import {FakePiGh, PI_GH_020_OPERATIONS} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh, DETERMINISTIC_GH_020_OPERATIONS} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock} from '../src/core/epic-render.js';
 import {sha256Text} from '../src/core/digests.js';
 import {initialDoc, OPERATION_ID} from './helpers/docs.js';
 
 const body = renderEpicBlock(initialDoc());
 const params = () => ({repo: 'example/demo', epicIssue: 10, operationId: OPERATION_ID, expectedRevision: 1, expectedBodySha256: sha256Text(body)});
-function gh() { return new FakePiGh().add({number: 10, title: '一覧をCSVで保存できるようにする', body, labels: ['Type: Scaffold', 'Scope: Epic'], state: 'open'}); }
+function gh() { return new FakeDeterministicGh().add({number: 10, title: '一覧をCSVで保存できるようにする', body, labels: ['Type: Scaffold', 'Scope: Epic'], state: 'open'}); }
 async function harness(t: {after(fn: () => Promise<void>): void}, scenario: Parameters<typeof createHarness>[1] extends infer S ? S extends {scenario?: infer X} ? X : never : never = {}) {
   const {createTool} = await loadToolModule('test/fixtures/probe-tool.ts');
   const h = await createHarness(createTool, {scenario: {gh: gh(), defaultParams: params(), ...scenario}});
@@ -56,7 +56,7 @@ test('field errors carry their path', async t => {
 test('untrusted projects, foreign origins and missing capabilities block before any write', async t => {
   assert.equal((await (await harness(t, {trusted: false})).invoke()).r.problems[0]!.code, 'UNTRUSTED_PROJECT');
   assert.equal((await (await harness(t, {origin: 'git@github.com:other/demo.git'})).invoke()).r.problems[0]!.code, 'ORIGIN_MISMATCH');
-  const g = gh(); g.operations = PI_GH_020_OPERATIONS.filter(o => o !== 'gh_issue_edit');
+  const g = gh(); g.operations = DETERMINISTIC_GH_020_OPERATIONS.filter(o => o !== 'gh_issue_edit');
   const out = await (await harness(t, {gh: g})).invoke();
   assert.equal(out.r.status, 'blocked');
   assert.equal(out.r.problems[0]!.code, 'CAPABILITY_MISSING');
@@ -73,7 +73,7 @@ test('stale body hash or revision blocks with zero writes', async t => {
 
 test('a nested isError write surfaces as unknown and stays an error', async t => {
   const g = gh();
-  g.overrides.set('gh_issue_edit', () => ({...FakePiGh.ok({repo: 'example/demo'}, 'applied'), isError: true}));
+  g.overrides.set('gh_issue_edit', () => ({...FakeDeterministicGh.ok({repo: 'example/demo'}, 'applied'), isError: true}));
   const h = await harness(t, {gh: g});
   const out = await h.invoke();
   assert.equal(out.r.status, 'unknown');

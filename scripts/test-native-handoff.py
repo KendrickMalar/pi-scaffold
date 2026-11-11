@@ -6,7 +6,7 @@ its own Pi agent dir/profiles, a stateful fake `gh`, and a loopback model. It ne
 Herdr sessions, tabs, Pi settings or GitHub. The synthetic HOME lives under /tmp because macOS limits
 UNIX socket paths to ~104 bytes; the session is stopped and the directory removed afterwards.
 
-  python3 scripts/test-native-handoff.py --pi-gh /path/to/pi-gh-0.5.0 --pi-profile /path/to/pi-profile
+  python3 scripts/test-native-handoff.py --deterministic-gh /path/to/deterministic-gh-0.13.0 --pi-profile /path/to/pi-profile
 """
 import argparse, fcntl, hashlib, http.server, json, os, pty, select, shutil, signal, struct, subprocess, tempfile, termios, threading, time, unittest
 from pathlib import Path
@@ -108,7 +108,7 @@ class Acceptance(unittest.TestCase):
                     name = 'scaffold_handoff_verification' if owner.verify else 'scaffold_handoff_implementation' if owner.impl else 'scaffold_handoff_basic_design' if owner.basic else 'scaffold_handoff_specification'
                     delta = {'role': 'assistant', 'tool_calls': [{'index': 0, 'id': f'call-{len(owner.requests)}', 'type': 'function', 'function': {'name': name, 'arguments': json.dumps(args)}}]}; end = 'tool_calls'
                 else:
-                    delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'pi-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
+                    delta = {'role': 'assistant', 'content': 'RECEIVER_ACK' if 'deterministic-scaffold:' in last else 'SENDER_DONE'}; end = 'stop'
                 for d, finish in [(delta, None), ({}, end)]:
                     ev = {'id': 'x', 'object': 'chat.completion.chunk', 'created': 1, 'model': 'fixture', 'choices': [{'index': 0, 'delta': d, 'finish_reason': finish}]}
                     self.wfile.write(('data: ' + json.dumps(ev) + '\n\n').encode())
@@ -124,13 +124,13 @@ class Acceptance(unittest.TestCase):
         dev = self.agent / 'profiles' / ('development' if OPTIONS.profile == 'developer' else OPTIONS.profile); dev.mkdir(parents=True)
         (dev / 'profile.json').write_text(json.dumps({'id': OPTIONS.profile, 'label': OPTIONS.profile, 'description': '開発（試験用）', 'order': 30, 'enabled': True}))
         (dev / 'instructions.md').write_text('試験用の開発Profile（架空）\n')
-        (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.pi_gh).resolve()), str(ROOT)]}))
-        (self.agent / 'pi-scaffold').mkdir(mode=0o700)
+        (dev / 'packages.json').write_text(json.dumps({'version': 1, 'packages': [str(Path(OPTIONS.deterministic_gh).resolve()), str(ROOT)]}))
+        (self.agent / 'deterministic-scaffold').mkdir(mode=0o700)
         models = [{'model': 'owned-fixture/fixture', 'thinking': 'medium', 'tier': 'basic', 'roles': ['coding-manager', 'coder', 'tester']}] if self.impl else []
-        pol = self.agent / 'pi-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': models}}})); pol.chmod(0o600)
+        pol = self.agent / 'deterministic-scaffold/policy.json'; pol.write_text(json.dumps({'version': 1, 'repos': {'example/demo': {'authMode': 'file-backed', 'models': models}}})); pol.chmod(0o600)
         if self.verify:
             epic = json.loads((self.state / 'issue-10.json').read_text()); epic['sub_issues'] = [11, 12]; (self.state / 'issue-10.json').write_text(json.dumps(epic))
-            root = self.agent / 'pi-scaffold' / 'state' / self.features['hash'] / self.features['wf'] / 'evidence'
+            root = self.agent / 'deterministic-scaffold' / 'state' / self.features['hash'] / self.features['wf'] / 'evidence'
             self.evidence_refs = []
             for n in (11, 12):
                 (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': self.features[str(n)], 'state': 'open',
@@ -147,7 +147,7 @@ class Acceptance(unittest.TestCase):
             for n, w in ((11, 1), (12, 2)):
                 (self.state / f'issue-{n}.json').write_text(json.dumps({'id': 1000 + n, 'node_id': f'I_example{n}', 'number': n, 'title': f'Feature {n}', 'body': self.features[str(n)], 'state': 'open',
                     'labels': [l for l in labels if l['name'] in ('Type: Scaffold', 'Scope: Feature', 'Stage: BasicDesign', f'Wave: {w}')], 'html_url': f'https://github.com/example/demo/issues/{n}', **({'blocked_by': [11]} if n == 12 else {})}))
-        grant = self.agent / 'pi-gh-permissions.json'
+        grant = self.agent / 'deterministic-gh-permissions.json'
         grant.write_text(json.dumps({'version': 1, 'grants': [{'repo': 'example/demo', 'operations': ['gh_issue_edit_if_current', 'gh_issue_labels_if_current'], 'allowHeadless': True, 'allowChild': False}]})); grant.chmod(0o600)
         for cmd in (['pi-profile', 'packages', 'install', '--profile', OPTIONS.profile], ['herdr', 'integration', 'install', 'pi']):
             r = subprocess.run(cmd, env=self.env, cwd=self.repo, text=True, capture_output=True, timeout=120)
@@ -212,13 +212,13 @@ class Acceptance(unittest.TestCase):
         issue = json.loads((self.state / 'issue-10.json').read_text())
         self.assertIn('Stage: Specification', [l['name'] for l in issue['labels']])
         self.assertIn('"stage": "specification"', issue['body'])
-        receipts = list((self.agent / 'pi-scaffold/state').rglob('started.json'))
+        receipts = list((self.agent / 'deterministic-scaffold/state').rglob('started.json'))
         self.assertEqual(len(receipts), 1)
         ready = json.loads((receipts[0].parent / 'ready.json').read_text())
         self.assertEqual(json.loads(receipts[0].read_text())['sessionId'], ready['sessionId'])
         self.assertNotEqual(ready['sessionId'], last['data']['targetSessionId'] if False else '', 'receiver session id recorded')
         self.assertEqual(last['data']['targetSessionId'], ready['sessionId'])
-        self.assertTrue(any('pi-scaffold:' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the stage prompt reached the new session')
+        self.assertTrue(any('deterministic-scaffold:' in json.dumps(r.get('messages', []), ensure_ascii=False) for r in self.requests), 'the stage prompt reached the new session')
 
 
     def approve_in_parent_tui(self, dialog='仕様の内容承認'):
@@ -254,7 +254,7 @@ class Acceptance(unittest.TestCase):
             try: tui.wait(timeout=5)
             except subprocess.TimeoutExpired: os.killpg(tui.pid, signal.SIGKILL)
             os.close(master)
-        approvals = list((self.agent / 'pi-scaffold/state').rglob('approvals/' + ('implementation-start' if self.impl else 'specification') + '/*.json'))
+        approvals = list((self.agent / 'deterministic-scaffold/state').rglob('approvals/' + ('implementation-start' if self.impl else 'specification') + '/*.json'))
         self.assertEqual(len(approvals), 1, approvals)
         self.requests.clear()
 
@@ -314,7 +314,7 @@ class Acceptance(unittest.TestCase):
         issue = json.loads((self.state / 'issue-10.json').read_text())
         self.assertEqual(issue['state'], 'open', 'the Epic stays open')
         self.assertEqual(sorted(l['name'] for l in issue['labels']), ['Scope: Epic', 'Stage: Verification', 'Type: Scaffold'])
-        packets = list((self.agent / 'pi-scaffold/state').rglob('packet.json'))
+        packets = list((self.agent / 'deterministic-scaffold/state').rglob('packet.json'))
         self.assertEqual(len(packets), 1)
         refs = json.loads(packets[0].read_text())['resourceRefs']
         self.assertIn(f'integration:{self.integration}', refs)
@@ -324,7 +324,7 @@ class Acceptance(unittest.TestCase):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
-    parser.add_argument('--pi-gh', required=True)
+    parser.add_argument('--deterministic-gh', required=True)
     parser.add_argument('--pi-profile', required=True)
     parser.add_argument('--profile', default='developer', help='the scaffold Profile id the stage sessions run in (developer or roblox-game)')
     parser.add_argument('--case')

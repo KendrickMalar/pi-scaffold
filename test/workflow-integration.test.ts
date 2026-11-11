@@ -5,7 +5,7 @@ import {readFileSync, readdirSync, statSync} from 'node:fs';
 import {dirname, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHarness, loadToolModule} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {FakeHerdr} from './helpers/fake-herdr.js';
 import {OPERATION_ID, SHA_A} from './helpers/docs.js';
 
@@ -96,8 +96,8 @@ for (const name of Object.keys(INPUTS)) {
     scaffold_specification_revise: 'specification-revise', scaffold_feature_revise: 'feature-revise',
   }[name]! + '.ts';
 
-  test(`${name}: a missing pi-gh capability blocks with zero writes and zero tabs`, async t => {
-    const gh = new FakePiGh(); gh.operations = [];
+  test(`${name}: a missing deterministic-gh capability blocks with zero writes and zero tabs`, async t => {
+    const gh = new FakeDeterministicGh(); gh.operations = [];
     const herdr = new FakeHerdr();
     const {createTool} = await loadToolModule(module);
     // scaffold_stage_check checks its own read tools first, so give it them to reach the capability check.
@@ -112,7 +112,7 @@ for (const name of Object.keys(INPUTS)) {
   });
 
   test(`${name}: a call cancelled before it starts is "cancelled" with zero writes and zero tabs`, async t => {
-    const gh = new FakePiGh(); const herdr = new FakeHerdr();
+    const gh = new FakeDeterministicGh(); const herdr = new FakeHerdr();
     const {createTool} = await loadToolModule(module);
     const h = await createHarness(createTool, {scenario: {gh, herdr, environment}});
     t.after(h.dispose);
@@ -123,7 +123,7 @@ for (const name of Object.keys(INPUTS)) {
   });
 
   test(`${name}: approval-like flags in the input are rejected`, async t => {
-    const gh = new FakePiGh();
+    const gh = new FakeDeterministicGh();
     const {createTool} = await loadToolModule(module);
     const h = await createHarness(createTool, {scenario: {gh, environment}});
     t.after(h.dispose);

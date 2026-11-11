@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHarness, loadToolModule, type Scenario} from './helpers/harness.js';
-import {FakePiGh} from './helpers/fake-pi-gh.js';
+import {FakeDeterministicGh} from './helpers/fake-deterministic-gh.js';
 import {renderEpicBlock, renderEpicVisible} from '../src/core/epic-render.js';
 import {parseIssueBody} from '../src/core/body-codec.js';
 import {sha256Text, specBaseDigest, specificationDigest} from '../src/core/digests.js';
@@ -24,15 +24,15 @@ function specDoc(mutate: (d: EpicDocV1) => void = () => {}): EpicDocV1 {
 }
 const claimOf = (d: EpicDocV1, researchId: string, operationId: string, sessionId = 'other-session'): ResearchClaim => ({researchId, operationId, sessionId, specBaseDigest: specBaseDigest(d)});
 function world(doc = specDoc()) {
-  const gh = new FakePiGh().seedLabels(labelDefinitions()).enableProposals();
+  const gh = new FakeDeterministicGh().seedLabels(labelDefinitions()).enableProposals();
   gh.add({number: 10, title: '一覧をCSVで保存できるようにする', body: BEFORE + renderEpicBlock(doc) + AFTER, labels: ['Type: Scaffold', 'Scope: Epic', 'Stage: Specification'], state: 'open'});
   return gh;
 }
-const docOf = (gh: FakePiGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
-const params = (gh: FakePiGh, extra: Record<string, unknown> = {}) => ({
+const docOf = (gh: FakeDeterministicGh) => (parseIssueBody(gh.issues.get(10)!.body) as {ok: true; value: {doc: EpicDocV1}}).value.doc;
+const params = (gh: FakeDeterministicGh, extra: Record<string, unknown> = {}) => ({
   repo: 'example/demo', epicIssue: 10, operationId: OP, expectedRevision: docOf(gh).revision, expectedBodySha256: sha256Text(gh.issues.get(10)!.body), researchIds: ['R002'], ...extra,
 });
-async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, scenario: Scenario = {}) {
+async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterministicGh, scenario: Scenario = {}) {
   const {createTool} = await loadToolModule('extensions/tools/research-begin.ts');
   const h = await createHarness(createTool, {scenario: {gh, defaultParams: scenario.defaultParams ?? params(gh), ...scenario}});
   t.after(h.dispose);
@@ -40,9 +40,9 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakePiGh, 
 }
 type Brief = {researchId: string; question: string; requiredEvidence: string; doneCondition: string; stopConditions: string[]; background: string | null; purpose: string; epic: string; specBaseDigest: string};
 type Data = {claims: ResearchClaim[]; briefs: Brief[]; skipped: string[]};
-const edits = (gh: FakePiGh) => gh.count('gh_issue_edit_if_current');
-/** Only pi-gh reads and the one conditional edit: no research run, model call or agent launch. */
-const onlyGhCalls = (gh: FakePiGh) => assert.deepEqual([...new Set(gh.calls.map(c => c.name))].sort().filter(n => !['gh_capabilities', 'gh_issue_edit_if_current', 'gh_issue_get'].includes(n)), []);
+const edits = (gh: FakeDeterministicGh) => gh.count('gh_issue_edit_if_current');
+/** Only deterministic-gh reads and the one conditional edit: no research run, model call or agent launch. */
+const onlyGhCalls = (gh: FakeDeterministicGh) => assert.deepEqual([...new Set(gh.calls.map(c => c.name))].sort().filter(n => !['gh_capabilities', 'gh_issue_edit_if_current', 'gh_issue_get'].includes(n)), []);
 
 // ---- input validation ---------------------------------------------------------------------------
 
@@ -244,7 +244,7 @@ test('a failed read-back after a successful claim write is resumable (partial + 
   const h = await harness(t, gh);
   let edited = false;
   gh.onCall = name => { if (name === 'gh_issue_edit_if_current') edited = true; };
-  gh.overrides.set('gh_issue_get', () => edited ? (gh.overrides.delete('gh_issue_get'), FakePiGh.err('unknown', 'GITHUB_READ')) : undefined);
+  gh.overrides.set('gh_issue_get', () => edited ? (gh.overrides.delete('gh_issue_get'), FakeDeterministicGh.err('unknown', 'GITHUB_READ')) : undefined);
   const first = await h.invoke();
   assert.equal(first.r.status, 'partial', JSON.stringify(first.r));
   assert.equal(first.r.resumeToken, OP);
@@ -272,7 +272,7 @@ test('re-running a completed operation re-checks stage and open state before han
 test('a write that failed before reaching GitHub is retried only after all checks pass again', async t => {
   const gh = world();
   let fail = true;
-  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakePiGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
+  gh.overrides.set('gh_issue_edit_if_current', () => fail ? (fail = false, FakeDeterministicGh.err('rejected', 'PRECONDITION_FAILED')) : undefined);
   const h = await harness(t, gh);
   assert.equal((await h.invoke()).r.status, 'blocked');
   gh.issues.get(10)!.body += '\n手で足したメモ';

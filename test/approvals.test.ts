@@ -9,9 +9,9 @@ import {makeScope} from './helpers/scope.js';
 import {WORKFLOW_ID, SHA_A, SHA_B} from './helpers/docs.js';
 
 async function setup(t: {after(fn: () => Promise<void>): void}) {
-  const dir = await mkdtemp(join(tmpdir(), 'pi-scaffold-approvals-'));
+  const dir = await mkdtemp(join(tmpdir(), 'deterministic-scaffold-approvals-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
-  const root = join(dir, 'pi-scaffold');
+  const root = join(dir, 'deterministic-scaffold');
   const context: RepoContext = {repo: 'example/demo', repoRoot: '/synthetic/repo', gitCommonDir: '/synthetic/repo/.git', workflowStateRoot: join(root, 'state', 'r', WORKFLOW_ID), accountBinding: SHA_A, profileId: 'developer', profileInstructionsDigest: SHA_B};
   return {store: new ApprovalStore(root), context, root};
 }

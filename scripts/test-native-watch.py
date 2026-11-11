@@ -6,7 +6,7 @@ Reuses the isolated setup of test-native-handoff.py (named Herdr session `pst`, 
 model). It never touches the user's Herdr sessions, Pi settings or GitHub. Each case takes a few minutes because the
 watch checks every 60 seconds.
 
-  python3 scripts/test-native-watch.py --pi-gh /path/to/pi-gh --pi-profile /path/to/pi-profile [--case NAME]
+  python3 scripts/test-native-watch.py --deterministic-gh /path/to/deterministic-gh --pi-profile /path/to/pi-profile [--case NAME]
 """
 import argparse, importlib.util, json, sys, time, unittest
 from pathlib import Path
@@ -34,7 +34,7 @@ class WatchAcceptance(native.Acceptance):
 
     def model_failure(self, last):
         """The child's stage prompt fails with a transient error `child_errors` times; everything else is answered."""
-        if 'pi-scaffold:' in last and CONTINUE_MARK not in last and self.child_errors > 0:
+        if 'deterministic-scaffold:' in last and CONTINUE_MARK not in last and self.child_errors > 0:
             self.child_errors -= 1
             return OVERLOADED
         return None
@@ -53,7 +53,7 @@ class WatchAcceptance(native.Acceptance):
         return r if isinstance(r, str) else json.dumps(r, ensure_ascii=False)
 
     def watches(self):
-        p = self.agent / 'pi-scaffold/state/watches.json'
+        p = self.agent / 'deterministic-scaffold/state/watches.json'
         return json.loads(p.read_text())['watches'] if p.exists() else []
 
     def continues(self):
@@ -104,7 +104,7 @@ class WatchAcceptance(native.Acceptance):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pi', default=str(ROOT / 'node_modules/.bin/pi'))
-    parser.add_argument('--pi-gh', required=True)
+    parser.add_argument('--deterministic-gh', required=True)
     parser.add_argument('--pi-profile', required=True)
     parser.add_argument('--case')
     native.OPTIONS = parser.parse_args()

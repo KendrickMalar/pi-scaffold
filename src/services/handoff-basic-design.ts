@@ -7,7 +7,7 @@ import {checkSpecificationReady, specificationApprovalView} from '../core/specif
 import {committedByUs, handoffStage, type HandoffData, type StageGate} from '../handoff/driver.js';
 import {prepareLabelEdit} from '../core/label-policy.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 import {epicWaitProblems, readEpicWait} from '../core/epic-wait.js';
 
 export const HANDOFF_BASIC_DESIGN = 'scaffold_handoff_basic_design';

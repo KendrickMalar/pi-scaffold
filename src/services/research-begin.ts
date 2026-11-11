@@ -11,7 +11,7 @@ import {readOwnedJson, writeOwnedFile} from '../core/files.js';
 import {withOperation} from '../core/lifecycle.js';
 import {holdsClaim, planResearchBegin, researchBrief, type ResearchBrief} from '../core/research.js';
 import type {ToolCall} from '../core/runtime.js';
-import {readIssue} from '../ports/pi-gh.js';
+import {readIssue} from '../ports/deterministic-gh.js';
 
 export const RESEARCH_BEGIN = 'scaffold_research_begin';
 export type ResearchBeginInput = MutationInput & {researchIds: string[]};

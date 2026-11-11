@@ -50,7 +50,7 @@ export interface TargetState {
   /** "Continue" prompts sent in this stage, and for the current stop (`stopKey`). */
   nudges: number; stopKey?: string; stopNudges: number; lastNudgeAt?: number;
   relaunches: number; lastRelaunchAt?: number;
-  /** Progress of the transient-error retry, kept in pi-scaffold's own decide() format. */
+  /** Progress of the transient-error retry, kept in deterministic-scaffold's own decide() format. */
   watch: WatchProgress;
   loggedKey?: string;
   retired?: boolean;
