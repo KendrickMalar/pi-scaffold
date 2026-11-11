@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// Waits for a scaffold-orchestrator tab to change in Herdr. Usage: scaffold-orchestrator-wait <state file>
+import {main} from '../dist/src/orchestrator-wait/main.js';
+main(process.argv.slice(2), process.env).then(code => { process.exitCode = code; }, error => { console.error(`scaffold-orchestrator-wait: ${error?.message ?? error}`); process.exitCode = 2; });

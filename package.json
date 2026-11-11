@@ -1,6 +1,6 @@
 {
   "name": "deterministic-scaffold",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Pi-native Scaffold workflow tools built on deterministic-gh",
   "type": "module",
@@ -21,10 +21,12 @@
     ]
   },
   "bin": {
-    "scaffold-watchdog": "bin/scaffold-watchdog"
+    "scaffold-watchdog": "bin/scaffold-watchdog",
+    "scaffold-orchestrator-wait": "bin/scaffold-orchestrator-wait"
   },
   "files": [
     "bin/scaffold-watchdog",
+    "bin/scaffold-orchestrator-wait",
     "extensions/**/*.ts",
     "dist/src",
     "resources",
