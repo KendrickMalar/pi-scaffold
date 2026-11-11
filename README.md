@@ -151,6 +151,16 @@ Epicは `setup → specification → basic-design → implementation → verific
 
 環境変数: `SCAFFOLD_WATCHDOG_ROOTS`（`pi=/abs,claude=/abs`）、`SCAFFOLD_WATCHDOG_STATE`、`SCAFFOLD_WATCHDOG_LOG`、`SCAFFOLD_WATCHDOG_HERDR`、`SCAFFOLD_WATCHDOG_GH`、`SCAFFOLD_WATCHDOG_CLAUDE_COMMAND`、`SCAFFOLD_WATCHDOG_SUBAGENTS_RECONCILE`、`SCAFFOLD_WATCHDOG_SUBAGENT_RUNS`（既定は `<TMPDIR>/pi-subagents-uid-<uid>/async-subagent-runs`。TMPDIR が無ければ `getconf DARWIN_USER_TEMP_DIR`）。run の持ち主は status.json の `sessionId`（親の会話ファイル）で決めます。Claude の工程は対象外です。
 
+## scaffold-orchestrator-wait（orchestrator の見守りの待ち）
+
+`bin/scaffold-orchestrator-wait <状態ファイル>` は、scaffold-orchestrator が見守りの `sleep 300` の代わりに呼ぶ待ちです（0.11.0）。LLM を使わずに herdr を読み、orchestrator が行動すべき変化があればすぐ、なければ5分で終わります。orchestrator はこのコマンドが終わった知らせで起きます。設計は `docs/superpowers/specs/2026-11-11-orchestrator-wait-design.md`。
+
+- 読むのは herdr だけです（`session list --json`・`pane list`・`tab list`）。GitHub は読まず、pane へ入力しません。状態ファイル（`~/.local/state/scaffold-orchestrator/<名前>-<ハッシュ>.json`）は読むだけで、書くのは隣の `<状態ファイル>.wait.json`（前回の記録）だけです。
+- 対象は、`status` が `launching`・`running`・`waiting`・`cleanup_waiting` で、`box` の無いタブです。タブは `socket` と `pane` の組で区別します。
+- 起こす変化（前回の記録と比べて）: 本体（タブの `pane` と、工程のタブ `spec|design|impl|verify|setup-e<N>…` の agent）が `blocked` になった・`idle`/`done` になった、記録した pane・セッションが消えた、工程のタブの本体が消えた、`cleanup_waiting` のタブの全セッションから `working` の agent がいなくなった。manager のタブ（`impl|verify-mgr-f…`）の agent の変化では起こしません。記録の無い新しいタブは、最初から `blocked` かいないときだけすぐ起こします。
+- 出力: 変化1件を1行（例 `Epic #12 w1:p1 working->blocked`）。時間切れは `timeout`、読み取りの失敗があれば `timeout (errors: …)`。どちらも終了コード0。引数が無い・状態ファイルが最初に読めないときは終了コード2。herdr の一時的な失敗では途中で終わりません。
+- 環境変数: `SCAFFOLD_ORCH_WAIT_HERDR`（既定 `herdr`）、`SCAFFOLD_ORCH_WAIT_INTERVAL_MS`（既定 `5000`）、`SCAFFOLD_ORCH_WAIT_MAX_MS`（既定 `300000`）。
+
 ## 開発と検証
 
 ```sh
