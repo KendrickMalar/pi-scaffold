@@ -1,4 +1,5 @@
 // scaffold-orchestrator-wait <state file>: what the orchestrator runs instead of `sleep 300`. See README.
+import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createStrictReader, execHerdr} from './herdr.js';
 import {waitForChange, type WaitResult} from './run.js';
@@ -12,8 +13,10 @@ function positive(raw: string | undefined, fallback: number): number {
 }
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv, out: (s: string) => void = s => process.stdout.write(s), err: (s: string) => void = s => process.stderr.write(s)): Promise<number> {
-  const statePath = argv[0];
-  if (!statePath || argv.length !== 1) { err('usage: scaffold-orchestrator-wait <state file>\n'); return 2; }
+  const raw = argv[0];
+  if (!raw || argv.length !== 1) { err('usage: scaffold-orchestrator-wait <state file>\n'); return 2; }
+  // The orchestrator copies the skill's `~/.local/state/…` form; a quoted `~` reaches us unexpanded.
+  const statePath = raw.startsWith('~/') && env.HOME ? join(env.HOME, raw.slice(2)) : raw;
   let result: WaitResult;
   try {
     result = await waitForChange({

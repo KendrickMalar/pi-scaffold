@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 
 // dist/test/… → repo root
 const BIN = resolve(import.meta.dirname, '..', '..', 'bin', 'scaffold-orchestrator-wait');
@@ -54,4 +54,10 @@ test('bin exits 2 when the state file cannot be read', async t => {
   const r = await run([`${f.state}.missing`], f.env);
   assert.equal(r.code, 2);
   assert.notEqual(r.stderr, '');
+});
+
+test('bin expands a leading ~/ in the state file path', async t => {
+  const f = await fakeHerdr(t, 'blocked');
+  const home = dirname(f.state);
+  assert.deepEqual(await run(['~/state.json'], {...f.env, HOME: home}), {code: 0, stdout: 'Epic #12 w1:p1 new->blocked\n', stderr: ''});
 });
