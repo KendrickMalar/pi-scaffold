@@ -18,7 +18,7 @@ export interface GitReader {
 
 export function createGitReader(options: {timeoutMs?: number; gitBin?: string} = {}): GitReader {
   const run: GitReader['run'] = (args, cwd) => {
-    const allowed = ALLOWED.has(args[0] ?? '') || (args[0] === 'remote' && args[1] === 'get-url' && args.length === 3)
+    const allowed = ALLOWED.has(args[0] ?? '') || (args[0] === 'config' && args[1] === '--get' && args[2] === 'remote.origin.url' && args.length === 3)
       || (args[0] === 'worktree' && args[1] === 'list' && args[2] === '--porcelain' && args.length === 3);
     if (!allowed) return Promise.reject(new Error(`git ${args[0] ?? ''} is not allowed.`));
     const env = {PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', LANG: 'C', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0'};
@@ -53,7 +53,9 @@ export function createGitReader(options: {timeoutMs?: number; gitBin?: string} =
       const top = await run(['rev-parse', '--show-toplevel'], cwd);
       const common = await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], cwd);
       if (top.code || common.code) throw new Error('Not inside a git worktree.');
-      const origin = await run(['remote', 'get-url', 'origin'], cwd);
+      // The configured URL, not `remote get-url`: get-url applies url.<base>.insteadOf, which the kec-orb box
+      // gitconfig uses to send github.com through its adapter, so the repo would no longer read as github.com.
+      const origin = await run(['config', '--get', 'remote.origin.url'], cwd);
       return {repoRoot: top.stdout.trim(), gitCommonDir: common.stdout.trim(), origin: origin.code ? '' : origin.stdout.trim()};
     },
   };
