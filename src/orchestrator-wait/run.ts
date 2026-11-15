@@ -2,15 +2,14 @@
 // acts on, or after maxWaitMs. The comparison base is our own record next to the state file, so a change made
 // while the orchestrator was awake is still seen, and a state that stays the same never wakes it twice.
 import {readFile, rename, writeFile} from 'node:fs/promises';
-import type {Fleet} from '../watchdog/herdr-fleet.js';
 import {diffTab} from './diff.js';
-import {observe, type TabObs} from './observe.js';
-import {readTargets, type WaitTarget} from './targets.js';
+import {observe, type TabObs, type WaitFleet} from './observe.js';
+import {readTargets, type Targets, type WaitTarget} from './targets.js';
 
 export interface WaitDeps {
   statePath: string;
   recordPath: string;
-  fleet: Pick<Fleet, 'sockets' | 'panes'>;
+  fleet: WaitFleet;
   now(): number;
   sleep(ms: number): Promise<void>;
   intervalMs: number;
@@ -37,17 +36,19 @@ async function writeRecord(path: string, record: Map<string, TabObs>): Promise<v
 }
 
 export async function waitForChange(deps: WaitDeps): Promise<WaitResult> {
-  let targets: WaitTarget[] = readTargets(await readFile(deps.statePath, 'utf8')).targets;
+  let read: Targets = readTargets(await readFile(deps.statePath, 'utf8'));
+  let targets: WaitTarget[] = read.targets;
   const record = await readRecord(deps.recordPath);
   const errors = new Set<string>();
   const start = deps.now();
   for (let first = true; ; first = false) {
     if (!first) {
-      try { targets = readTargets(await readFile(deps.statePath, 'utf8')).targets; }
+      try { read = readTargets(await readFile(deps.statePath, 'utf8')); targets = read.targets; }
       catch (e) { errors.add(`state file: ${(e as Error).message}`); }
     }
     const keys = new Set(targets.map(t => t.key));
     for (const k of [...record.keys()]) if (!keys.has(k)) record.delete(k);
+    for (const e of read.errors) errors.add(e);
     const seen = await observe(targets, deps.fleet);
     for (const e of seen.errors) errors.add(e);
     const lines: string[] = [];

@@ -61,3 +61,18 @@ test('bin expands a leading ~/ in the state file path', async t => {
   const home = dirname(f.state);
   assert.deepEqual(await run(['~/state.json'], {...f.env, HOME: home}), {code: 0, stdout: 'Epic #12 w1:p1 new->blocked\n', stderr: ''});
 });
+
+test('bin reads a box tab through kec-orb', async t => {
+  const f = await fakeHerdr(t, 'working');
+  const dir = dirname(f.state);
+  const kec = join(dir, 'kec-orb');
+  await writeFile(kec, `#!/bin/sh
+[ "$1" = ssh ] && [ "$2" = web-e12-rust ] || exit 9
+printf '%s\n' '{"result":{"panes":[{"pane_id":"w1:p1","revision":1,"agent":"claude","agent_status":"blocked","tab_id":"w1:t1"}]}}'
+printf '\n%s\n' '--- scaffold-orchestrator-wait tab list ---'
+printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"1"}]}}'
+`);
+  await chmod(kec, 0o755);
+  await writeFile(f.state, JSON.stringify({tabs: [{socket: join(dir, 'a.sock'), box: 'web-e12-rust', pane: 'w1:p1', epics: [12], status: 'running'}]}));
+  assert.deepEqual(await run([f.state], {...f.env, SCAFFOLD_ORCH_WAIT_KEC_ORB: kec}), {code: 0, stdout: 'Epic #12 box web-e12-rust w1:p1 new->blocked\n', stderr: ''});
+});
