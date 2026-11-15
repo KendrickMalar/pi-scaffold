@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chmod, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {chmod, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {BOX_READ, BOX_SEP, createBoxReader, execKecOrb} from '../src/orchestrator-wait/box.js';
@@ -68,4 +68,26 @@ test('execKecOrb times out', async t => {
   const start = Date.now();
   await assert.rejects(execKecOrb(bin, 200)(['ssh', 'web-e12-rust', BOX_READ]), /kec-orb ssh web-e12-rust failed/);
   assert.ok(Date.now() - start < 3000);
+});
+
+test('execKecOrb kills the ssh child on timeout', async t => {
+  // kec-orb runs ssh as a child of a bash function (no exec); a timeout must not leave it behind.
+  const dir = await mkdtemp(join(tmpdir(), 'orch-wait-kec-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  const pidFile = join(dir, 'child.pid');
+  const bin = join(dir, 'kec-orb');
+  await writeFile(bin, `#!/bin/bash\nrun() { sleep 30 & echo $! > '${pidFile}'; wait; }\nrun\n`);
+  await chmod(bin, 0o755);
+  await assert.rejects(execKecOrb(bin, 300)(['ssh', 'web-e12-rust', BOX_READ]), /failed/);
+  const pid = Number((await readFile(pidFile, 'utf8')).trim());
+  await new Promise(r => setTimeout(r, 300));
+  assert.throws(() => process.kill(pid, 0), 'child sleep still running');
+});
+
+test('execKecOrb passes kec-orb and ssh agent settings', async t => {
+  const bin = await fakeKecOrb(t, 'printf "%s|%s|%s" "$KEC_ORB_STATE_DIR" "$SSH_AUTH_SOCK" "$UNRELATED"');
+  const keep = {KEC_ORB_STATE_DIR: process.env.KEC_ORB_STATE_DIR, SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK, UNRELATED: process.env.UNRELATED};
+  t.after(() => { for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+  process.env.KEC_ORB_STATE_DIR = '/x/state'; process.env.SSH_AUTH_SOCK = '/x/agent.sock'; process.env.UNRELATED = 'no';
+  assert.equal(await execKecOrb(bin, 5000)(['ssh', 'b', 'c']), '/x/state|/x/agent.sock|');
 });
