@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {observe, stageTabPattern} from '../src/orchestrator-wait/observe.js';
-import {FakeReader, pane, target} from './orchestrator-wait-fakes.js';
+import {FakeReader, boxPane, boxTarget, pane, target} from './orchestrator-wait-fakes.js';
 
 test('observe marks gone when socket missing', async () => {
   const f = new FakeReader();
@@ -88,4 +88,58 @@ test('observe still collects stage bodies when the recorded pane is gone', async
   f.panesBySocket.set('/s/a.sock', [pane({paneId: 'w2:p1', status: 'working', tabLabel: 'verify-e12'})]);
   const o = await observe([target()], f);
   assert.deepEqual(o.tabs.get('/s/a.sock|w1:p1'), {gone: true, bodies: {'w2:p1': 'working'}, working: true});
+});
+
+test('observe box tab bodies and gone', async () => {
+  const f = new FakeReader();
+  f.panesBySocket.set('/s/h.sock', []);
+  f.boxPanesByName.set('web-e12-rust', [
+    boxPane({paneId: 'w1:p1', status: 'blocked'}),
+    boxPane({paneId: 'w2:p1', status: 'idle', tabLabel: 'design-e12-r1'}),
+    boxPane({paneId: 'w3:p1', status: 'blocked', tabLabel: 'impl-mgr-f40'}),
+  ]);
+  const o = await observe([boxTarget(), boxTarget({pane: 'w9:p1'})], f);
+  assert.deepEqual(o.tabs.get('box:web-e12-rust|w1:p1'), {gone: false, bodies: {'w1:p1': 'blocked', 'w2:p1': 'idle'}, working: false});
+  assert.equal(o.tabs.get('box:web-e12-rust|w9:p1')!.gone, true);
+  assert.deepEqual(o.errors, []);
+});
+
+test('observe box read failure skips the tab', async () => {
+  const f = new FakeReader();
+  f.panesBySocket.set('/s/h.sock', []);
+  f.failBoxes.add('web-e12-rust');
+  const o = await observe([boxTarget()], f);
+  assert.equal(o.tabs.has('box:web-e12-rust|w1:p1'), false);
+  assert.equal(o.errors.length, 1);
+  assert.match(o.errors[0]!, /^kec-orb ssh web-e12-rust: /);
+});
+
+test('observe box tab working spans box and host', async () => {
+  const f = new FakeReader();
+  f.panesBySocket.set('/s/h.sock', [pane({socket: '/s/h.sock', status: 'idle'})]);
+  f.panesBySocket.set('/s/p.sock', [pane({socket: '/s/p.sock', status: 'working'})]);
+  f.boxPanesByName.set('web-e12-rust', [boxPane({status: 'idle'})]);
+  const t = boxTarget({status: 'cleanup_waiting', cleanupSockets: ['/s/h.sock', '/s/p.sock']});
+  assert.equal((await observe([t], f)).tabs.get(t.key)!.working, true);
+  f.panesBySocket.set('/s/p.sock', [pane({socket: '/s/p.sock', status: 'idle'})]);
+  assert.equal((await observe([t], f)).tabs.get(t.key)!.working, false);
+  f.boxPanesByName.set('web-e12-rust', [boxPane({status: 'idle'}), boxPane({paneId: 'w5:p1', status: 'working', tabLabel: 'impl-mgr-f1'})]);
+  assert.equal((await observe([t], f)).tabs.get(t.key)!.working, true);
+});
+
+test('observe host and box panes with the same id stay apart', async () => {
+  const f = new FakeReader();
+  f.panesBySocket.set('/s/h.sock', [pane({socket: '/s/h.sock', paneId: 'w1:p1', status: 'working'})]);
+  f.boxPanesByName.set('web-e12-rust', [boxPane({paneId: 'w1:p1', status: 'blocked'})]);
+  const o = await observe([target({socket: '/s/h.sock'}), boxTarget()], f);
+  assert.equal(o.tabs.get('/s/h.sock|w1:p1')!.bodies['w1:p1'], 'working');
+  assert.equal(o.tabs.get('box:web-e12-rust|w1:p1')!.bodies['w1:p1'], 'blocked');
+});
+
+test('observe reads each box once', async () => {
+  const f = new FakeReader();
+  f.boxPanesByName.set('web-e12-rust', [boxPane({}), boxPane({paneId: 'w1:p2'})]);
+  f.boxPanesByName.set('web-e13-rust', [boxPane({socket: 'box:web-e13-rust'})]);
+  await observe([boxTarget(), boxTarget({pane: 'w1:p2'}), boxTarget({box: 'web-e13-rust', socket: ''})], f);
+  assert.deepEqual(f.boxReads.sort(), ['web-e12-rust', 'web-e13-rust']);
 });

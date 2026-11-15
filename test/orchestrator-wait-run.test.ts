@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {waitForChange, type WaitDeps} from '../src/orchestrator-wait/run.js';
-import {FakeReader, pane} from './orchestrator-wait-fakes.js';
+import {FakeReader, boxPane, pane} from './orchestrator-wait-fakes.js';
 
 const tab = (o: Record<string, unknown> = {}) => ({terminal: 'T1', socket: '/s/a.sock', pane: 'w1:p1', epics: [12], status: 'running', ...o});
 const stateText = (tabs: unknown[]) => JSON.stringify({repo: '/r', tabs});
@@ -17,7 +17,7 @@ async function setup(t: test.TestContext, tabs: unknown[] = [tab()]) {
   const fleet = new FakeReader();
   let clock = 0, reads = 0;
   const onTick: (() => void | Promise<void>)[] = [];
-  const counting = {sockets: async () => { reads++; await onTick[reads - 1]?.(); return fleet.sockets(); }, panes: (s: string) => fleet.panes(s)};
+  const counting = {sockets: async () => { reads++; await onTick[reads - 1]?.(); return fleet.sockets(); }, panes: (s: string) => fleet.panes(s), boxPanes: (b: string) => fleet.boxPanes(b)};
   const deps: WaitDeps = {statePath, recordPath: `${statePath}.wait.json`, fleet: counting, now: () => clock, sleep: async ms => { clock += ms; }, intervalMs: 5000, maxWaitMs: 300000};
   return {dir, statePath, fleet, deps, onTick, reads: () => reads};
 }
@@ -109,4 +109,57 @@ test('waitForChange never writes the state file', async t => {
   const before = await readFile(s.statePath, 'utf8');
   await waitForChange(s.deps);
   assert.equal(await readFile(s.statePath, 'utf8'), before);
+});
+
+const boxTab = (o: Record<string, unknown> = {}) => tab({socket: '/s/h.sock', box: 'web-e12-rust', agent: '', ...o});
+
+test('waitForChange wakes on a box body going blocked', async t => {
+  const s = await setup(t, [boxTab()]);
+  s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({status: 'working'})]);
+  s.onTick[2] = () => { s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({status: 'blocked'})]); };
+  assert.deepEqual(await waitForChange(s.deps), {kind: 'changes', lines: ['Epic #12 box web-e12-rust w1:p1 working->blocked']});
+  assert.equal(s.reads(), 3);
+});
+
+test('waitForChange never wakes for an unreachable box', async t => {
+  const s = await setup(t, [boxTab()]);
+  s.fleet.failBoxes.add('web-e12-rust');
+  const r = await waitForChange(s.deps);
+  assert.deepEqual(r, {kind: 'timeout', errors: ['kec-orb ssh web-e12-rust: kec-orb ssh web-e12-rust failed (exit 255): unreachable']});
+  assert.ok(s.reads() >= 60);
+});
+
+test('waitForChange follows a host tab moving into a box', async t => {
+  const s = await setup(t, [tab({socket: '/s/h.sock'})]);
+  s.fleet.panesBySocket.set('/s/h.sock', [pane({socket: '/s/h.sock', status: 'idle'})]);
+  s.deps.maxWaitMs = 5000;
+  assert.equal((await waitForChange(s.deps)).kind, 'timeout');
+  await writeFile(s.statePath, stateText([boxTab({previous: [{pane: 'w1:p1', socket: '/s/h.sock'}]})]));
+  s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({status: 'idle'})]);
+  assert.equal((await waitForChange(s.deps)).kind, 'timeout');
+  const rec = JSON.parse(await readFile(s.deps.recordPath, 'utf8'));
+  assert.deepEqual(Object.keys(rec.tabs), ['box:web-e12-rust|w1:p1']);
+  s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({status: 'blocked'})]);
+  assert.deepEqual(await waitForChange(s.deps), {kind: 'changes', lines: ['Epic #12 box web-e12-rust w1:p1 idle->blocked']});
+});
+
+test('waitForChange wakes a box cleanup only when nothing works anywhere', async t => {
+  const s = await setup(t, [boxTab({status: 'cleanup_waiting'})]);
+  s.fleet.panesBySocket.set('/s/h.sock', [pane({socket: '/s/h.sock', status: 'working'})]);
+  s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({status: 'working'})]);
+  s.deps.maxWaitMs = 5000;
+  assert.equal((await waitForChange(s.deps)).kind, 'timeout');
+  s.fleet.boxPanesByName.set('web-e12-rust', [boxPane({paneId: 'w2:p1', status: 'working', tabLabel: 'verify-mgr-f1'})]);
+  const r1 = await waitForChange(s.deps);
+  assert.deepEqual(r1, {kind: 'changes', lines: ['Epic #12 box web-e12-rust pane w1:p1 gone']});
+  s.fleet.boxPanesByName.set('web-e12-rust', []);
+  assert.equal((await waitForChange(s.deps)).kind, 'timeout');
+  s.fleet.panesBySocket.set('/s/h.sock', [pane({socket: '/s/h.sock', status: 'idle'})]);
+  assert.deepEqual(await waitForChange(s.deps), {kind: 'changes', lines: ['Epic #12 box web-e12-rust cleanup: no working agent']});
+});
+
+test('waitForChange reports rejected box names in timeout', async t => {
+  const s = await setup(t, [boxTab({box: 'Bad;name'})]);
+  s.deps.maxWaitMs = 5000;
+  assert.deepEqual(await waitForChange(s.deps), {kind: 'timeout', errors: ['box name rejected: Bad;name']});
 });
