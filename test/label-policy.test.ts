@@ -15,7 +15,7 @@ const epic = (stage: LabelTarget['stage'], extra: Partial<LabelTarget> = {}): La
 const codes = (r: {problems: {code: string}[]}) => r.problems.map(p => p.code);
 
 test('canonical fixed names are shared with #1/#3', () => {
-  assert.deepEqual(FIXED_LABEL_NAMES, ['Type: Scaffold', 'Type: Jig', 'Scope: Epic', 'Scope: Feature', 'Scope: Task', 'Stage: Specification', 'Stage: BasicDesign', 'Stage: Implementation', 'Stage: Verification', 'Stage: Completed', 'Blocked']);
+  assert.deepEqual(FIXED_LABEL_NAMES, ['Type: Scaffold', 'Type: Jig', 'Scope: Epic', 'Scope: Feature', 'Scope: Task', 'Scope: TBD', 'Stage: Specification', 'Stage: BasicDesign', 'Stage: Implementation', 'Stage: Verification', 'Stage: Completed', 'Blocked']);
   assert.equal(stageLabelName('setup'), undefined);
   assert.equal(stageLabelName('basic-design'), 'Stage: BasicDesign');
 });

@@ -14,7 +14,7 @@ const STAGE_LABEL: Record<Stage, string | undefined> = {
   implementation: 'Stage: Implementation', verification: 'Stage: Verification', completed: 'Stage: Completed',
 };
 export const TYPE_LABELS = ['Type: Scaffold', 'Type: Jig'] as const;
-export const SCOPE_LABELS = ['Scope: Epic', 'Scope: Feature', 'Scope: Task'] as const;
+export const SCOPE_LABELS = ['Scope: Epic', 'Scope: Feature', 'Scope: Task', 'Scope: TBD'] as const;
 export const STAGE_LABELS = STAGES.map(s => STAGE_LABEL[s]).filter((l): l is string => !!l);
 export const BLOCKED_LABEL = 'Blocked';
 export const FIXED_LABEL_NAMES: readonly string[] = [...TYPE_LABELS, ...SCOPE_LABELS, ...STAGE_LABELS, BLOCKED_LABEL];

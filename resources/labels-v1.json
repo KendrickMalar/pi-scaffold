@@ -6,6 +6,7 @@
     {"name": "Scope: Epic", "color": "5319e7", "description": "全体仕様と完了条件の親Issue"},
     {"name": "Scope: Feature", "color": "1d76db", "description": "独立して完了できる成果単位"},
     {"name": "Scope: Task", "color": "0e8a16", "description": "Feature配下の実装・検証単位"},
+    {"name": "Scope: TBD", "color": "d4c5f9", "description": "Epic になる前の要望（TBD）"},
     {"name": "Stage: Specification", "color": "c5def5", "description": "仕様策定"},
     {"name": "Stage: BasicDesign", "color": "bfdadc", "description": "基本設計"},
     {"name": "Stage: Implementation", "color": "0052cc", "description": "詳細設計・実装"},

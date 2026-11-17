@@ -1,4 +1,4 @@
-// #3 scaffold_labels_ensure: compare all 211 managed label definitions with one gh_labels_list read, create the
+// #3 scaffold_labels_ensure: compare all 212 managed label definitions with one gh_labels_list read, create the
 // missing ones (and, only when asked, update mismatching ones), then read the whole list back before success.
 // Only label-create/label-edit (and, with deterministic-gh's `labels-create-many` feature, batched creation) are used; Issue
 // labels are never touched.
