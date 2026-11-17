@@ -18,11 +18,12 @@ import {createTool as epicComplete} from './tools/epic-complete.ts';
 import {createTool as stageCheck} from './tools/stage-check.ts';
 import {createTool as specificationRevise} from './tools/specification-revise.ts';
 import {createTool as featureRevise} from './tools/feature-revise.ts';
+import {createTool as tbdCreate} from './tools/tbd-create.ts';
 
 export type CreateTool = (runtime: ScaffoldRuntime) => ToolDefinition;
 
 /** Accepted tools only (#3〜#16 are added after acceptance). */
-export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate, researchBegin, researchResolve, handoffBasicDesign, featureCreate, dependenciesApply, wavesVerify, wavesApply, handoffImplementation, handoffVerification, epicComplete, stageCheck, specificationRevise, featureRevise];
+export const TOOL_FACTORIES: readonly CreateTool[] = [labelsEnsure, epicDraft, handoffSpecification, specificationUpdate, researchBegin, researchResolve, handoffBasicDesign, featureCreate, dependenciesApply, wavesVerify, wavesApply, handoffImplementation, handoffVerification, epicComplete, stageCheck, specificationRevise, featureRevise, tbdCreate];
 
 export function registerTools(pi: ExtensionAPI, runtime: ScaffoldRuntime): string[] {
   const names: string[] = [];

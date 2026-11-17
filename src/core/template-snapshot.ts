@@ -6,11 +6,11 @@ import {writeOwnedFile} from './files.js';
 import {sha256Text} from './digests.js';
 import type {ModelBinding} from './contracts.js';
 
-export type TemplateKind = 'epic' | 'feature' | 'task';
+export type TemplateKind = 'epic' | 'feature' | 'task' | 'tbd';
 export const TEMPLATE_ROLES: Record<TemplateKind, readonly string[]> = {
-  epic: ['planner'], feature: ['coding-manager', 'coder', 'tester'], task: ['coder', 'tester'],
+  epic: ['planner'], feature: ['coding-manager', 'coder', 'tester'], task: ['coder', 'tester'], tbd: ['planner'],
 };
-export const TEMPLATE_IDS: Record<TemplateKind, string> = {epic: 'scaffold-epic-v1', feature: 'scaffold-feature-v1', task: 'scaffold-task-v1'};
+export const TEMPLATE_IDS: Record<TemplateKind, string> = {epic: 'scaffold-epic-v1', feature: 'scaffold-feature-v1', task: 'scaffold-task-v1', tbd: 'scaffold-tbd-v1'};
 export const TEMPLATE_FIELD = 'scaffold';
 export interface TemplateSnapshot { kind: TemplateKind; templateId: string; templatePath: string; policyPath: string; templateSha256: string; policySha256: string }
 
