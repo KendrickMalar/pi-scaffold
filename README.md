@@ -1,6 +1,6 @@
 # deterministic-scaffold
 
-[Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが呼び出せる14個の個別ツールとして提供する拡張です。GitHubの操作はすべて[deterministic-gh](https://github.com/KendrickMalar/deterministic-gh)の公開ツール経由で行います。
+[Pi](https://github.com/earendil-works/pi)のScaffold開発フローを、AIが呼び出せる18個の個別ツールとして提供する拡張です。GitHubの操作はすべて[deterministic-gh](https://github.com/KendrickMalar/deterministic-gh)の公開ツール経由で行います。
 
 パッケージ名は`deterministic-scaffold`（MIT、`private`）。npm での配布は終了しました（旧`@papillon6814/pi-scaffold`は 0.5.1 が最後。npm 側の deprecate は今後の予定で、未実施）。
 
@@ -29,12 +29,13 @@
 依存・Wave適用は、読み取ったEpicへ計画を追加して保存できるかを外部変更前に確認します。最初から保存不能なら依存・Project・ラベルを変更せず拒否します。実行途中の本文変更などは最後の再読込で別途検査するため、途中で停止した場合は従来どおりpartial/unknownの記録を確認し、同じoperationIdで再開します。
 ## 工程とツール
 
-Epicは `setup → specification → basic-design → implementation → verification → completed` と進みます。工程が変わるたびに、Herdrの新しいタブで別のPiセッションを起動して引き継ぎます。同じ会話の中でモードを切り替えることはしません。
+依頼は、setup の前に TBD（ラベル `Scope: TBD` の Issue）として記録し、TBD から Epic を作ります。Epicは `setup → specification → basic-design → implementation → verification → completed` と進みます。工程が変わるたびに、Herdrの新しいタブで別のPiセッションを起動して引き継ぎます。同じ会話の中でモードを切り替えることはしません。
 
 | 工程 | ツール | 内容 |
 |---|---|---|
 | setup | `scaffold_labels_ensure` | 管理ラベル212種類（固定12＋`Wave: 1`〜`Wave: 200`）を照合し、足りないものだけを作成する。色や説明が違えば既定では止まる。pi-gh 0.7.0以降（deterministic-ghを含む）では40件ずつまとめて作る（212件で数分）。それより古いpi-ghでは1件ずつ作る |
-| setup | `scaffold_epic_draft_create` | タイトル・目的・元の依頼からEpicを1件作る（要件は補わない）。`mode: "prepare"`はローカルの下書きだけ |
+| setup の前 | `scaffold_tbd_create` | 依頼をそのまま TBD（`Type: Scaffold`＋`Scope: TBD`）として1件記録する。確認事項・調査項目の種も入れられる。Epic は作らない |
+| setup | `scaffold_epic_draft_create` | タイトル・目的・元の依頼からEpicを1件作る（要件は補わない）。`tbdIssue` を渡すと、省いた依頼・背景・確認事項・調査項目を TBD から引き継ぎ、Epic ができたら TBD を閉じる。`mode: "prepare"`はローカルの下書きだけ |
 | setup→specification | `scaffold_handoff_specification` | 仕様策定セッションへ引き継ぐ |
 | specification | `scaffold_specification_update` | ヒアリングで確定した事実・要件・合格基準・決定を、安定IDのpatchとして反映する（削除・再採番はしない）。足りない項目は`missingFields`で返す |
 | specification | `scaffold_research_begin` | 調査項目の担当（claim）を取り、調査指示（brief）を返す。調査の実行やモデル呼び出しはしない |
