@@ -106,3 +106,48 @@ test('a TBD edited after it was read is not closed; the Epic stays and the run i
   assert.equal(g.issues.get(5)!.state, 'open');
   assert.equal(g.count('gh_issue_submit'), 1);
 });
+
+test('resume after the TBD was edited and closed by hand finishes with the same Epic', async t => {
+  const g = gh('本文だけの TBD');
+  g.overrides.set('gh_issue_close_if_current', () => { g.issues.get(5)!.body += '\n追記'; return undefined; });
+  const h = await harness(t, g);
+  const first = await h.invoke();
+  assert.equal(first.r.status, 'partial');
+  const epic = (first.r.data as Data).issue!.number;
+  g.overrides.delete('gh_issue_close_if_current');
+  g.issues.get(5)!.state = 'closed'; g.issues.get(5)!.stateReason = 'not_planned';
+  const resumed = await h.invoke();
+  assert.ok(['applied', 'noop'].includes(resumed.r.status), JSON.stringify(resumed.r));
+  assert.equal((resumed.r.data as Data).issue!.number, epic);
+  assert.equal(g.count('gh_issue_submit'), 1);
+  assert.equal(g.count('gh_issue_close_if_current'), 1, 'a TBD closed by hand is not closed again');
+});
+
+test('a second operation for the same TBD does not create another Epic', async t => {
+  const g = gh();
+  g.overrides.set('gh_issue_close_if_current', () => ({result: {content: [], structuredContent: {status: 'unknown'}}, isError: true}));
+  const h = await harness(t, g);
+  assert.equal((await h.invoke()).r.status, 'unknown');
+  const other = await h.invoke({...base(), operationId: '44444444-4444-4444-8444-444444444444'});
+  assert.equal(other.r.status, 'blocked');
+  assert.ok(other.r.problems.some(p => p.code === 'TBD_ALREADY_HAS_EPIC'), JSON.stringify(other.r.problems));
+  assert.equal(g.count('gh_issue_submit'), 1);
+});
+
+
+test('prepare with tbdIssue reads the TBD but writes nothing', async t => {
+  const g = gh();
+  const out = await (await harness(t, g)).invoke({...base(), mode: 'prepare'});
+  assert.equal(out.r.status, 'prepared', JSON.stringify(out.r.problems));
+  assert.equal(g.writes, 0);
+  assert.equal(g.issues.get(5)!.state, 'open');
+});
+
+test('a pull request number is not used as a TBD', async t => {
+  const g = gh();
+  g.overrides.set('gh_issue_get', () => FakeDeterministicGh.ok({...g.github(g.issues.get(5)!), pull_request: {url: 'x'}}));
+  const out = await (await harness(t, g)).invoke();
+  assert.equal(out.r.status, 'blocked');
+  assert.ok(out.r.problems.some(p => p.code === 'GITHUB_IDENTITY'));
+  assert.equal(g.writes, 0);
+});

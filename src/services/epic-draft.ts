@@ -87,7 +87,7 @@ async function readTbd(call: ToolCall, repo: string, number: number): Promise<Ra
   const url = `https://github.com/${repo}/issues/${number}`;
   if (i.pull_request !== undefined || i.number !== number || i.html_url.toLowerCase() !== url.toLowerCase()) return [problem('GITHUB_IDENTITY', 'tbdIssue', 'Expected exactly this repository Issue (not a PR).')];
   if ((i.body ?? '').includes(DETERMINISTIC_GH_MASK) || i.title.includes(DETERMINISTIC_GH_MASK)) return [problem('BODY_MASKED', 'tbdIssue', 'deterministic-gh redacted part of this TBD as a secret candidate; remove the secret-like text first.')];
-  return {number, url, title: i.title, body: i.body ?? '', state: i.state, labels: i.labels};
+  return {number, url: i.html_url, title: i.title, body: i.body ?? '', state: i.state, labels: i.labels};
 }
 /** Fills the fields the caller omitted from the TBD: its managed block, or its title and body as the original request. */
 function fromTbd(input: EpicDraftInput, tbd: RawTbd): {ok: true; value: EpicDraftInput & {originalRequest: OriginalRequest}} | {ok: false; problems: Problem[]} {
@@ -131,13 +131,18 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   const workflowId = workflowIdFor(input.operationId);
   const context = await call.repoContext(input.repo, workflowId);
   if (!context.ok) return blocked(context.problems);
-  let tbd: RawTbd | undefined;
+  const dir = join(context.value.workflowStateRoot, 'artifacts', input.operationId);
+  // The TBD as this operation first read it. Resumes build the same Epic from it even if the TBD was edited since.
+  const tbdPath = join(dir, 'tbd.json');
+  let tbd: RawTbd | undefined, tbdLive: RawTbd | undefined, tbdRecorded = false;
   let full: EpicDraftInput & {originalRequest: OriginalRequest};
   if (input.tbdIssue !== undefined) {
     const read = await readTbd(call, input.repo, input.tbdIssue);
     if (Array.isArray(read)) return blocked(read);
-    tbd = read;
-    if (!tbd.labels.includes(TBD_LABEL)) return blocked([problem('NOT_A_TBD', 'tbdIssue', `#${tbd.number} has no ${TBD_LABEL} label.`)]);
+    tbdLive = read;
+    if (!tbdLive.labels.includes(TBD_LABEL)) return blocked([problem('NOT_A_TBD', 'tbdIssue', `#${tbdLive.number} has no ${TBD_LABEL} label.`)]);
+    try { tbd = JSON.parse((await readOwnedFile(tbdPath, {root: call.namespaceRoot})).toString('utf8')) as RawTbd; tbdRecorded = true; }
+    catch (e) { if (!(e instanceof OwnedFileError && e.code === 'NOT_FOUND')) return blocked([problem('RECORDED_DRAFT_INVALID', 'tbdIssue', `The recorded TBD of this operation (${tbdPath}) is unreadable.`)]); tbd = tbdLive; }
     const filled = fromTbd(input, tbd);
     if (!filled.ok) return blocked(filled.problems);
     full = filled.value;
@@ -149,15 +154,16 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   const block = renderEpicBlock(doc);
   if (Buffer.byteLength(block) > LIMITS.bodyBytes - 1024) return blocked([problem('LIMIT_EXCEEDED', 'body', 'The Epic body would exceed the Issue body limit.')]);
 
-  const dir = join(context.value.workflowStateRoot, 'artifacts', input.operationId);
   const draftPath = join(dir, 'draft.json');
   const journal = call.journal(context.value);
   // The operation is bound to the normalized content (defaults applied), never to the session model.
   const payloadDigest = taggedDigest('epic-draft', {repo: input.repo, title: input.title, doc: JSON.parse(canonicalDocJson(doc))});
   const record = await journal.load(input.operationId);
   if (record && record.payloadDigest !== payloadDigest) return blocked([problem('OPERATION_PAYLOAD_MISMATCH', 'operationId', 'This operationId was already used with different content.')]);
-  // A TBD closed by someone else before this operation started is not turned into an Epic; one this operation closed is fine.
-  if (tbd && tbd.state === 'closed' && !record) return blocked([problem('TBD_CLOSED', 'tbdIssue', `#${tbd.number} is already closed.`)]);
+  // A closed TBD is turned into an Epic only by the operation that already created (or found) that Epic.
+  const epicKnown = !!record?.steps.some(s => (s.name === 'submit' || s.name === 'found') && s.phase !== 'failed');
+  if (tbdLive && tbdLive.state === 'closed' && !epicKnown) return blocked([problem('TBD_CLOSED', 'tbdIssue', `#${tbdLive.number} is already closed.`)]);
+  if (tbd && !tbdRecorded && mode === 'publish') await writeOwnedFile(tbdPath, JSON.stringify(tbd), {root: call.namespaceRoot});
   let recorded: {agents?: {planner?: {model: string; thinking: string; reason: string}}} | undefined;
   if (record) {
     const invalid = () => blocked([problem('RECORDED_DRAFT_INVALID', 'draft', `The recorded draft of this operation (${draftPath}) is unreadable. Check whether the Epic was created before using another operationId.`)]);
@@ -187,12 +193,18 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
   const absent = epicLabels.filter(l => labels.labels.get(l.toLowerCase())?.name !== l);
   if (absent.length) return blocked([problem('LABELS_NOT_READY', 'labels', `Management labels are missing (${absent.join(', ')}); run scaffold_labels_ensure first.${planPending ? ` ${PLAN_PENDING_LABEL} is created by the orchestrator, not by scaffold_labels_ensure.` : ''}`)]);
 
-  /** Issues whose managed body carries this operation's createOperationId. */
-  const candidates = async (): Promise<{number: number}[] | Problem[]> => {
+  /** Readable managed Epics of the repository (number and document). */
+  const epics = async (): Promise<{number: number; doc: EpicDocV1}[] | Problem[]> => {
     const r = await call.bridge.call('gh_issue_list', {repo: input.repo, state: 'all', labels: [...EPIC_LABELS]}, decodeIssueList, call.scope);
     if (r.status !== 'ok' || r.data!.some(i => !i)) return r.problems.length ? r.problems : [problem('ISSUE_LIST_FAILED', 'issues', 'Issues could not be listed completely.')];
+    return r.data!.flatMap(i => { const p = parseIssueBody(i!.body ?? ''); return p.ok && p.value.doc.kind === 'epic' ? [{number: i!.number, doc: p.value.doc}] : []; });
+  };
+  /** Issues whose managed body carries this operation's createOperationId. */
+  const candidates = async (): Promise<{number: number}[] | Problem[]> => {
+    const all = await epics();
+    if (all.length && 'code' in all[0]!) return all as Problem[];
     // Only a readable managed Epic created by this operation counts; mentions of the id elsewhere are ignored.
-    return r.data!.filter(i => i!.body?.includes(input.operationId)).filter(i => { const p = parseIssueBody(i!.body ?? ''); return p.ok && p.value.doc.kind === 'epic' && p.value.doc.createOperationId === input.operationId; }).map(i => ({number: i!.number}));
+    return (all as {number: number; doc: EpicDocV1}[]).filter(e => e.doc.createOperationId === input.operationId).map(e => ({number: e.number}));
   };
   const result = await withOperation({operation, repo: input.repo, workflowId, operationId: input.operationId, payloadDigest, journal, scope: call.scope}, async run => {
     let found: number | undefined;
@@ -204,6 +216,13 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
       if (c.length && 'code' in c[0]!) return run.stop(c as Problem[], base);
       if (c.length > 1) return run.stop([problem('DUPLICATE_CANDIDATES', 'issues', `Several Issues (${(c as {number: number}[]).map(x => '#' + x.number).join(', ')}) carry this operation; choose one manually.`)], base);
       if (c.length === 1) { found = (c[0] as {number: number}).number; reused = true; run.note('found', {number: found}); }
+      // One TBD becomes one Epic: an Epic another operation made from the same TBD stops this one before it posts.
+      if (found === undefined && input.tbdIssue !== undefined) {
+        const all = await epics();
+        if (all.length && 'code' in all[0]!) return run.stop(all as Problem[], base);
+        const other = (all as {number: number; doc: EpicDocV1}[]).filter(e => e.doc.sourceTbd === input.tbdIssue);
+        if (other.length) return run.stop([problem('TBD_ALREADY_HAS_EPIC', 'tbdIssue', `TBD #${input.tbdIssue} already has Epic ${other.map(e => '#' + e.number).join(', ')} from another operation; resume that operation instead of starting a new one.`)], base);
+      }
     }
     if (!issue && found === undefined) {
       const created = await run.write('submit', () => call.bridge.call('gh_issue_submit', args, decodeCreated(input.repo), call.scope), {
@@ -230,15 +249,16 @@ export async function createEpicDraft(input: EpicDraftInput, call: ToolCall): Pr
     const t = tbd;
     const reread = async () => { const x = await readTbd(call, input.repo, t.number); if (Array.isArray(x)) return run.stop(x, data); return x; };
     const closeStep = run.record.steps.find(s => s.name === 'close-tbd');
+    const closePending = closeStep?.phase === 'requested' || closeStep?.phase === 'unknown';
     let current = await reread();
-    if (current.state !== 'closed' || (closeStep && closeStep.phase !== 'done')) {
+    // Closed by anyone (and no close of ours in doubt) is enough: a TBD closed by hand is not closed again.
+    if (current.state !== 'closed' || closePending) {
       const path = join(dir, 'close-tbd.json');
-      if (!run.done('close-tbd-expected')) run.note('close-tbd-expected', {bodySha256: sha256Text(t.body)});
-      const expectedBody = (run.done('close-tbd-expected') as {bodySha256: string}).bodySha256;
+      const expectedBody = sha256Text(t.body);
       await writeOwnedFile(path, JSON.stringify({version: 1, repo: input.repo, operation: 'issue-close-if-current', issue: t.number, reason: 'completed', expectedBodySha256: expectedBody}), {root: call.namespaceRoot});
       try {
         await run.write('close-tbd', () => call.bridge.call('gh_issue_close_if_current', {changePath: path}, () => true as const, call.scope), {
-          reconcile: async () => { const s = await reread(); return s.state === 'closed' ? 'applied' : sha256Text(s.body) === expectedBody ? 'not-applied' : 'unknown'; },
+          reconcile: async () => { const s = await reread(); return s.state === 'closed' ? 'applied' : 'not-applied'; },
         });
       } catch (e) {
         // Keep reporting the created Epic when closing the TBD stops (an uncertain step still ends as unknown).
