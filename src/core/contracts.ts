@@ -85,6 +85,13 @@ export interface EpicDocV1 {
   specRevisions?: SpecRevision[];
   /** Absent until a Project is recorded (older Epics never carry it). Not part of any digest. */
   projectIds?: string[];
+  /** Issue number of the TBD this Epic was created from (same repository). Absent for Epics not created from a TBD. */
+  sourceTbd?: number;
+}
+/** A request recorded before the setup stage (label Scope: TBD). It never changes stage; an Epic is created from it. */
+export interface TbdDocV1 {
+  version: 1; kind: 'tbd'; workflowId: UUID; revision: number; createOperationId: UUID;
+  originalRequest: OriginalRequest; background: string | null; questions: QuestionFact[]; research: ResearchItemSeed[];
 }
 export type FeatureRole = 'coding-manager' | 'coder' | 'tester';
 export interface FeatureDocV1 {
@@ -99,7 +106,7 @@ export interface TaskDocV1 {
   editScope: string[]; outOfScope: string[]; criteria: Criterion[];
   bindings: {coder: ModelBinding; tester: ModelBinding}; evidenceRefs: OwnedEvidenceRef[];
 }
-export type ScaffoldDocV1 = EpicDocV1 | FeatureDocV1 | TaskDocV1;
+export type ScaffoldDocV1 = EpicDocV1 | FeatureDocV1 | TaskDocV1 | TbdDocV1;
 
 export interface IssueSnapshot {
   repo: RepoRef; number: number; title: string; body: string; bodySha256: Sha256;
@@ -366,6 +373,7 @@ function epic(r: Reader, o: Rec): EpicDocV1 {
     handoff: o.handoff === null ? null : handoff(r, o.handoff, 'handoff'),
     ...(o.specRevisions !== undefined ? {specRevisions: r.array(o.specRevisions, 'specRevisions', (v, p) => specRevision(r, v, p))} : {}),
     ...(o.projectIds !== undefined ? {projectIds: r.array(o.projectIds, 'projectIds', (v, p) => r.pattern(v, p, isProjectId, 'PVT_ project ID'), 10)} : {}),
+    ...(o.sourceTbd !== undefined ? {sourceTbd: r.int(o.sourceTbd, 'sourceTbd')} : {}),
   };
   r.unique(doc.questions.map(q => q.questionId), 'questions', 'questionId');
   r.unique(doc.requirements.map(q => q.id), 'requirements', 'id');
@@ -410,16 +418,29 @@ function task(r: Reader, o: Rec): TaskDocV1 {
   return doc;
 }
 
+const TBD_KEYS = [...HEADER, 'originalRequest', 'background', 'questions', 'research'] as const;
+function tbd(r: Reader, o: Rec): TbdDocV1 {
+  const h = header(r, o);
+  const doc: TbdDocV1 = {
+    version: 1, kind: 'tbd', ...h, originalRequest: originalRequest(r, o.originalRequest, 'originalRequest'), background: r.nullableText(o.background, 'background'),
+    questions: r.array(o.questions, 'questions', (v, p) => question(r, v, p), LIMITS.questions),
+    research: r.array(o.research, 'research', (v, p) => readResearchSeed(r, v, p), LIMITS.research),
+  };
+  r.unique(doc.questions.map(q => q.questionId), 'questions', 'questionId');
+  r.unique(doc.research.map(q => q.researchId), 'research', 'researchId');
+  return doc;
+}
+
 /** Decodes any managed document. The returned value is rebuilt in the canonical key order. */
 export function decodeScaffoldDoc(value: unknown): Decoded<ScaffoldDocV1> {
   const r = new Reader();
   if (!isRecord(value)) { r.add('INVALID_TYPE', '', 'Expected an object.'); return r.result(undefined as never); }
   if (value.version !== 1) { r.add('UNKNOWN_VERSION', 'version', 'Only version 1 documents are supported.'); return r.result(undefined as never); }
   const kind = value.kind;
-  const keys = kind === 'epic' ? EPIC_KEYS : kind === 'feature' ? FEATURE_KEYS : kind === 'task' ? TASK_KEYS : undefined;
-  if (!keys) { r.add('INVALID_VALUE', 'kind', 'Expected epic, feature or task.'); return r.result(undefined as never); }
-  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions', 'projectIds'] : [])!;
-  const doc = kind === 'epic' ? epic(r, o) : kind === 'feature' ? feature(r, o) : task(r, o);
+  const keys = kind === 'epic' ? EPIC_KEYS : kind === 'feature' ? FEATURE_KEYS : kind === 'task' ? TASK_KEYS : kind === 'tbd' ? TBD_KEYS : undefined;
+  if (!keys) { r.add('INVALID_VALUE', 'kind', 'Expected epic, feature, task or tbd.'); return r.result(undefined as never); }
+  const o = r.object(value, '', keys, kind === 'epic' ? ['specRevisions', 'projectIds', 'sourceTbd'] : [])!;
+  const doc = kind === 'epic' ? epic(r, o) : kind === 'feature' ? feature(r, o) : kind === 'task' ? task(r, o) : tbd(r, o);
   return r.result(doc);
 }
 export function decodeEpicDoc(value: unknown): Decoded<EpicDocV1> {

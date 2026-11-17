@@ -1,0 +1,15 @@
+version: 1
+id: scaffold-tbd-v1
+name: Scaffold TBD
+description: Epic になる前の要望（管理ブロックはdeterministic-scaffoldが生成）
+kind: parent
+modelPolicy: models.yml
+agents:
+  - planner
+fields:
+  - id: scaffold
+    label: Scaffold TBD（自動管理）
+    type: text
+    required: true
+    description: deterministic-scaffoldが生成する管理ブロック。直接編集しない
+    maxLength: 65000

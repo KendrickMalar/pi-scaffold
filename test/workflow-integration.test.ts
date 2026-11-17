@@ -35,6 +35,7 @@ const INPUTS: Record<string, Record<string, unknown>> = {
   scaffold_epic_complete: {...mutation, verifiedRef: COMMIT, finalEvidenceRefs: [{relativePath: 'r.json', sha256: SHA_A}]},
   scaffold_specification_revise: {...mutation, reason: '架空の理由', facts: [], requirements: [], criteria: [], decisions: []},
   scaffold_feature_revise: {...mutation, featureIssue: 11, criteria: [{id: 'AC001', requirementIds: ['REQ001'], verification: '架空', expectedResult: '架空'}]},
+  scaffold_tbd_create: {repo: 'example/demo', operationId: OPERATION_ID, title: 'タイトル', originalRequest: {text: '依頼', sourceRefs: []}},
 };
 
 async function allTools() {
@@ -42,12 +43,12 @@ async function allTools() {
   return TOOL_FACTORIES;
 }
 
-test('exactly 17 tools are registered, with unique names, and only the verifier and the stage check are read-only', async () => {
+test('exactly 18 tools are registered, with unique names, and only the verifier and the stage check are read-only', async () => {
   const {createRuntime} = await import('../src/core/runtime.js');
   const tools = (await allTools()).map(f => f(createRuntime({agentDir: '/synthetic/agent'})));
   const names = tools.map(t => t.name);
-  assert.equal(names.length, 17);
-  assert.equal(new Set(names).size, 17);
+  assert.equal(names.length, 18);
+  assert.equal(new Set(names).size, 18);
   assert.deepEqual([...names].sort(), Object.keys(INPUTS).sort());
   assert.deepEqual(tools.filter(t => t.annotations.readOnlyHint).map(t => t.name), ['scaffold_waves_verify', 'scaffold_stage_check']);
 });
@@ -93,7 +94,7 @@ for (const name of Object.keys(INPUTS)) {
     scaffold_handoff_basic_design: 'handoff-basic-design', scaffold_feature_create: 'feature-create', scaffold_dependencies_apply: 'dependencies-apply',
     scaffold_waves_verify: 'waves-verify', scaffold_waves_apply: 'waves-apply', scaffold_handoff_implementation: 'handoff-implementation',
     scaffold_handoff_verification: 'handoff-verification', scaffold_epic_complete: 'epic-complete', scaffold_stage_check: 'stage-check',
-    scaffold_specification_revise: 'specification-revise', scaffold_feature_revise: 'feature-revise',
+    scaffold_specification_revise: 'specification-revise', scaffold_feature_revise: 'feature-revise', scaffold_tbd_create: 'tbd-create',
   }[name]! + '.ts';
 
   test(`${name}: a missing deterministic-gh capability blocks with zero writes and zero tabs`, async t => {

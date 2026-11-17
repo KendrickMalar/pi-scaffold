@@ -26,7 +26,8 @@ description: Scaffold工程（setup→specification→basic-design→implementat
 
 1. **setup**
    - `scaffold_labels_ensure` を実行します。
-   - `scaffold_epic_draft_create` で、依頼をそのまま記録します（要件は補いません）。
+   - setup の前に、依頼を `scaffold_tbd_create` で TBD として記録します（依頼をそのまま。要件は補いません）。既にある TBD から始めるときは作りません。
+   - `scaffold_epic_draft_create` に `tbdIssue`（その TBD の番号）を渡して Epic を作ります。依頼・背景・確認事項・調査項目は TBD から引き継がれ、Epic ができると TBD は閉じます。
    - `scaffold_handoff_specification` で、仕様策定セッションへ渡します。
 2. **specification**
    - ヒアリングで確定したことだけを `scaffold_specification_update` に入れます。未回答の項目は `answer: null` のまま残します。

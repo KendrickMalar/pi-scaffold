@@ -18,12 +18,14 @@ async function harness(t: {after(fn: () => Promise<void>): void}, gh: FakeDeterm
 }
 const applies = (gh: FakeDeterministicGh) => gh.count('gh_labels_apply');
 
-test('211 definitions: 11 fixed names and Wave 1..200, each once', () => {
+test('212 definitions: 12 fixed names and Wave 1..200, each once', () => {
   const defs = labelDefinitions();
-  assert.equal(defs.length, 211);
-  assert.equal(new Set(defs.map(d => d.name)).size, 211);
-  assert.equal(new Set(defs.map(d => d.name.toLowerCase())).size, 211);
+  assert.equal(defs.length, 212);
+  assert.equal(new Set(defs.map(d => d.name)).size, 212);
+  assert.equal(new Set(defs.map(d => d.name.toLowerCase())).size, 212);
   assert.deepEqual(FIXED_LABEL_DEFINITIONS.map(d => d.name), FIXED_LABEL_NAMES);
+  assert.ok(FIXED_LABEL_NAMES.includes('Scope: TBD'));
+  assert.deepEqual(FIXED_LABEL_DEFINITIONS.find(d => d.name === 'Scope: TBD'), {name: 'Scope: TBD', color: 'd4c5f9', description: 'Epic になる前の要望（TBD）'});
   for (let n = 1; n <= 200; n++) assert.equal(defs.filter(d => d.name === `Wave: ${n}`).length, 1);
   assert.deepEqual(waveLabelDefinition(1), {name: 'Wave: 1', color: '9e9e9e', description: '実行Wave 1'});
   assert.equal(waveLabelDefinition(200).name, 'Wave: 200');
@@ -31,12 +33,12 @@ test('211 definitions: 11 fixed names and Wave 1..200, each once', () => {
   for (const d of defs) { assert.match(d.color, /^[0-9a-f]{6}$/); assert.ok(Array.from(d.description).length <= 100); }
 });
 
-test('all 211 already match: no writes and noop', async t => {
+test('all 212 already match: no writes and noop', async t => {
   const gh = new FakeDeterministicGh().seedLabels(all());
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'noop', JSON.stringify(out.r.problems));
   assert.equal(out.ghWrites, 0);
-  assert.equal((out.r.data as {unchanged: string[]}).unchanged.length, 211);
+  assert.equal((out.r.data as {unchanged: string[]}).unchanged.length, 212);
   assert.equal(out.outputSchemaValid, true);
 });
 
@@ -104,8 +106,8 @@ test('the call budget pauses as partial and the same operation resumes without r
   let last = first;
   for (let i = 0; i < 40 && last.r.status === 'partial'; i++) last = await h.invoke();
   assert.equal(last.r.status, 'applied', JSON.stringify(last.r.problems));
-  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-create').length, 111, 'no duplicate creation across calls');
-  assert.equal(gh.labels.size, 211);
+  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-create').length, 112, 'no duplicate creation across calls');
+  assert.equal(gh.labels.size, 212);
   assert.equal(gh.count('gh_labels_preview'), 0);
 });
 
@@ -120,8 +122,8 @@ test('an unknown create stops later applies and is reconciled on resume', async 
   gh.overrides.delete('gh_labels_apply');
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
-  assert.equal(gh.labels.size, 211);
-  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-create').length, 6, 'the uncertain label is checked before it is created again');
+  assert.equal(gh.labels.size, 212);
+  assert.equal(gh.labelChanges.filter(c => c.operation === 'label-create').length, 7, 'the uncertain label is checked before it is created again');
 });
 
 test('a label created concurrently (LABEL_EXISTS) is not treated as success', async t => {
@@ -262,16 +264,16 @@ test('uncertain steps are reconciled before the budget pause, so the status is p
 const batching = () => { const gh = new FakeDeterministicGh(); gh.features = [...gh.features, 'labels-create-many']; return gh; };
 const perLabelCreates = (gh: FakeDeterministicGh) => gh.labelChanges.filter(c => c.operation === 'label-create').length;
 
-test('with labels-create-many, all 211 are created in batches of at most 40, then read back', async t => {
+test('with labels-create-many, all 212 are created in batches of at most 40, then read back', async t => {
   const gh = batching();
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
-  assert.equal(gh.labels.size, 211);
+  assert.equal(gh.labels.size, 212);
   assert.equal(perLabelCreates(gh), 0, 'no one-by-one creation');
   assert.equal(gh.labelBatches.length, 6);
   assert.ok(gh.labelBatches.every(b => b.length >= 1 && b.length <= 40));
-  assert.equal(new Set(gh.labelBatches.flat()).size, 211, 'every label is sent exactly once');
-  assert.equal((out.r.data as {created: string[]}).created.length, 211);
+  assert.equal(new Set(gh.labelBatches.flat()).size, 212, 'every label is sent exactly once');
+  assert.equal((out.r.data as {created: string[]}).created.length, 212);
 });
 
 test('batches carry only the missing labels', async t => {
@@ -293,8 +295,8 @@ test('an uncertain batch that did not land is reconciled as not applied and sent
   gh.overrides.delete('gh_labels_apply');
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
-  assert.equal(gh.labels.size, 211);
-  assert.equal(new Set(gh.labelBatches.flat()).size, 211);
+  assert.equal(gh.labels.size, 212);
+  assert.equal(new Set(gh.labelBatches.flat()).size, 212);
 });
 
 test('an uncertain batch that landed partly: the resume creates only the labels still missing', async t => {
@@ -312,10 +314,10 @@ test('an uncertain batch that landed partly: the resume creates only the labels 
   gh.overrides.delete('gh_labels_apply');
   const resumed = await h.invoke();
   assert.equal(resumed.r.status, 'applied', JSON.stringify(resumed.r.problems));
-  assert.equal(gh.labels.size, 211);
+  assert.equal(gh.labels.size, 212);
   // labelBatches[0] is the first batch; the uncertain second one was answered by the override (never recorded).
   const sentAfter = gh.labelBatches.slice(1).flat();
-  assert.equal(sentAfter.length, 211 - 40 - 10, 'the 10 that landed are not sent again');
+  assert.equal(sentAfter.length, 212 - 40 - 10, 'the 10 that landed are not sent again');
   assert.equal(new Set(sentAfter).size, sentAfter.length);
 });
 
@@ -330,7 +332,7 @@ test('the call budget pauses between batches and the same operation finishes the
   let last = first;
   for (let i = 0; i < 20 && last.r.status === 'partial'; i++) last = await h.invoke();
   assert.equal(last.r.status, 'applied', JSON.stringify(last.r.problems));
-  assert.equal(gh.labels.size, 211);
+  assert.equal(gh.labels.size, 212);
   assert.equal(new Set(gh.labelBatches.flat()).size, gh.labelBatches.flat().length, 'no label is sent twice');
 });
 
@@ -340,7 +342,7 @@ test('a mismatching label with onMismatch=update is still edited one by one whil
   const out = await (await harness(t, gh, {defaultParams: params({onMismatch: 'update'})})).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
   assert.equal(gh.labelChanges.filter(c => c.operation === 'label-edit').length, 1);
-  assert.equal(gh.labelBatches.flat().length, 161);
+  assert.equal(gh.labelBatches.flat().length, 162);
   assert.deepEqual((out.r.data as {updated: string[]}).updated, [defs[0]!.name]);
 });
 
@@ -348,6 +350,6 @@ test('without the labels-create-many feature (pi-gh 0.6.0 and older) labels are 
   const gh = new FakeDeterministicGh().seedLabels(all().slice(0, 205));
   const out = await (await harness(t, gh)).invoke();
   assert.equal(out.r.status, 'applied', JSON.stringify(out.r.problems));
-  assert.equal(perLabelCreates(gh), 6);
+  assert.equal(perLabelCreates(gh), 7);
   assert.equal(gh.labelBatches.length, 0);
 });
