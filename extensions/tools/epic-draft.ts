@@ -12,13 +12,15 @@ export function createTool(runtime: ScaffoldRuntime) {
     label: 'Scaffold: Epicの下書き作成',
     description: 'Create a strict Epic draft from the title, purpose and original request only (no requirements are invented). '
       + 'mode "prepare" writes a local draft only; the default "publish" creates one unfinished Epic through deterministic-gh with labels Type: Scaffold and Scope: Epic (no Stage). '
-      + 'Re-running the same operationId returns the same Issue. The session model is recorded as planner, never called. Requires scaffold_labels_ensure first.',
+      + 'Re-running the same operationId returns the same Issue. The session model is recorded as planner, never called. Requires scaffold_labels_ensure first. '
+      + 'With tbdIssue (an open Scope: TBD Issue of the same repository), omitted originalRequest/background/initialFacts/research come from the TBD (its managed block, or its title and body), '
+      + 'the TBD URL is added to originalRequest.sourceRefs, and the TBD is closed once the Epic exists. originalRequest is required only without tbdIssue.',
     parameters: Type.Object({
       repo: Type.String({pattern: '^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$'}),
       operationId: Type.String({pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'}),
       title: Type.String({minLength: 1, maxLength: 256, pattern: '^[^\\r\\n]*\\S[^\\r\\n]*$'}),
       purpose: text,
-      originalRequest: Type.Object({text, sourceRefs: Type.Array(ref)}, {additionalProperties: false}),
+      originalRequest: Type.Optional(Type.Object({text, sourceRefs: Type.Array(ref)}, {additionalProperties: false})),
       background: Type.Optional(Type.Union([text, Type.Null()])),
       initialFacts: Type.Optional(Type.Array(Type.Object({
         questionId: Type.String(qId), kind: Type.Union([Type.Literal('question'), Type.Literal('conflict')]), question: text,
@@ -28,6 +30,7 @@ export function createTool(runtime: ScaffoldRuntime) {
         researchId: Type.String({pattern: '^R[0-9]{3,}$'}), question: text, requiredEvidence: text, doneCondition: text,
       }, {additionalProperties: false}), {maxItems: 50})),
       mode: Type.Optional(Type.Union([Type.Literal('prepare'), Type.Literal('publish')])),
+      tbdIssue: Type.Optional(Type.Integer({minimum: 1})),
     }, {additionalProperties: false}),
     executionMode: 'sequential', readOnly: false,
     decode: decodeEpicDraftInput,

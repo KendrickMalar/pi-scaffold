@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import type {EpicDocV1, FeatureDocV1} from '../../src/core/contracts.js';
+import type {EpicDocV1, FeatureDocV1, TbdDocV1} from '../../src/core/contracts.js';
 
 export const fixtureDir = fileURLToPath(new URL('../../../test/fixtures/', import.meta.url));
 export function fixtureText(name: string): string { return readFileSync(fixtureDir + name, 'utf8'); }
@@ -29,5 +29,18 @@ export function featureDoc(): FeatureDocV1 {
       tester: {model: 'example-provider/tester-1', thinking: 'low', reason: '検証'},
     },
     evidenceRefs: [],
+  };
+}
+
+export function tbdDoc(): TbdDocV1 {
+  return {
+    version: 1, kind: 'tbd', workflowId: WORKFLOW_ID, revision: 1, createOperationId: CREATE_OPERATION_ID,
+    originalRequest: {text: 'W1：一覧をCSVで保存したい。\nW2：保存の前に件数を見たい。', sourceRefs: []},
+    background: '会話で、毎週の集計に使うと分かった。',
+    questions: [
+      {questionId: 'Q001', kind: 'question', question: '誰が使うか', answer: '管理者のみ', required: true, sourceRef: 'walkthrough 作業メモ /tmp/notes.md の Q001'},
+      {questionId: 'Q002', kind: 'question', question: '文字コードは', answer: null, required: true, sourceRef: null},
+    ],
+    research: [{researchId: 'R001', question: '既存の出力処理はあるか', requiredEvidence: 'コードの場所', doneCondition: '有無が分かる'}],
   };
 }

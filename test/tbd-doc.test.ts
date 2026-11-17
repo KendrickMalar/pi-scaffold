@@ -1,22 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {decodeScaffoldDoc, type TbdDocV1} from '../src/core/contracts.js';
+import {decodeScaffoldDoc} from '../src/core/contracts.js';
 import {renderEpicVisible, renderTbdBlock, renderTbdVisible} from '../src/core/epic-render.js';
 import {buildSnapshot, parseIssueBody, patchDoc} from '../src/core/body-codec.js';
-import {WORKFLOW_ID, CREATE_OPERATION_ID, initialDoc} from './helpers/docs.js';
+import {initialDoc, tbdDoc} from './helpers/docs.js';
 
-export function tbdDoc(): TbdDocV1 {
-  return {
-    version: 1, kind: 'tbd', workflowId: WORKFLOW_ID, revision: 1, createOperationId: CREATE_OPERATION_ID,
-    originalRequest: {text: 'W1：一覧をCSVで保存したい。\nW2：保存の前に件数を見たい。', sourceRefs: []},
-    background: '会話で、毎週の集計に使うと分かった。',
-    questions: [
-      {questionId: 'Q001', kind: 'question', question: '誰が使うか', answer: '管理者のみ', required: true, sourceRef: 'walkthrough 作業メモ /tmp/notes.md の Q001'},
-      {questionId: 'Q002', kind: 'question', question: '文字コードは', answer: null, required: true, sourceRef: null},
-    ],
-    research: [{researchId: 'R001', question: '既存の出力処理はあるか', requiredEvidence: 'コードの場所', doneCondition: '有無が分かる'}],
-  };
-}
 
 test('tbd doc round-trips through renderTbdBlock/parseIssueBody', () => {
   const doc = tbdDoc();
