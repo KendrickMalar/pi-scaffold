@@ -112,7 +112,7 @@ test('16KiB超の日本語仕様を変更せずに読み取り・設計参照を
   const next = {...doc, design: {path: 'docs/design.md', sha256: 'a'.repeat(64), gitRef: 'b'.repeat(40)}};
   const edit = patchDoc(snap.value, next); assert.ok(edit.ok);
   const parsed = parseIssueBody(edit.value.body); assert.ok(parsed.ok);
-  assert.equal(parsed.value.doc.purpose, doc.purpose);
+  assert.equal((parsed.value.doc as EpicDocV1).purpose, doc.purpose);
 });
 
 test('managed JSON over 32KiB is accepted while the whole body stays within 64KiB', () => {

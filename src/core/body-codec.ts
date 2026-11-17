@@ -3,7 +3,7 @@ import {
   LIMITS, decodeScaffoldDoc, failed, okValue, problem, isRepoRef, isPositiveInt,
   type Decoded, type IssueSnapshot, type PreparedIssueEdit, type Problem, type ScaffoldDocV1, type EpicDocV1, type FeatureDocV1,
 } from './contracts.js';
-import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, renderFeatureVisible, renderFeatureBlock, canonicalDocJson} from './epic-render.js';
+import {MANAGED_START, MANAGED_END, DETAILS_OPEN, DETAILS_CLOSE, renderEpicVisible, renderEpicBlock, renderFeatureVisible, renderFeatureBlock, renderTbdVisible, canonicalDocJson} from './epic-render.js';
 import {sha256Text, labelsSha256} from './digests.js';
 
 export interface ParsedBody { before: string; after: string; block: string; doc: ScaffoldDocV1; projectionChecked: boolean }
@@ -118,6 +118,10 @@ export function parseIssueBody(body: string): Decoded<ParsedBody> {
     if (visible !== renderFeatureVisible(doc)) return failed([problem('DOC_PROJECTION_MISMATCH', 'body', 'Visible body differs from the managed JSON. Reflect the edit into the structured data explicitly.')]);
     return okValue({before, after, block, doc, projectionChecked: true});
   }
+  if (doc.kind === 'tbd') {
+    if (visible !== renderTbdVisible(doc)) return failed([problem('DOC_PROJECTION_MISMATCH', 'body', 'Visible body differs from the managed JSON. Reflect the edit into the structured data explicitly.')]);
+    return okValue({before, after, block, doc, projectionChecked: true});
+  }
   return okValue({before, after, block, doc, projectionChecked: false});
 }
 
@@ -144,7 +148,7 @@ export function patchDoc(snapshot: IssueSnapshot, nextDoc: ScaffoldDocV1): Decod
   const current = parseIssueBody(snapshot.body);
   if (!current.ok) return current;
   const prev = current.value.doc;
-  if (prev.kind === 'task' || nextDoc.kind !== prev.kind) return failed([problem('UNSUPPORTED_KIND', 'doc.kind', 'Only Epic and Feature documents have a defined visible template in this version, and the kind never changes.')]);
+  if (prev.kind === 'task' || prev.kind === 'tbd' || nextDoc.kind !== prev.kind) return failed([problem('UNSUPPORTED_KIND', 'doc.kind', 'Only Epic and Feature documents have a defined visible template in this version, and the kind never changes.')]);
   const identity: Problem[] = [];
   if (nextDoc.workflowId !== prev.workflowId) identity.push(problem('IDENTITY_CHANGED', 'doc.workflowId', 'workflowId cannot change.'));
   if (nextDoc.createOperationId !== prev.createOperationId) identity.push(problem('IDENTITY_CHANGED', 'doc.createOperationId', 'createOperationId cannot change.'));

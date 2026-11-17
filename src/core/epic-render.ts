@@ -1,7 +1,7 @@
 // Deterministic projection of an Epic document into the visible Issue body (#4 v1 layout).
 // User-provided text is escaped so it can never form markers, fences, details tags, headings or tables.
 import {renderDependencyMermaid} from './dependency-graph.js';
-import {decodeScaffoldDoc, type EpicDocV1, type FeatureDocV1, type FeatureRole, type ResearchItem, type ScaffoldDocV1} from './contracts.js';
+import {decodeScaffoldDoc, type EpicDocV1, type FeatureDocV1, type FeatureRole, type QuestionFact, type ResearchItem, type ScaffoldDocV1, type TbdDocV1} from './contracts.js';
 
 export const MANAGED_START = '<!-- pi-scaffold:v1:start -->';
 export const MANAGED_END = '<!-- pi-scaffold:v1:end -->';
@@ -30,6 +30,13 @@ function table(header: string, rows: string[], empty: string): string {
 }
 const row = (cells: string[]) => '| ' + cells.join(' | ') + ' |';
 
+function questionTable(questions: readonly QuestionFact[]): string {
+  return table('| ID | 確認事項 | 回答 | 根拠 |', questions.map(q => row([
+    q.questionId, (q.required ? '【必須】' : '') + (q.kind === 'conflict' ? '【矛盾】' : '') + cell(q.question),
+    q.answer === null ? '未回答' : cell(q.answer), q.sourceRef === null ? DASH : cell(q.sourceRef),
+  ])), NONE_YET);
+}
+
 function researchResult(r: ResearchItem): string {
   if (r.conclusion === null) return DASH;
   const evidence = r.evidenceRefs.length ? refs(r.evidenceRefs) : DASH;
@@ -50,10 +57,7 @@ export function renderEpicVisible(doc: EpicDocV1): string {
   add('完了条件', table('| ID | 対応する要件 | 検証方法 | 合格基準 |', doc.criteria.map(c => row([c.id, c.requirementIds.join(', '), cell(c.verification), cell(c.expectedResult)])), UNSET));
   add('対象外', optionalList(doc.outOfScope));
   add('制約', optionalList(doc.constraints));
-  add('未決事項', table('| ID | 確認事項 | 回答 | 根拠 |', doc.questions.map(q => row([
-    q.questionId, (q.required ? '【必須】' : '') + (q.kind === 'conflict' ? '【矛盾】' : '') + cell(q.question),
-    q.answer === null ? '未回答' : cell(q.answer), q.sourceRef === null ? DASH : cell(q.sourceRef),
-  ])), NONE_YET));
+  add('未決事項', questionTable(doc.questions));
   add('調査項目', table('| ID | 調査内容・完了条件 | 状態 | 結論・根拠・限界 |', doc.research.map(r => row([
     r.researchId, `${cell(r.question)}<br>必要な根拠：${cell(r.requiredEvidence)}<br>完了条件：${cell(r.doneCondition)}`,
     RESEARCH_STATE_LABEL[r.state], researchResult(r),
@@ -106,3 +110,16 @@ export function renderFeatureVisible(doc: FeatureDocV1): string {
   return sections.join('\n\n') + '\n';
 }
 export function renderFeatureBlock(doc: FeatureDocV1): string { return composeManagedBlock(renderFeatureVisible(doc), doc); }
+
+/** Visible projection of a TBD; checked against the managed JSON on every read like the Epic. */
+export function renderTbdVisible(doc: TbdDocV1): string {
+  const sections: string[] = [];
+  const add = (title: string, body: string) => sections.push(`## ${title}\n${body}`);
+  add('元の要望', para(doc.originalRequest.text));
+  add('背景', doc.background === null ? UNSET : para(doc.background));
+  add('参照資料', doc.originalRequest.sourceRefs.length ? list(doc.originalRequest.sourceRefs.map(cell)) : NONE_YET);
+  add('確認事項', questionTable(doc.questions));
+  add('調査項目', table('| ID | 調査内容 | 必要な根拠 | 完了条件 |', doc.research.map(r => row([r.researchId, cell(r.question), cell(r.requiredEvidence), cell(r.doneCondition)])), NONE_YET));
+  return sections.join('\n\n') + '\n';
+}
+export function renderTbdBlock(doc: TbdDocV1): string { return composeManagedBlock(renderTbdVisible(doc), doc); }
