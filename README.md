@@ -154,14 +154,25 @@
 
 ## scaffold-orchestrator-wait（orchestrator の見守りの待ち）
 
-`bin/scaffold-orchestrator-wait <状態ファイル>` は、scaffold-orchestrator が見守りの `sleep 300` の代わりに呼ぶ待ちです（0.11.0。箱のタブは 0.12.0）。LLM を使わずに herdr を読み、orchestrator が行動すべき変化があればすぐ、なければ5分で終わります。orchestrator はこのコマンドが終わった知らせで起きます。設計は `docs/superpowers/specs/2026-11-11-orchestrator-wait-design.md` と `2026-11-15-orchestrator-wait-box-design.md`。
+`bin/scaffold-orchestrator-wait <状態ファイル>` は、scaffold-orchestrator が見守りの `sleep 300` の代わりに呼ぶ待ちです（0.11.0。箱のタブは 0.12.0）。LLM を使わずに herdr を読み、orchestrator が行動すべき変化があればすぐ、なければ5分で終わります。orchestrator はこのコマンドが終わった知らせで起きます。設計は `docs/superpowers/specs/2026-11-11-orchestrator-wait-design.md`・`2026-11-15-orchestrator-wait-box-design.md`・`2026-11-18-orchestrator-wait-manager-design.md`（0.14.0）。
 
 - 読むのは herdr だけです（`session list --json`・`pane list`・`tab list`。箱のタブは `kec-orb ssh <箱名>` で箱の中の herdr の `pane list`・`tab list` を1回の接続で読みます）。GitHub は読まず、pane へ入力しません。状態ファイル（`~/.local/state/scaffold-orchestrator/<名前>-<ハッシュ>.json`）は読むだけで、書くのは隣の `<状態ファイル>.wait.json`（前回の記録）だけです。
 - 対象は、`status` が `launching`・`running`・`waiting`・`cleanup_waiting` のタブです。ホストのタブは `socket` と `pane` の組、箱のタブ（`box` のあるタブ）は箱名と `pane` の組で区別します。箱名は kec-orb の名前の規則に合うものだけを読み、合わなければ `timeout` の行に添えます。`pane` の無い箱のタブは読みません。
 - 箱のタブ: 本体・manager の見分け方はホストと同じです。片付け待ちでは、箱の中とホストのセッション（`socket` と `previous` の `socket`）の両方から `working` がいなくなったら起こします。箱へつながらない（`kec-orb ssh` が 255 など）間は起こさず、`timeout (errors: …)` に添えます。
 - 起こす変化（前回の記録と比べて）: 本体（タブの `pane` と、工程のタブ `spec|design|impl|verify|setup-e<N>…` の agent）が `blocked` になった・`idle`/`done` になった、記録した pane・セッションが消えた、工程のタブの本体が消えた、`cleanup_waiting` のタブの全セッションから `working` の agent がいなくなった。manager のタブ（`impl|verify-mgr-f…`）の agent の変化では起こしません。記録の無い新しいタブは、最初から `blocked` かいないときだけすぐ起こします。
 - 出力: 変化1件を1行（例 `Epic #12 w1:p1 working->blocked`）。時間切れは `timeout`、読み取りの失敗があれば `timeout (errors: …)`。どちらも終了コード0。引数が無い・状態ファイルが最初に読めないときは終了コード2。herdr の一時的な失敗では途中で終わりません。
-- 環境変数: `SCAFFOLD_ORCH_WAIT_HERDR`（既定 `herdr`）、`SCAFFOLD_ORCH_WAIT_KEC_ORB`（既定 `kec-orb`）、`SCAFFOLD_ORCH_WAIT_INTERVAL_MS`（既定 `5000`）、`SCAFFOLD_ORCH_WAIT_MAX_MS`（既定 `300000`）。
+- 環境変数: `SCAFFOLD_ORCH_WAIT_HERDR`（既定 `herdr`）、`SCAFFOLD_ORCH_WAIT_KEC_ORB`（既定 `kec-orb`）、`SCAFFOLD_ORCH_WAIT_INTERVAL_MS`（既定 `5000`）、`SCAFFOLD_ORCH_WAIT_MAX_MS`（既定 `300000`）、`SCAFFOLD_ORCH_WAIT_WATCHDOG_LOG`（manager のモードだけ。下）。
+
+### scaffold-manager がいる Epic（0.14.0）
+
+Epic ごとに箱の中へ scaffold-manager を置く運用のための変更です。manager は scaffold と同じ herdr セッションの長く動くタブ `mgr-e<Epic番号>`（同名があれば `-<4桁16進>`）で動き、工程のタブを見守ります。止まった工程への「続けて」と起こし直しは、今までどおり scaffold-watchdog が行います。
+
+- 通常のモード: タブのセッション（箱のタブは箱の中）に、label の全体が `^mgr-e<N>(-[0-9a-f]{4})?$`（`<N>` はそのタブの `epics` のどれか）のタブがあり、そこに agent がいれば、そのタブの本体は manager の agent だけです。工程のタブの agent の変化では起こしません。manager の agent が消えた、またはタブが消えたら、`Epic #12 <pane> gone` の1行で起こします。manager のタブが無ければ今までどおり（工程のタブが本体）です。片付け待ち（`cleanup_waiting`）の `working` の判定は今までどおり全 pane を見ます。
+- manager のモード: `bin/scaffold-orchestrator-wait --manager <要約ファイル>`。要約ファイルは JSON で、少なくとも `epic`（整数）と `repo`（`owner/name`）を持ちます（読むだけ。記録は隣の `<要約ファイル>.wait.json` に書きます）。
+  - 見る相手は、自分のセッション（`HERDR_SOCKET_PATH`、無ければ herdr の既定）の、label が工程のタブの規則（`(setup|spec|design|impl|verify)-e<epic>(-r[0-9]+)?(-[0-9a-f]{4})?`）に合うタブの agent です。自分の pane（`HERDR_PANE_ID`）は見ません。
+  - 起こす変化は通常のモードと同じです（`blocked`・`idle`/`done`、工程のタブの本体が消えた、記録の無い新しいタブが最初から `blocked`）。manager の pane は固定の本体を持たないので、記録の無い「いない」だけの判定は使いません。
+  - 加えて、watchdog のログ（`SCAFFOLD_ORCH_WAIT_WATCHDOG_LOG`。既定は箱の `/home/dev/work/.kec-orb/logs/scaffold-watchdog.log`、無ければホストの `~/.local/state/scaffold-watchdog.log`）に、前回より後に `repo` と `epic` が要約と一致し、`event` が `prompted`・`awaiting-human`・`stage-exhausted`・`missing`・`blocked`・`retired` の行が足されたら、`watchdog <event> <stage>` の1行で起こします。最初の読みでログにあった行は「前回」に入れます。読み位置はバイトではなく、処理済みの最新の `at` とその時刻の行で記録するので、ログの回転（`.1` への移動）の後も同じ行で二度起こしません。ログが無い・読めないときは起こさず、`timeout (errors: watchdog log: …)` に添えます。
+  - 出力・終了コード・時間切れ・間隔は通常のモードと同じです。
 
 ## 開発と検証
 

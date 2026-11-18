@@ -13,6 +13,8 @@ export interface TabObs {
   bodies: Record<string, string>;
   /** Some pane in the tab's cleanup sockets is `working`. */
   working: boolean;
+  /** A manager tab (`mgr-e<N>`) with an agent exists: `bodies` then holds only the manager's panes. */
+  manager?: boolean;
 }
 export interface Observation { tabs: Map<string, TabObs>; errors: string[] }
 export type WaitFleet = Pick<Fleet, 'sockets' | 'panes'> & BoxReader;
@@ -21,6 +23,22 @@ export type WaitFleet = Pick<Fleet, 'sockets' | 'panes'> & BoxReader;
 export function stageTabPattern(epics: number[]): RegExp | undefined {
   if (!epics.length) return undefined;
   return new RegExp(`^(spec|design|impl|verify|setup)-e(${epics.join('|')})(-r[0-9]+)?(-[0-9a-f]{4})?$`);
+}
+
+/** The scaffold-manager's tab: `mgr-e12`, `mgr-e12-a1b2`. Whole label only. */
+export function managerTabPattern(epics: number[]): RegExp | undefined {
+  if (!epics.length) return undefined;
+  return new RegExp(`^mgr-e(${epics.join('|')})(-[0-9a-f]{4})?$`);
+}
+
+/** Manager mode: the stage-tab agents of one Epic in one session, except our own pane. A failed read throws. */
+export async function observeStages(socket: string, epic: number, ownPane: string | undefined, fleet: Pick<Fleet, 'panes'>): Promise<TabObs> {
+  const stage = stageTabPattern([epic]);
+  const bodies: Record<string, string> = {};
+  for (const p of await fleet.panes(socket)) {
+    if (p.agent && p.paneId !== ownPane && p.tabLabel && stage?.test(p.tabLabel)) bodies[p.paneId] = p.status ?? 'unknown';
+  }
+  return {gone: false, bodies, working: false};
 }
 
 export async function observe(targets: WaitTarget[], fleet: WaitFleet): Promise<Observation> {
@@ -41,16 +59,24 @@ export async function observe(targets: WaitTarget[], fleet: WaitFleet): Promise<
     const own = t.box ? boxes.get(t.box) : panes.get(t.socket);
     if (own === undefined) continue;
     const recorded = own.find(p => p.paneId === t.pane);
-    const gone = (!t.box && !running.has(t.socket)) || !recorded || !recorded.agent;
+    const mgr = managerTabPattern(t.epics);
+    const managers = own.filter(p => p.agent && p.tabLabel && mgr?.test(p.tabLabel));
     const stage = stageTabPattern(t.epics);
     const bodies: Record<string, string> = {};
-    for (const p of own) {
-      if (!p.agent) continue;
-      if (p.paneId === t.pane || (stage && p.tabLabel && stage.test(p.tabLabel))) bodies[p.paneId] = p.status ?? 'unknown';
+    let gone = (!t.box && !running.has(t.socket)) || !recorded || !recorded.agent;
+    if (managers.length) {
+      // With a manager the manager is the body: stage-tab and recorded-pane changes are the manager's to handle.
+      gone = false;
+      for (const p of managers) bodies[p.paneId] = p.status ?? 'unknown';
+    } else {
+      for (const p of own) {
+        if (!p.agent) continue;
+        if (p.paneId === t.pane || (stage && p.tabLabel && stage.test(p.tabLabel))) bodies[p.paneId] = p.status ?? 'unknown';
+      }
     }
     const isWorking = (ps: PaneSnapshot[]) => ps.some(p => p.status === 'working');
     const working = (t.box !== undefined && isWorking(own)) || t.cleanupSockets.some(s => isWorking(panes.get(s) ?? []));
-    tabs.set(t.key, {gone, bodies, working});
+    tabs.set(t.key, {gone, bodies, working, ...(managers.length ? {manager: true} : {})});
   }
   return {tabs, errors};
 }
