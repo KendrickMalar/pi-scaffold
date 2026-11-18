@@ -1,6 +1,6 @@
 {
   "name": "deterministic-scaffold",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "private": true,
   "description": "Pi-native Scaffold workflow tools built on deterministic-gh",
   "type": "module",

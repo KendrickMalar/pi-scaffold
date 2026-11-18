@@ -76,3 +76,28 @@ printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"1"}]}}'
   await writeFile(f.state, JSON.stringify({tabs: [{socket: join(dir, 'a.sock'), box: 'web-e12-rust', pane: 'w1:p1', epics: [12], status: 'running'}]}));
   assert.deepEqual(await run([f.state], {...f.env, SCAFFOLD_ORCH_WAIT_KEC_ORB: kec}), {code: 0, stdout: 'Epic #12 box web-e12-rust w1:p1 new->blocked\n', stderr: ''});
 });
+
+test('bin --manager reads stage tabs of the summary Epic and skips its own pane', async t => {
+  const f = await fakeHerdr(t, 'blocked');
+  const dir = dirname(f.state);
+  const summary = join(dir, 'summary.json');
+  await writeFile(summary, JSON.stringify({epic: 12, repo: 'o/r'}));
+  const herdr = join(dir, 'herdr2');
+  await writeFile(herdr, `#!/bin/sh
+case "$1 $2" in
+  "pane list") printf '%s' '{"result":{"panes":[{"pane_id":"w1:p1","revision":1,"agent":"claude","agent_status":"blocked","tab_id":"w1:t1"},{"pane_id":"w2:p1","revision":1,"agent":"claude","agent_status":"blocked","tab_id":"w2:t1"}]}}' ;;
+  "tab list") printf '%s' '{"result":{"tabs":[{"tab_id":"w1:t1","label":"impl-e12"},{"tab_id":"w2:t1","label":"mgr-e12"}]}}' ;;
+  *) exit 9 ;;
+esac
+`);
+  await chmod(herdr, 0o755);
+  const env = {...f.env, SCAFFOLD_ORCH_WAIT_HERDR: herdr, SCAFFOLD_ORCH_WAIT_WATCHDOG_LOG: join(dir, 'none.log'), HERDR_PANE_ID: 'w2:p1'};
+  assert.deepEqual(await run(['--manager', summary], env), {code: 0, stdout: 'Epic #12 w1:p1 new->blocked\n', stderr: ''});
+  const quiet = await run(['--manager', summary], {...env, HERDR_PANE_ID: 'w5:p5'});
+  assert.equal(quiet.code, 0);
+  assert.match(quiet.stdout, /^timeout \(errors: watchdog log: /);
+});
+
+test('bin --manager without a file exits 2', async () => {
+  assert.equal((await run(['--manager'], {})).code, 2);
+});
